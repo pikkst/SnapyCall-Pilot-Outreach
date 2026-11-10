@@ -42,6 +42,8 @@ jobs:
       - run: npm run db:deploy
       - run: npx prisma migrate status
       - run: npm run build
+      - name: HTTP smoke against disposable PostgreSQL
+        run: node test/smoke.mjs
       - name: Verify database tables
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
