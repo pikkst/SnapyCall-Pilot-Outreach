@@ -1,0 +1,198 @@
+import React, { useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+import "./style.css";
+
+type Candidate = {
+  id: string; name: string; email: string | null; category: string;
+  region: string | null; onlineEnglish: boolean; status: string;
+  sourceUrl: string; suppressed: boolean; score: { score: number; eligible: boolean };
+};
+type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
+type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
+
+const categories = [
+  ["AI_AUTOMATION", "AI automation / no-code"],
+  ["COACHING", "Coaching"],
+  ["MARKETING_GROWTH", "Marketing & growth"],
+  ["BUSINESS_STRATEGY", "Business strategy"],
+];
+const regions = [
+  ["US", "United States"],
+  ["UK_IRELAND", "United Kingdom / Ireland"],
+  ["OTHER_ENGLISH_SPEAKING", "Other English-speaking regions"],
+];
+
+async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch("/api" + path, {
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
+    ...init,
+  });
+  const result: unknown = await response.json();
+  if (!response.ok) {
+    const message = typeof result === "object" && result !== null && "error" in result
+      ? String((result as { error: string }).error) : "Request failed";
+    throw new Error(message);
+  }
+  return result as T;
+}
+
+function App() {
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [tab, setTab] = useState<"candidates" | "drafts" | "settings">("candidates");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [setting, setSetting] = useState<AiSetting>({ provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
+  const [apiKey, setApiKey] = useState("");
+  const [candidate, setCandidate] = useState({
+    name: "", email: "", category: "AI_AUTOMATION", region: "US", sourceUrl: "",
+    onlineEnglish: true, legalBasis: "", contactReviewed: false,
+  });
+
+  async function load() {
+    const [c, d, s] = await Promise.all([
+      api<Candidate[]>("/candidates"),
+      api<Draft[]>("/drafts"),
+      api<AiSetting>("/ai-settings"),
+    ]);
+    setCandidates(c);
+    setDrafts(d);
+    setSetting(s);
+  }
+
+  useEffect(() => {
+    api<{ authenticated: boolean }>("/session")
+      .then(async (session) => {
+        if (session.authenticated) { setLoggedIn(true); await load(); }
+      }).catch(() => setError("Unable to reach the admin API"));
+  }, []);
+
+  async function execute(fn: () => Promise<void>) {
+    setBusy(true); setError(""); setNotice("");
+    try { await fn(); } catch (err) {
+      setError(err instanceof Error ? err.message : "An unexpected error occurred");
+    } finally { setBusy(false); }
+  }
+
+  async function login(event: React.FormEvent) {
+    event.preventDefault();
+    await execute(async () => {
+      await api("/session", { method: "POST", body: JSON.stringify({ email, password }) });
+      setPassword(""); setLoggedIn(true); await load();
+    });
+  }
+
+  async function logout() {
+    await execute(async () => {
+      await api("/session", { method: "DELETE" });
+      setLoggedIn(false); setCandidates([]); setDrafts([]); setApiKey("");
+    });
+  }
+
+  async function saveCandidate(event: React.FormEvent) {
+    event.preventDefault();
+    await execute(async () => {
+      await api("/candidates", { method: "POST", body: JSON.stringify(candidate) });
+      await load();
+      setCandidate({ ...candidate, name: "", email: "", sourceUrl: "", legalBasis: "", contactReviewed: false });
+      setNotice("Candidate added successfully");
+    });
+  }
+
+  async function saveSettings(event: React.FormEvent) {
+    event.preventDefault();
+    await execute(async () => {
+      const payload = { provider: setting.provider, model: setting.model, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) };
+      await api("/ai-settings", { method: "PUT", body: JSON.stringify(payload) });
+      setApiKey("");
+      await load();
+      setNotice("AI settings saved. The API key is stored encrypted on the server.");
+    });
+  }
+
+  async function makeDraft(id: string) {
+    await execute(async () => {
+      await api("/candidates/" + encodeURIComponent(id) + "/draft", { method: "POST" });
+      await load(); setTab("drafts");
+      setNotice("Draft generated. Nothing was sent.");
+    });
+  }
+
+  if (!loggedIn) return (
+    <main className="login-shell">
+      <form className="panel login" onSubmit={login}>
+        <span className="eyebrow">SNAPYCALL • PILOT OUTREACH</span>
+        <h1>Admin sign in</h1>
+        <p className="muted">Private expert acquisition workspace. Outbound sending is disabled.</p>
+        <label>Email<input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+        <label>Password<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
+        {error && <div className="error" role="alert">{error}</div>}
+        <button type="submit" disabled={busy}>Sign in</button>
+      </form>
+    </main>
+  );
+
+  return <main className="layout">
+    <aside>
+      <div className="brand">SNAPYCALL<span> / PILOT</span></div>
+      <p className="sidebar-label">WORKSPACE</p>
+      <nav aria-label="Workspace sections">
+        {(["candidates", "drafts", "settings"] as const).map((item) =>
+          <button type="button" className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
+            {item === "settings" ? "AI configuration" : item === "drafts" ? "Outreach drafts" : "Candidates"}
+          </button>)}
+      </nav>
+      <div className="sidebar-bottom"><span className="state">● Draft-only mode</span><button className="ghost" onClick={logout}>Sign out</button></div>
+    </aside>
+    <section className="content">
+      <header><div><span className="eyebrow">PILOT EXPERT ACQUISITION</span><h1>{tab === "candidates" ? "Expert candidates" : tab === "drafts" ? "Outreach drafts" : "Your AI provider"}</h1></div><span className="pill">No automatic sending</span></header>
+      {error && <div className="error" role="alert">{error}</div>}
+      {notice && <div className="success" role="status">{notice}</div>}
+      {tab === "candidates" && <>
+        <div className="metrics">
+          <div className="metric"><strong>{candidates.length}</strong><span>Total candidates</span></div>
+          <div className="metric"><strong>{candidates.filter(c => c.score.eligible).length}</strong><span>Eligible for review</span></div>
+          <div className="metric"><strong>{drafts.length}</strong><span>Saved drafts</span></div>
+        </div>
+        <section className="panel">
+          <h2>Add candidate</h2>
+          <form className="form-grid" onSubmit={saveCandidate}>
+            <label>Full name<input required maxLength={160} value={candidate.name} onChange={e => setCandidate({ ...candidate, name: e.target.value })} /></label>
+            <label>Email (optional)<input type="email" maxLength={254} value={candidate.email} onChange={e => setCandidate({ ...candidate, email: e.target.value })} /></label>
+            <label>Category<select value={candidate.category} onChange={e => setCandidate({ ...candidate, category: e.target.value })}>{categories.map(([v,l]) => <option value={v} key={v}>{l}</option>)}</select></label>
+            <label>Region<select value={candidate.region} onChange={e => setCandidate({ ...candidate, region: e.target.value })}>{regions.map(([v,l]) => <option value={v} key={v}>{l}</option>)}</select></label>
+            <label className="wide">Source profile URL<input type="url" required placeholder="https://..." value={candidate.sourceUrl} onChange={e => setCandidate({ ...candidate, sourceUrl: e.target.value })} /></label>
+            <label>Legal basis note (optional)<input maxLength={120} value={candidate.legalBasis} onChange={e => setCandidate({ ...candidate, legalBasis: e.target.value })}/></label>
+            <div className="checkboxes"><label><input type="checkbox" checked={candidate.onlineEnglish} onChange={e => setCandidate({ ...candidate, onlineEnglish: e.target.checked })}/> Online English sessions confirmed</label><label><input type="checkbox" checked={candidate.contactReviewed} onChange={e => setCandidate({ ...candidate, contactReviewed: e.target.checked })}/> Contact manually reviewed</label></div>
+            <button disabled={busy}>Add candidate</button>
+          </form>
+        </section>
+        <section className="panel"><h2>Candidate pipeline</h2><div className="table-scroll"><table><thead><tr><th>Candidate</th><th>Category</th><th>Region</th><th>Score</th><th>Action</th></tr></thead><tbody>
+          {candidates.map(c => <tr key={c.id}><td><strong>{c.name}</strong><small>{c.email ?? "No email"}</small></td><td>{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td><td>{c.region ?? "Unconfirmed"}</td><td>{c.score.eligible ? c.score.score : "Not eligible"}</td><td><button disabled={busy || !c.score.eligible || c.suppressed || !setting.keyConfigured} onClick={() => makeDraft(c.id)}>Generate draft</button></td></tr>)}
+          {!candidates.length && <tr><td colSpan={5} className="empty">No candidates yet. Add one above to start.</td></tr>}
+        </tbody></table></div></section>
+      </>}
+      {tab === "drafts" && <section className="panel"><h2>Saved AI drafts</h2><p className="muted">These are review-only drafts. The system cannot send email.</p>{drafts.map(d => <article className="draft" key={d.id}><div className="draft-top"><strong>{d.candidate.name}</strong><small>{d.provider} / {d.model}</small></div><h3>{d.subject}</h3><pre>{d.body}</pre><button className="secondary" onClick={() => navigator.clipboard.writeText(d.subject + "\n\n" + d.body)}>Copy draft</button></article>)}{!drafts.length && <p className="empty">No generated drafts yet.</p>}</section>}
+      {tab === "settings" && <section className="panel setting-panel">
+        <h2>Bring your own AI</h2>
+        <p className="muted">Choose your provider, enter the model ID and optionally save your API key. Calls are made server-side; the key is encrypted at rest and never returned to the browser.</p>
+        <form onSubmit={saveSettings}>
+          <label>Provider<select value={setting.provider} onChange={e => setSetting({ ...setting, provider: e.target.value, model: e.target.value === "openai" ? "gpt-4.1-mini" : "gemini-2.5-flash" })}><option value="gemini">Google Gemini</option><option value="openai">OpenAI</option></select></label>
+          <label>Model ID<input required minLength={2} maxLength={80} value={setting.model} onChange={e => setSetting({ ...setting, model: e.target.value })} placeholder="gemini-2.5-flash"/></label>
+          <label>API key<input type="password" autoComplete="new-password" placeholder={setting.keyConfigured ? "Key saved • leave blank to keep" : "Paste provider API key"} value={apiKey} onChange={e => setApiKey(e.target.value)} /></label>
+          <div className="key-status">{setting.keyConfigured ? "● Key configured (fingerprint: " + setting.fingerprint + ")" : "○ No API key configured"}</div>
+          <button disabled={busy}>Save AI configuration</button>
+        </form>
+        <p className="hint">Model usage may incur provider charges. Never paste a key into chat or GitHub. Changing providers requires a new key.</p>
+        {setting.keyConfigured && <button className="danger" disabled={busy} onClick={() => execute(async () => { await api("/ai-settings", { method: "DELETE" }); await load(); setNotice("Saved AI credential deleted."); })}>Delete stored key</button>}
+      </section>}
+    </section>
+  </main>;
+}
+
+createRoot(document.getElementById("root")!).render(<App />);

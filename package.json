@@ -1,11 +1,40 @@
 {
   "name": "snapycall-pilot-outreach",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
+    "dev": "node --watch server/index.js",
+    "build": "prisma generate && vite build",
+    "start": "node server/index.js",
+    "check": "node --check src/domain.js && node --check server/index.js && node --check server/security.js && node --check server/ai.js",
     "test": "node --test",
-    "check": "node --check src/domain.js && node --check test/domain.test.js"
+    "db:validate": "prisma validate",
+    "db:deploy": "prisma migrate deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "bcryptjs": "2.4.3",
+    "cookie-parser": "1.4.7",
+    "express": "5.2.1",
+    "express-rate-limit": "7.5.1",
+    "helmet": "8.1.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "zod": "3.25.76",
+    "dotenv": "16.6.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "5.1.1",
+    "prisma": "6.19.3",
+    "vite": "6.4.1",
+    "typescript": "5.8.3",
+    "@types/react": "19.2.4",
+    "@types/react-dom": "19.2.3",
+    "@types/node": "22.15.30"
   }
 }

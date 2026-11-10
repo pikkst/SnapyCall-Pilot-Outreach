@@ -1,0 +1,58 @@
+name: Pilot app CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_USER: postgres
+          POSTGRES_DB: pilot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pilot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgresql://postgres:ci_password@localhost:5432/pilot_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run db:validate
+      - run: npm run db:deploy
+      - run: npx prisma migrate status
+      - run: npm run build
+      - name: HTTP smoke against disposable PostgreSQL
+        run: node scripts/smoke.mjs
+      - name: Verify database tables
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF to_regclass('public."Candidate"') IS NULL OR
+               to_regclass('public."AiSetting"') IS NULL OR
+               to_regclass('public."OutreachDraft"') IS NULL OR
+               to_regclass('public."AuditEvent"') IS NULL
+            THEN RAISE EXCEPTION 'Missing application tables'; END IF;
+          END $$;
+          SQL
