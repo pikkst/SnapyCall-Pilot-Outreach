@@ -8,6 +8,8 @@
   or public AI provider keys.
 - **Neon PostgreSQL**, project `shiny-forest-27088168`, database
   `snapycall_pilot`, stores candidates, encrypted AI settings, drafts and audits.
+  For this pilot service, **always use the Neon `pilot-staging` branch**
+  (`br-autumn-math-baamjbne`), never the `production` branch.
 - **No mail delivery endpoint** in this version.
 
 The existing Express application remains the only runtime API implementation.
@@ -21,10 +23,10 @@ We do not create a second API or move the Prisma backend into another runtime.
    Frankfurt region and **manual deployment**.
 3. During initial Blueprint creation provide the following secret environment
    variables in the Render Dashboard:
-   - `DATABASE_URL`: Neon **pooled** PostgreSQL connection string for
-     `snapycall_pilot`; used only by the server.
+   - `DATABASE_URL`: Neon **pooled** PostgreSQL connection string from the
+     `pilot-staging` branch for `snapycall_pilot`; used only by the server.
    - `DIRECT_URL`: Neon **direct** PostgreSQL connection string for the same
-     database/role; used for Prisma migrations.
+     `pilot-staging` branch/database/role; used for Prisma migrations.
    - `ADMIN_EMAIL`: designated admin email address.
    - `ADMIN_PASSWORD_HASH`: a bcrypt cost 12 password hash. Generate on a
      trusted device (with Node and dependencies installed):
