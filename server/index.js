@@ -85,16 +85,22 @@ app.get("/api/candidates", authenticated, safe(async (_req, res) => {
 }));
 app.post("/api/candidates", ...write, safe(async (req, res) => {
   const candidate = normalizeCandidate(req.body);
-  const row = await prisma.candidate.create({
-    data: {
+  const row = await prisma.$transaction(async (tx) => {
+    const created = await tx.candidate.create({
+      data: {
       kind: "EXPERT", name: candidate.name, category: candidate.category,
       email: candidate.email, emailNormalized: candidate.email,
       region: candidate.region, onlineEnglish: candidate.onlineEnglish,
       sourceUrl: candidate.sourceUrl, legalBasis: candidate.legalBasis,
       contactReviewed: candidate.contactReviewed, suppressed: candidate.suppressed,
-    },
+      },
+    });
+    await tx.auditEvent.create({ data: {
+      actorId: "admin", action: "candidate.created", entityId: created.id,
+      metadata: { sourceUrl: created.sourceUrl },
+    } });
+    return created;
   });
-  await audit("candidate.created", row.id, { sourceUrl: row.sourceUrl });
   res.status(201).json({ id: row.id });
 }));
 
@@ -116,20 +122,29 @@ app.put("/api/ai-settings", ...write, safe(async (req, res) => {
     ? encryptKey(input.apiKey, env.AI_ENCRYPTION_KEY)
     : existing.encryptedApiKey;
   const fingerprint = input.apiKey ? keyFingerprint(input.apiKey) : existing.keyFingerprint;
-  await prisma.aiSetting.upsert({
-    where: { ownerId: "admin" },
-    create: {
-      ownerId: "admin", provider: input.provider, model: input.model,
-      encryptedApiKey, keyFingerprint: fingerprint,
-    },
-    update: { provider: input.provider, model: input.model, encryptedApiKey, keyFingerprint: fingerprint },
+  await prisma.$transaction(async (tx) => {
+    await tx.aiSetting.upsert({
+      where: { ownerId: "admin" },
+      create: {
+        ownerId: "admin", provider: input.provider, model: input.model,
+        encryptedApiKey, keyFingerprint: fingerprint,
+      },
+      update: { provider: input.provider, model: input.model, encryptedApiKey, keyFingerprint: fingerprint },
+    });
+    await tx.auditEvent.create({ data: {
+      actorId: "admin", action: "ai.settings.updated", entityId: "admin",
+      metadata: { provider: input.provider, model: input.model },
+    } });
   });
-  await audit("ai.settings.updated", "admin", { provider: input.provider, model: input.model });
   res.json({ saved: true, keyConfigured: true, fingerprint });
 }));
 app.delete("/api/ai-settings", ...write, safe(async (_req, res) => {
-  await prisma.aiSetting.deleteMany({ where: { ownerId: "admin" } });
-  await audit("ai.settings.deleted", "admin", {});
+  await prisma.$transaction(async (tx) => {
+    await tx.aiSetting.deleteMany({ where: { ownerId: "admin" } });
+    await tx.auditEvent.create({ data: {
+      actorId: "admin", action: "ai.settings.deleted", entityId: "admin",
+    } });
+  });
   res.json({ removed: true });
 }));
 
@@ -143,10 +158,16 @@ app.post("/api/candidates/:id/draft", ...write, draftLimiter, safe(async (req, r
   if (!setting) return res.status(409).json({ error: "Configure an AI provider first" });
   const apiKey = decryptKey(setting.encryptedApiKey, env.AI_ENCRYPTION_KEY);
   const draft = await generateDraft({ provider: setting.provider, model: setting.model, apiKey, candidate });
-  const row = await prisma.outreachDraft.create({
-    data: { candidateId: candidate.id, subject: draft.subject, body: draft.body, provider: setting.provider, model: setting.model },
+  const row = await prisma.$transaction(async (tx) => {
+    const created = await tx.outreachDraft.create({
+      data: { candidateId: candidate.id, subject: draft.subject, body: draft.body, provider: setting.provider, model: setting.model },
+    });
+    await tx.auditEvent.create({ data: {
+      actorId: "admin", action: "draft.generated", entityId: created.id,
+      metadata: { candidateId: candidate.id, provider: setting.provider, model: setting.model },
+    } });
+    return created;
   });
-  await audit("draft.generated", row.id, { candidateId: candidate.id, provider: setting.provider, model: setting.model });
   res.status(201).json({ id: row.id, ...draft });
 }));
 app.get("/api/drafts", authenticated, safe(async (_req, res) => {
