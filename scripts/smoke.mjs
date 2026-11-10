@@ -40,6 +40,12 @@ try {
   }
   assert.equal(ready, true, "API server must become ready; " + logs.slice(-1000));
 
+  const home = await fetch(origin + "/");
+  assert.equal(home.status, 200, "Authenticated app must serve the React entrypoint");
+  const html = await home.text();
+  assert.match(html, /SnapyCall Pilot Outreach/);
+  assert.match(html, /\/assets\/index-[a-zA-Z0-9_-]+\.js/);
+
   assert.equal((await call("/candidates")).status, 401);
   assert.equal((await call("/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
     email: env.ADMIN_EMAIL, password: "integration-only-strong-password",

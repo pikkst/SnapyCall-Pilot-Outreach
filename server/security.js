@@ -8,22 +8,30 @@ export function requireRuntimeConfig(env = process.env) {
   }
   if (!/^\$2[aby]\$\d\d\$/.test(env.ADMIN_PASSWORD_HASH)) throw new Error("ADMIN_PASSWORD_HASH must be bcrypt");
   if (env.SESSION_SIGNING_KEY.length < 32) throw new Error("SESSION_SIGNING_KEY must be at least 32 characters");
-  if (!/^[a-f0-9]{64}$/i.test(env.AI_ENCRYPTION_KEY)) throw new Error("AI_ENCRYPTION_KEY must be 64 hex characters");
+  getEncryptionKey(env.AI_ENCRYPTION_KEY);
   return env;
 }
 
-export function encryptKey(value, hexKey) {
+// Accept 32-byte hex (legacy) or 256-bit base64 from managed secret generators.
+// Do not rotate this value without re-encrypting persisted API credentials.
+export function getEncryptionKey(value) {
+  if (typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)) return Buffer.from(value, "hex");
+  if (typeof value === "string" && /^[a-zA-Z0-9+/]{43}=$/.test(value)) return Buffer.from(value, "base64");
+  throw new Error("AI_ENCRYPTION_KEY must encode exactly 32 random bytes");
+}
+
+export function encryptKey(value, secretKey) {
   if (typeof value !== "string" || value.length < 8 || value.length > 4096) throw new Error("Invalid API key");
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", Buffer.from(hexKey, "hex"), iv);
+  const cipher = createCipheriv("aes-256-gcm", getEncryptionKey(secretKey), iv);
   const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   return ["v1", iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), encrypted.toString("base64url")].join(".");
 }
 
-export function decryptKey(value, hexKey) {
+export function decryptKey(value, secretKey) {
   const [version, iv, tag, ciphertext, extra] = value.split(".");
   if (version !== "v1" || !iv || !tag || !ciphertext || extra) throw new Error("Invalid encrypted secret");
-  const decipher = createDecipheriv("aes-256-gcm", Buffer.from(hexKey, "hex"), Buffer.from(iv, "base64url"));
+  const decipher = createDecipheriv("aes-256-gcm", getEncryptionKey(secretKey), Buffer.from(iv, "base64url"));
   decipher.setAuthTag(Buffer.from(tag, "base64url"));
   return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64url")), decipher.final()]).toString("utf8");
 }
