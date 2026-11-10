@@ -1,0 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+model Candidate {
+  id String @id @default(cuid())
+  kind String @default("EXPERT")
+  name String
+  email String?
+  emailNormalized String? @unique
+  category String
+  region String?
+  onlineEnglish Boolean @default(false)
+  sourceUrl String
+  sourceCollectedAt DateTime @default(now())
+  legalBasis String?
+  contactReviewed Boolean @default(false)
+  suppressed Boolean @default(false)
+  status String @default("NEW")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  drafts OutreachDraft[]
+  @@index([category, status])
+}
+model AiSetting {
+  id String @id @default(cuid())
+  ownerId String @unique
+  provider String
+  model String
+  encryptedApiKey String
+  keyFingerprint String
+  updatedAt DateTime @updatedAt
+}
+model OutreachDraft {
+  id String @id @default(cuid())
+  candidateId String
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Restrict)
+  subject String
+  body String
+  model String
+  provider String
+  approvedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([candidateId, createdAt])
+}
+model AuditEvent {
+  id String @id @default(cuid())
+  actorId String
+  action String
+  entityId String?
+  metadata Json?
+  createdAt DateTime @default(now())
+  @@index([action, createdAt])
+}
