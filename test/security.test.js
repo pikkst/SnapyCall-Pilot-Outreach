@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { encryptKey, decryptKey, makeSession, verifySession, requireRuntimeConfig } from "../server/security.js";
+import { encryptKey, decryptKey, makeSession, verifySession, requireRuntimeConfig, getEncryptionKey } from "../server/security.js";
 import { generateDraft, parseDraft } from "../server/ai.js";
 
 test("API key envelope encryption is randomized and authenticated", () => {
@@ -39,3 +39,17 @@ test("AI provider model selection is bounded to provider endpoints", async () =>
   }), /Invalid/);
 });
 test("invalid AI draft is rejected", () => assert.throws(() => parseDraft("Only subject")));
+
+test("generated 256-bit base64 secrets round-trip and hex compatibility", () => {
+  const raw = randomBytes(32);
+  for (const key of [raw.toString("hex"), raw.toString("base64")]) {
+    assert.deepEqual(getEncryptionKey(key), raw);
+    const ciphertext = encryptKey("provider-api-key-example", key);
+    assert.equal(decryptKey(ciphertext, key), "provider-api-key-example");
+  }
+  assert.throws(() => getEncryptionKey("invalid-or-short"));
+  assert.throws(() => getEncryptionKey(randomBytes(16).toString("base64")));
+  const wrongKey = randomBytes(32).toString("base64");
+  const ciphertext = encryptKey("provider-api-key-example", raw.toString("base64"));
+  assert.throws(() => decryptKey(ciphertext, wrongKey));
+});
