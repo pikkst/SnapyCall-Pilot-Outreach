@@ -1,0 +1,83 @@
+name: GitHub Pages mobile preview
+
+on:
+  pull_request:
+    paths:
+      - "preview.html"
+      - "web/preview.tsx"
+      - "web/style.css"
+      - "vite.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/pages-preview.yml"
+  push:
+    branches: [main]
+    paths:
+      - "preview.html"
+      - "web/preview.tsx"
+      - "web/style.css"
+      - "vite.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/pages-preview.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-mobile-preview
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_PAGES_PREVIEW: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Build static preview only
+        run: npx vite build
+      - name: Verify preview and publishable asset paths
+        shell: bash
+        run: |
+          test -f dist/preview.html
+          test ! -f dist/index.html
+          grep -q '/SnapyCall-Pilot-Outreach/assets/' dist/preview.html
+          mv dist/preview.html dist/index.html
+          touch dist/.nojekyll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pilot-pages-preview
+          path: dist/
+          include-hidden-files: true
+          retention-days: 7
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/configure-pages@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: pilot-pages-preview
+          path: ./public
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./public
+      - id: deploy
+        uses: actions/deploy-pages@v4
