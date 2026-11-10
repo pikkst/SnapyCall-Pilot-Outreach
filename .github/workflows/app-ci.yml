@@ -33,8 +33,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - run: npm install --no-audit --no-fund
+      - name: Emit generated lockfile for reproducible dependency review
+        shell: bash
+        run: |
+          echo 'LOCKFILE_BEGIN'
+          cat package-lock.json
+          echo 'LOCKFILE_END'
       - run: npm run check
       - run: npm test
       - run: npm run typecheck
