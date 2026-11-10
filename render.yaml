@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: snapycall-pilot-outreach-staging
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: main
+    autoDeployTrigger: off
+    buildCommand: npm ci && npm run build
+    # Migration is idempotent. Free Render web services do not support preDeployCommand.
+    startCommand: npm run db:deploy && npm start
+    healthCheckPath: /api/ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22.23.4
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: SESSION_SIGNING_KEY
+        generateValue: true
+      - key: AI_ENCRYPTION_KEY
+        generateValue: true
