@@ -43,3 +43,28 @@ test("suppressed contacts remain blocked even after review", () => {
   assert.equal(result.canSend, false);
   assert.deepEqual(result.blockers, ["suppressed"]);
 });
+
+test("RSS article byline cannot qualify without an independently reviewed expert profile", () => {
+  const imported = { ...candidate, discoveryKey: "a".repeat(64), onlineEnglish: true };
+  const unreviewed = scoreCandidate(imported);
+  assert.equal(unreviewed.eligible, false);
+  assert.deepEqual(unreviewed.reasons, ["expert_profile_review_pending"]);
+  const decision = outreachDecision(imported);
+  assert.equal(decision.canDraft, false);
+  assert.ok(decision.blockers.includes("expert_profile_review_pending"));
+  const reviewed = { ...imported, expertProfileUrl: "https://experts.example.org/alice", profileReviewed: true };
+  assert.equal(scoreCandidate(reviewed).eligible, true);
+  assert.equal(outreachDecision(reviewed).canDraft, true);
+  assert.equal(outreachDecision({ ...reviewed, suppressed: true }).canDraft, false);
+  assert.equal(outreachDecision({ ...reviewed, onlineEnglish: false }).canDraft, false);
+});
+
+test("a manual review flag without valid profile evidence cannot qualify a discovered candidate", () => {
+  const imported = { ...candidate, discoveryKey: "b".repeat(64), profileReviewed: true };
+  assert.equal(scoreCandidate(imported).eligible, false);
+  assert.equal(outreachDecision(imported).canDraft, false);
+  assert.throws(() => normalizeCandidate({ ...imported, expertProfileUrl: "http://localhost/profile" }));
+  assert.throws(() => normalizeCandidate({ ...imported, expertProfileUrl: "file:///etc/passwd" }));
+  // Legacy manually entered candidates keep their original compatibility behavior.
+  assert.equal(outreachDecision(candidate).canDraft, true);
+});
