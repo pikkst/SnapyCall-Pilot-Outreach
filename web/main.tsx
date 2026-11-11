@@ -210,6 +210,33 @@ function App() {
       {tab === "discovery" && <section className="panel">
         <h2>Find prospective experts from free RSS / Atom sources</h2>
         <p className="muted">No paid discovery API, no LinkedIn scraping, no emails sent. Authors found in public feeds are unverified prospects. Review their original work before contacting anyone.</p>
+        <div className="panel">
+          <h2>Free manual web search</h2>
+          <p className="muted">Search public professional websites without a paid API. Results open in your browser; add only reviewed candidates from permitted sources.</p>
+          <label>Expert category<select value={discoveryCategory} onChange={e => setDiscoveryCategory(e.target.value)}>
+            {categories.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+          </select></label>
+          <div className="form-grid" style={{ marginTop: 14 }}>
+            {(["US", "UK_IRELAND", "OTHER_ENGLISH_SPEAKING"] as const).map(region => {
+              const terms: Record<string, string> = {
+                AI_AUTOMATION: '"n8n consultant" OR "Make.com expert" OR "AI automation consultant"',
+                COACHING: '"executive coach" OR "career coach" OR "leadership coach"',
+                MARKETING_GROWTH: '"growth consultant" OR "fractional CMO"',
+                BUSINESS_STRATEGY: '"strategy consultant" OR "fractional COO"',
+              };
+              const geography: Record<string, string> = {
+                US: "United States", UK_IRELAND: "UK Ireland",
+                OTHER_ENGLISH_SPEAKING: "Canada Australia Estonia",
+              };
+              const query = terms[discoveryCategory] + " " + geography[region] + " online consultation";
+              return <a key={region} className="secondary" href={"https://www.google.com/search?q=" + encodeURIComponent(query)}
+                target="_blank" rel="noopener noreferrer" style={{ textAlign: "center", padding: 12, borderRadius: 8 }}>
+                Open web search: {regions.find(x => x[0] === region)?.[1]}
+              </a>;
+            })}
+          </div>
+        </div>
+
         {feeds.length ? <>
           <div className="form-grid">
             <label className="wide">Approved feed
