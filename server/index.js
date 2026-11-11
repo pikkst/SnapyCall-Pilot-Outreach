@@ -9,6 +9,7 @@ import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { normalizeCandidate, outreachDecision, scoreCandidate, EXPERT_CATEGORIES } from "../src/domain.js";
 import { parseApprovedSources, discoverFeed, discoveryKeyFor } from "./discovery.js";
+import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
@@ -91,13 +92,15 @@ app.post("/api/discovery/scan", authenticated, requireOrigin, scanLimiter, safe(
   const input = z.object({ feedUrl: z.string().url().max(1200) }).strict().parse(req.body);
   if (!approvedDiscoveryFeeds.includes(input.feedUrl)) return res.status(403).json({ error: "Feed is not approved" });
   const entries = await discoverFeed({ url: input.feedUrl, approvedSources: approvedDiscoveryFeeds });
-  res.json({ entries, providerCost: 0, requiresReview: true });
+  res.json({ entries: entries.map((entry) => signScanEntry(entry, env.SESSION_SIGNING_KEY)), providerCost: 0, requiresReview: true });
 }));
 app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req, res) => {
   const schema = z.object({
     feedUrl: z.string().url().max(1200),
     name: z.string().trim().min(2).max(160),
     sourceUrl: z.string().url().max(2048),
+    discoveryKey: z.string().length(64).regex(/^[a-f0-9]+$/),
+    proof: z.string().max(128),
     category: z.enum(Object.keys(EXPERT_CATEGORIES)),
   }).strict();
   const input = schema.parse(req.body);
@@ -106,6 +109,9 @@ app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req,
     name: input.name, sourceUrl: input.sourceUrl, category: input.category, onlineEnglish: false,
   });
   const discoveryKey = discoveryKeyFor(input.feedUrl, candidate.name);
+  if (input.discoveryKey !== discoveryKey || !verifyScanEntry(input, env.SESSION_SIGNING_KEY)) {
+    return res.status(403).json({ error: "Valid recent scan evidence is required" });
+  }
   let result;
   try {
     result = await prisma.$transaction(async (tx) => {
