@@ -73,6 +73,28 @@ try {
     await database.$disconnect();
   }
 
+  // Without any explicitly approved source, free discovery must fail closed.
+  assert.equal((await call("/discovery/sources")).status, 401);
+  const sourcesResponse = await call("/discovery/sources", { headers: { cookie } });
+  assert.equal(sourcesResponse.status, 200);
+  const sources = await sourcesResponse.json();
+  assert.deepEqual(sources.feeds, []);
+  assert.equal(sources.providerCost, 0);
+  const unauthorizedScan = await call("/discovery/scan", {
+    method: "POST", headers: { cookie, origin, "content-type": "application/json" },
+    body: JSON.stringify({ feedUrl: "https://unapproved.example/rss.xml" }),
+  });
+  assert.equal(unauthorizedScan.status, 403);
+  const unauthorizedImport = await call("/discovery/import", {
+    method: "POST", headers: { cookie, origin, "content-type": "application/json" },
+    body: JSON.stringify({
+      feedUrl: "https://unapproved.example/rss.xml", name: "Test Author",
+      sourceUrl: "https://unapproved.example/posts/1", category: "COACHING",
+      discoveryKey: "a".repeat(64), proof: "forged",
+    }),
+  });
+  assert.equal(unauthorizedImport.status, 403);
+
   const protectedHeaders = { origin, cookie, "content-type": "application/json" };
   const saving = await call("/ai-settings", { method: "PUT", headers: protectedHeaders,
     body: JSON.stringify({ provider: "gemini", model: "gemini-2.5-flash", apiKey: "test-only-provider-secret-value" }),

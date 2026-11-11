@@ -7,13 +7,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { normalizeCandidate, outreachDecision, scoreCandidate } from "../src/domain.js";
+import { normalizeCandidate, outreachDecision, scoreCandidate, EXPERT_CATEGORIES } from "../src/domain.js";
+import { parseApprovedSources, discoverFeed, discoveryKeyFor } from "./discovery.js";
+import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 
 const env = requireRuntimeConfig();
 const prisma = new PrismaClient({ log: ["error"] });
+const approvedDiscoveryFeeds = parseApprovedSources(process.env.DISCOVERY_FEED_URLS);
 const app = express();
 app.disable("x-powered-by");
 if (process.env.TRUST_PROXY) {
@@ -79,6 +82,64 @@ app.delete("/api/session", requireOrigin, (_req, res) => {
 });
 
 const write = [authenticated, requireOrigin];
+// Free discovery: explicit RSS/Atom sources, no paid people-search API.
+// Each scan is a bounded, admin-triggered read. Imports require separate review.
+app.get("/api/discovery/sources", authenticated, (_req, res) => {
+  res.json({ feeds: approvedDiscoveryFeeds, providerCost: 0, requiresReview: true });
+});
+const scanLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders: "draft-7", legacyHeaders: false });
+app.post("/api/discovery/scan", authenticated, requireOrigin, scanLimiter, safe(async (req, res) => {
+  const input = z.object({ feedUrl: z.string().url().max(1200) }).strict().parse(req.body);
+  if (!approvedDiscoveryFeeds.includes(input.feedUrl)) return res.status(403).json({ error: "Feed is not approved" });
+  const entries = await discoverFeed({ url: input.feedUrl, approvedSources: approvedDiscoveryFeeds });
+  res.json({ entries: entries.map((entry) => signScanEntry(entry, env.SESSION_SIGNING_KEY)), providerCost: 0, requiresReview: true });
+}));
+app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req, res) => {
+  const schema = z.object({
+    feedUrl: z.string().url().max(1200),
+    name: z.string().trim().min(2).max(160),
+    sourceUrl: z.string().url().max(2048),
+    discoveryKey: z.string().length(64).regex(/^[a-f0-9]+$/),
+    proof: z.string().max(128),
+    category: z.enum(Object.keys(EXPERT_CATEGORIES)),
+  }).strict();
+  const input = schema.parse(req.body);
+  if (!approvedDiscoveryFeeds.includes(input.feedUrl)) return res.status(403).json({ error: "Feed is not approved" });
+  const candidate = normalizeCandidate({
+    name: input.name, sourceUrl: input.sourceUrl, category: input.category, onlineEnglish: false,
+  });
+  const discoveryKey = discoveryKeyFor(input.feedUrl, candidate.name);
+  if (input.discoveryKey !== discoveryKey || !verifyScanEntry(input, env.SESSION_SIGNING_KEY)) {
+    return res.status(403).json({ error: "Valid recent scan evidence is required" });
+  }
+  let result;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      const existing = await tx.candidate.findUnique({ where: { discoveryKey } });
+      if (existing) return { id: existing.id, created: false };
+      const created = await tx.candidate.create({
+        data: {
+          discoveryKey, name: candidate.name, category: candidate.category,
+          sourceUrl: candidate.sourceUrl, onlineEnglish: false,
+          contactReviewed: false, status: "REVIEW_PENDING",
+        },
+      });
+      await tx.auditEvent.create({ data: {
+        actorId: "admin", action: "discovery.candidate.imported", entityId: created.id,
+        metadata: { feedUrl: input.feedUrl, sourceUrl: candidate.sourceUrl },
+      } });
+      return { id: created.id, created: true };
+    });
+  } catch (error) {
+    // Concurrent review clicks can race the initial existence check.
+    // The unique DB constraint determines the winner; the loser reads it.
+    if (error?.code !== "P2002") throw error;
+    const winner = await prisma.candidate.findUnique({ where: { discoveryKey } });
+    if (!winner) throw error;
+    result = { id: winner.id, created: false };
+  }
+  res.status(result.created ? 201 : 200).json(result);
+}));
 app.get("/api/candidates", authenticated, safe(async (_req, res) => {
   const items = await prisma.candidate.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
   res.json(items.map((item) => ({ ...item, score: scoreCandidate(item) })));

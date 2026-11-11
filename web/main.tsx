@@ -9,6 +9,7 @@ type Candidate = {
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
+type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
 
 const categories = [
   ["AI_AUTOMATION", "AI automation / no-code"],
@@ -42,13 +43,17 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [tab, setTab] = useState<"candidates" | "drafts" | "settings">("candidates");
+  const [tab, setTab] = useState<"candidates" | "discovery" | "drafts" | "settings">("candidates");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [setting, setSetting] = useState<AiSetting>({ provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
   const [apiKey, setApiKey] = useState("");
+  const [feeds, setFeeds] = useState<string[]>([]);
+  const [selectedFeed, setSelectedFeed] = useState("");
+  const [discovered, setDiscovered] = useState<FeedEntry[]>([]);
+  const [discoveryCategory, setDiscoveryCategory] = useState("AI_AUTOMATION");
   const [candidate, setCandidate] = useState({
     name: "", email: "", category: "AI_AUTOMATION", region: "US", sourceUrl: "",
     onlineEnglish: true, legalBasis: "", contactReviewed: false,
@@ -63,6 +68,9 @@ function App() {
     setCandidates(c);
     setDrafts(d);
     setSetting(s);
+    const sources = await api<{ feeds: string[] }>("/discovery/sources");
+    setFeeds(sources.feeds);
+    setSelectedFeed((previous) => sources.feeds.includes(previous) ? previous : (sources.feeds[0] ?? ""));
   }
 
   useEffect(() => {
@@ -123,6 +131,29 @@ function App() {
     });
   }
 
+  async function scanSource() {
+    await execute(async () => {
+      const result = await api<{ entries: FeedEntry[] }>("/discovery/scan", {
+        method: "POST", body: JSON.stringify({ feedUrl: selectedFeed }),
+      });
+      setDiscovered(result.entries);
+      setNotice("Read " + result.entries.length + " feed authors. These are unverified prospects, not confirmed experts.");
+    });
+  }
+
+  async function importLead(entry: FeedEntry) {
+    await execute(async () => {
+      const result = await api<{ id: string; created: boolean }>("/discovery/import", {
+        method: "POST", body: JSON.stringify({
+          feedUrl: entry.feedUrl, name: entry.name, sourceUrl: entry.sourceUrl,
+          discoveryKey: entry.discoveryKey, proof: entry.proof, category: discoveryCategory,
+        }),
+      });
+      await load();
+      setNotice(result.created ? "Imported for manual review — no email sent." : "Already imported; no duplicate created.");
+    });
+  }
+
   if (!loggedIn) return (
     <main className="login-shell">
       <form className="panel login" onSubmit={login}>
@@ -142,15 +173,15 @@ function App() {
       <div className="brand">SNAPYCALL<span> / PILOT</span></div>
       <p className="sidebar-label">WORKSPACE</p>
       <nav aria-label="Workspace sections">
-        {(["candidates", "drafts", "settings"] as const).map((item) =>
+        {(["candidates", "discovery", "drafts", "settings"] as const).map((item) =>
           <button type="button" className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
-            {item === "settings" ? "AI configuration" : item === "drafts" ? "Outreach drafts" : "Candidates"}
+            {item === "settings" ? "AI configuration" : item === "drafts" ? "Outreach drafts" : item === "discovery" ? "Free discovery" : "Candidates"}
           </button>)}
       </nav>
       <div className="sidebar-bottom"><span className="state">● Draft-only mode</span><button className="ghost" onClick={logout}>Sign out</button></div>
     </aside>
     <section className="content">
-      <header><div><span className="eyebrow">PILOT EXPERT ACQUISITION</span><h1>{tab === "candidates" ? "Expert candidates" : tab === "drafts" ? "Outreach drafts" : "Your AI provider"}</h1></div><span className="pill">No automatic sending</span></header>
+      <header><div><span className="eyebrow">PILOT EXPERT ACQUISITION</span><h1>{tab === "candidates" ? "Expert candidates" : tab === "drafts" ? "Outreach drafts" : tab === "discovery" ? "Free lead discovery" : "Your AI provider"}</h1></div><span className="pill">No automatic sending</span></header>
       {error && <div className="error" role="alert">{error}</div>}
       {notice && <div className="success" role="status">{notice}</div>}
       {tab === "candidates" && <>
@@ -177,6 +208,62 @@ function App() {
           {!candidates.length && <tr><td colSpan={5} className="empty">No candidates yet. Add one above to start.</td></tr>}
         </tbody></table></div></section>
       </>}
+      {tab === "discovery" && <section className="panel">
+        <h2>Find prospective experts from free RSS / Atom sources</h2>
+        <p className="muted">No paid discovery API, no LinkedIn scraping, no emails sent. Authors found in public feeds are unverified prospects. Review their original work before contacting anyone.</p>
+        <div className="panel">
+          <h2>Free manual web search</h2>
+          <p className="muted">Search public professional websites without a paid API. Results open in your browser; add only reviewed candidates from permitted sources.</p>
+          <label>Expert category<select value={discoveryCategory} onChange={e => setDiscoveryCategory(e.target.value)}>
+            {categories.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+          </select></label>
+          <div className="form-grid" style={{ marginTop: 14 }}>
+            {(["US", "UK_IRELAND", "OTHER_ENGLISH_SPEAKING"] as const).map(region => {
+              const terms: Record<string, string> = {
+                AI_AUTOMATION: '"n8n consultant" OR "Make.com expert" OR "AI automation consultant"',
+                COACHING: '"executive coach" OR "career coach" OR "leadership coach"',
+                MARKETING_GROWTH: '"growth consultant" OR "fractional CMO"',
+                BUSINESS_STRATEGY: '"strategy consultant" OR "fractional COO"',
+              };
+              const geography: Record<string, string> = {
+                US: "United States", UK_IRELAND: "UK Ireland",
+                OTHER_ENGLISH_SPEAKING: "Canada Australia Estonia",
+              };
+              const query = terms[discoveryCategory] + " " + geography[region] + " online consultation";
+              return <a key={region} className="secondary" href={"https://www.google.com/search?q=" + encodeURIComponent(query)}
+                target="_blank" rel="noopener noreferrer" style={{ textAlign: "center", padding: 12, borderRadius: 8 }}>
+                Open web search: {regions.find(x => x[0] === region)?.[1]}
+              </a>;
+            })}
+          </div>
+        </div>
+
+        {feeds.length ? <>
+          <div className="form-grid">
+            <label className="wide">Approved feed
+              <select value={selectedFeed} onChange={e => { setSelectedFeed(e.target.value); setDiscovered([]); }}>
+                {feeds.map(feed => <option key={feed} value={feed}>{feed}</option>)}
+              </select>
+            </label>
+            <label>Category to review under
+              <select value={discoveryCategory} onChange={e => setDiscoveryCategory(e.target.value)}>
+                {categories.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+              </select>
+            </label>
+            <button type="button" disabled={busy || !selectedFeed} onClick={scanSource}>Scan feed (free)</button>
+          </div>
+          {discovered.length > 0 && <div className="table-scroll"><table>
+            <thead><tr><th>Author</th><th>Article evidence</th><th>Decision</th></tr></thead>
+            <tbody>{discovered.map(item => <tr key={item.discoveryKey}>
+              <td>{item.name}</td>
+              <td><a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">{item.headline}</a></td>
+              <td><button disabled={busy} type="button" onClick={() => importLead(item)}>Import for review</button></td>
+            </tr>)}</tbody>
+          </table></div>}
+          {!discovered.length && <p className="hint">Scan an approved source to see author candidates and evidence.</p>}
+        </> : <p className="hint">No approved feeds configured yet. Set DISCOVERY_FEED_URLS to a comma-separated list of reviewed public RSS/Atom URLs in Render Environment, then redeploy.</p>}
+        <p className="hint">Finding an article author does not confirm they offer English online consultations. Imported records stay REVIEW_PENDING, have no inferred email, and cannot generate an AI outreach draft until eligibility is verified.</p>
+      </section>}
       {tab === "drafts" && <section className="panel"><h2>Saved AI drafts</h2><p className="muted">These are review-only drafts. The system cannot send email.</p>{drafts.map(d => <article className="draft" key={d.id}><div className="draft-top"><strong>{d.candidate.name}</strong><small>{d.provider} / {d.model}</small></div><h3>{d.subject}</h3><pre>{d.body}</pre><button className="secondary" onClick={() => navigator.clipboard.writeText(d.subject + "\n\n" + d.body)}>Copy draft</button></article>)}{!drafts.length && <p className="empty">No generated drafts yet.</p>}</section>}
       {tab === "settings" && <section className="panel setting-panel">
         <h2>Bring your own AI</h2>
