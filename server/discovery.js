@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
-const MAX_FEED_BYTES = 250_000;
+// Bound RSS/Atom body memory even for publishers embedding article HTML in feeds.
+const MAX_FEED_BYTES = 2 * 1024 * 1024;
 const MAX_ROBOTS_BYTES = 512 * 1024; // RFC 9309: process at least 500 KiB
 const MAX_ITEMS = 40;
 export const DISCOVERY_AGENT = "SnapyCallPilotDiscovery";
@@ -67,7 +68,7 @@ function atomHref(block) {
   return "";
 }
 export function parseSyndication(xml, feedUrl) {
-  if (typeof xml !== "string" || xml.length > MAX_FEED_BYTES || /<!DOCTYPE|<!ENTITY/i.test(xml)) {
+  if (typeof xml !== "string" || Buffer.byteLength(xml, "utf8") > MAX_FEED_BYTES || /<!DOCTYPE|<!ENTITY/i.test(xml)) {
     throw new Error("Unsafe or oversized feed");
   }
   const atom = /<feed\b/i.test(xml);

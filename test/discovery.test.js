@@ -103,3 +103,55 @@ test("invalid feed response reports distinct content type and format errors", as
     (error) => error.code === "SOURCE_INVALID_FEED" && error.stage === "feed",
   );
 });
+
+
+test("bounded scanner accepts a valid 300 KiB feed above previous 250 KB limit", async () => {
+  const article = "A".repeat(310_000);
+  const largeFeed = `<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel><item><title>Automation notes</title><dc:creator>Alice Example</dc:creator>
+    <link>https://example.org/alice</link><description>${article}</description></item></channel></rss>`;
+  assert.ok(Buffer.byteLength(largeFeed, "utf8") > 250_000);
+  const fetcher = async (url) => url.endsWith("/robots.txt")
+    ? new Response("User-agent: *\nAllow: /", { headers: { "content-type": "text/plain" } })
+    : new Response(largeFeed, { headers: { "content-type": "application/rss+xml" } });
+  const candidates = await discoverFeed({ url: feedUrl, approvedSources: [feedUrl], fetcher });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].name, "Alice Example");
+  assert.equal(candidates[0].sourceUrl, "https://example.org/alice");
+});
+
+test("oversized RSS content-length is rejected before reading the body", async () => {
+  const fetcher = async (url) => url.endsWith("/robots.txt")
+    ? new Response("User-agent: *\nAllow: /", { headers: { "content-type": "text/plain" } })
+    : new Response("not a feed", { headers: { "content-type": "application/rss+xml", "content-length": String(3 * 1024 * 1024) } });
+  await assert.rejects(
+    discoverFeed({ url: feedUrl, approvedSources: [feedUrl], fetcher }),
+    (error) => error.code === "SOURCE_TOO_LARGE" && error.stage === "feed",
+  );
+});
+
+test("oversized streamed RSS without content-length fails with bounded read", async () => {
+  const chunk = new Uint8Array(256 * 1024);
+  let pulls = 0;
+  const fetcher = async (url) => url.endsWith("/robots.txt")
+    ? new Response("User-agent: *\nAllow: /", { headers: { "content-type": "text/plain" } })
+    : new Response(new ReadableStream({
+      pull(controller) {
+        pulls++;
+        controller.enqueue(chunk);
+        if (pulls >= 12) controller.close();
+      },
+    }), { headers: { "content-type": "application/rss+xml" } });
+  await assert.rejects(
+    discoverFeed({ url: feedUrl, approvedSources: [feedUrl], fetcher }),
+    (error) => error.code === "SOURCE_TOO_LARGE" && error.stage === "feed",
+  );
+  assert.ok(pulls <= 12);
+});
+
+test("XML parser applies UTF-8 byte cap rather than JavaScript character count", () => {
+  const multibyte = "ü".repeat(1_200_000);
+  assert.ok(multibyte.length < 2 * 1024 * 1024);
+  assert.ok(Buffer.byteLength(multibyte, "utf8") > 2 * 1024 * 1024);
+  assert.throws(() => parseSyndication("<rss><channel>" + multibyte + "</channel></rss>", feedUrl), /Unsafe or oversized feed/);
+});
