@@ -3,14 +3,14 @@ import express from "express";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
-import bcrypt from "bcryptjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { normalizeCandidate, outreachDecision, scoreCandidate } from "../src/domain.js";
-import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, verifyAdmin, validWriteOrigin } from "./security.js";
+import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
+import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 
 const env = requireRuntimeConfig();
 const prisma = new PrismaClient({ log: ["error"] });
@@ -68,7 +68,7 @@ app.get("/api/ready", safe(async (_req, res) => {
 const loginLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 8, standardHeaders: "draft-7", legacyHeaders: false });
 app.post("/api/session", requireOrigin, loginLimiter, safe(async (req, res) => {
   const input = z.object({ email: z.string().email(), password: z.string().min(1).max(256) }).parse(req.body);
-  if (!await verifyAdmin(input.email, input.password, env)) return res.status(401).json({ error: "Invalid credentials" });
+  if (!await verifyAdmin(input.email, input.password, prisma)) return res.status(401).json({ error: "Invalid credentials" });
   sessionCookie(res, makeSession(env.SESSION_SIGNING_KEY), 8 * 60 * 60 * 1000);
   return res.json({ authenticated: true });
 }));
@@ -195,9 +195,11 @@ async function start() {
   try {
     await prisma.$connect();
     await prisma.$queryRaw`SELECT 1`;
+    const result = await bootstrapAdmin(prisma, env);
+    if (result.created) console.log("[auth] Admin credential initialized in database; remove ADMIN_PASSWORD from Render environment.");
   } catch {
     await prisma.$disconnect();
-    throw new Error("Database unavailable; refusing to start");
+    throw new Error("Database or admin bootstrap unavailable; refusing to start");
   }
   const port = Number(process.env.PORT ?? 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid PORT");

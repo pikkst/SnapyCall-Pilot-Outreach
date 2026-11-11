@@ -1,12 +1,10 @@
 import { createCipheriv, createDecipheriv, createHmac, createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import bcrypt from "bcryptjs";
 
 export function requireRuntimeConfig(env = process.env) {
-  const names = ["DATABASE_URL", "ADMIN_EMAIL", "ADMIN_PASSWORD_HASH", "SESSION_SIGNING_KEY", "AI_ENCRYPTION_KEY"];
+  const names = ["DATABASE_URL", "ADMIN_EMAIL", "SESSION_SIGNING_KEY", "AI_ENCRYPTION_KEY"];
   for (const name of names) {
     if (!env[name]) throw new Error("Missing server configuration: " + name);
   }
-  if (!/^\$2[aby]\$\d\d\$/.test(env.ADMIN_PASSWORD_HASH)) throw new Error("ADMIN_PASSWORD_HASH must be bcrypt");
   if (env.SESSION_SIGNING_KEY.length < 32) throw new Error("SESSION_SIGNING_KEY must be at least 32 characters");
   getEncryptionKey(env.AI_ENCRYPTION_KEY);
   return env;
@@ -61,13 +59,6 @@ export function verifySession(token, signingKey) {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     return data.user === "admin" && Number.isSafeInteger(data.expiry) && data.expiry > Date.now();
   } catch { return false; }
-}
-
-export async function verifyAdmin(email, password, env) {
-  const expected = env.ADMIN_EMAIL.trim().toLowerCase();
-  // Always perform bcrypt verification, even if the email does not match.
-  const matches = await bcrypt.compare(password, env.ADMIN_PASSWORD_HASH);
-  return email.trim().toLowerCase() === expected && matches;
 }
 
 export function validWriteOrigin(req) {

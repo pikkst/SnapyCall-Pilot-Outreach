@@ -53,7 +53,8 @@ jobs:
             IF to_regclass('public."Candidate"') IS NULL OR
                to_regclass('public."AiSetting"') IS NULL OR
                to_regclass('public."OutreachDraft"') IS NULL OR
-               to_regclass('public."AuditEvent"') IS NULL
+               to_regclass('public."AuditEvent"') IS NULL OR
+               to_regclass('public."AdminCredential"') IS NULL
             THEN RAISE EXCEPTION 'Missing application tables'; END IF;
           END $$;
           SQL
