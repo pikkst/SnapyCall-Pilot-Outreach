@@ -67,6 +67,15 @@ function atomHref(block) {
   }
   return "";
 }
+// Some RSS generators serialize a single author as Python's list repr:
+ // ['Author Name']. Unwrap only a strictly matching single quoted element.
+ // Do not rewrite arbitrary usernames, multiple authors or profile data.
+export function normalizeFeedAuthor(value) {
+  const author = decodeXml(value);
+  const match = author.match(/^\\[(['"])([^\\[\\]'"]{1,160})\\1\\]$/u);
+  return (match ? match[2] : author).trim().slice(0, 160);
+}
+
 export function parseSyndication(xml, feedUrl) {
   if (typeof xml !== "string" || Buffer.byteLength(xml, "utf8") > MAX_FEED_BYTES || /<!DOCTYPE|<!ENTITY/i.test(xml)) {
     throw new Error("Unsafe or oversized feed");
@@ -78,7 +87,7 @@ export function parseSyndication(xml, feedUrl) {
   const seen = new Set();
   for (const [, block] of sections.slice(0, MAX_ITEMS)) {
     const rawAuthor = atom ? tag(tag(block, "author"), "name") : (tag(block, "dc:creator") || tag(block, "author"));
-    const author = decodeXml(rawAuthor).slice(0, 160);
+    const author = normalizeFeedAuthor(rawAuthor);
     const title = decodeXml(tag(block, "title")).slice(0, 240);
     const link = atom ? atomHref(block) : decodeXml(tag(block, "link"));
     if (!author || !title || !link) continue;
@@ -87,7 +96,8 @@ export function parseSyndication(xml, feedUrl) {
     if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || !url.hostname.includes(".")) continue;
     // The feed claims authorship; this is not proof of a professional identity.
     // Do not infer personal email addresses or online language eligibility.
-    const key = discoveryKeyFor(feedUrl, author);
+    // Keep the key based on the publisher’s original byline for backward compatibility.
+    const key = discoveryKeyFor(feedUrl, decodeXml(rawAuthor));
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(Object.freeze({ discoveryKey: key, name: author, headline: title, sourceUrl: url.toString(), feedUrl }));
