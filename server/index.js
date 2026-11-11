@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { normalizeCandidate, outreachDecision, scoreCandidate, EXPERT_CATEGORIES } from "../src/domain.js";
-import { parseApprovedSources, discoverFeed, discoveryKeyFor } from "./discovery.js";
+import { parseApprovedSources, discoverFeed, discoveryKeyFor, DiscoverySourceError } from "./discovery.js";
 import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
@@ -91,7 +91,18 @@ const scanLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders: "dr
 app.post("/api/discovery/scan", authenticated, requireOrigin, scanLimiter, safe(async (req, res) => {
   const input = z.object({ feedUrl: z.string().url().max(1200) }).strict().parse(req.body);
   if (!approvedDiscoveryFeeds.includes(input.feedUrl)) return res.status(403).json({ error: "Feed is not approved" });
-  const entries = await discoverFeed({ url: input.feedUrl, approvedSources: approvedDiscoveryFeeds });
+  let entries;
+  try {
+    entries = await discoverFeed({ url: input.feedUrl, approvedSources: approvedDiscoveryFeeds });
+  } catch (error) {
+    if (!(error instanceof DiscoverySourceError)) throw error;
+    console.warn("[discovery] Scan blocked:", error.code, "stage:", error.stage);
+    return res.status(error.status).json({
+      error: "Discovery source unavailable",
+      code: error.code,
+      stage: error.stage,
+    });
+  }
   res.json({ entries: entries.map((entry) => signScanEntry(entry, env.SESSION_SIGNING_KEY)), providerCost: 0, requiresReview: true });
 }));
 app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req, res) => {
