@@ -3,7 +3,6 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import bcrypt from "bcryptjs";
 
 if (!process.env.DATABASE_URL?.includes("localhost:5432/pilot_test")) {
   throw new Error("Smoke test requires the disposable CI database");
@@ -14,7 +13,8 @@ const env = {
   NODE_ENV: "production",
   PORT: "4357",
   ADMIN_EMAIL: "admin@example.test",
-  ADMIN_PASSWORD_HASH: await bcrypt.hash("integration-only-strong-password", 10),
+  ADMIN_PASSWORD: "integration-only-strong-password",
+  ADMIN_PASSWORD_HASH: "",
   SESSION_SIGNING_KEY: randomBytes(32).toString("hex"),
   AI_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
 };
@@ -58,6 +58,20 @@ try {
   assert.equal(login.status, 200);
   cookie = login.headers.get("set-cookie")?.split(";")[0];
   assert.ok(cookie?.startsWith("pilot_session="));
+
+  // Bootstrap persists a hash and never exposes the plaintext password.
+  const { PrismaClient } = await import("@prisma/client");
+  const database = new PrismaClient();
+  try {
+    const admin = await database.adminCredential.findUnique({ where: { id: "admin" } });
+    assert.equal(admin.email, env.ADMIN_EMAIL);
+    assert.match(admin.passwordHash, /^\\$2[aby]\\$12\\$/);
+    assert.equal(admin.passwordHash.includes(env.ADMIN_PASSWORD), false);
+    const bootstrapAudits = await database.auditEvent.count({ where: { action: "admin.bootstrap.completed" } });
+    assert.equal(bootstrapAudits, 1);
+  } finally {
+    await database.$disconnect();
+  }
 
   const protectedHeaders = { origin, cookie, "content-type": "application/json" };
   const saving = await call("/ai-settings", { method: "PUT", headers: protectedHeaders,
