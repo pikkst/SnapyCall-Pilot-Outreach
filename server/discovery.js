@@ -28,7 +28,7 @@ export function parseApprovedSources(value) {
       url.hostname.endsWith(".internal") || prohibitedSource(url.hostname) ||
       /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname) || url.hostname.includes("..") ||
       url.pathname.length > 500 || url.search.length > 500) {
-      throw new Error("Configured discovery feeds must use public HTTPS domains (LinkedIn is excluded)");
+      throw new Error("Configured discovery feed must use a public HTTPS domain and must not be a restricted publisher");
     }
     url.hash = "";
     return url.toString();
