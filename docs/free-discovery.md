@@ -67,3 +67,32 @@ sources or integrate permitted data exports with provenance.
 6. Confirm zero discovery-provider/API charges and no email traffic.
 
 Do not merge or deploy to staging without a separate authorization.
+
+## Manual expert qualification and provenance (follow-up)
+
+The Creative Commons staging smoke verified RSS parsing and a real import, but
+the original author field contained Python-list formatting (`['TimidRobot']`).
+A feed byline does **not** establish the person's consulting qualifications.
+
+- Display names unwrap only the narrow single-item list representation.
+  Existing imported records retain their original deterministic discovery key;
+  older rows render normalized names without a destructive backfill.
+- `Candidate.sourceUrl` remains immutable article evidence for RSS imports.
+  It must **never** be described as a verified expert profile.
+- `Candidate.expertProfileUrl` is a separately reviewed public professional
+  profile, and `Candidate.profileReviewed` records explicit manual review.
+- To review an RSS lead, open *Candidates → Review profile*, provide an
+  independently inspected expert profile URL (different from the article),
+  select a region only when confirmed, and check English online consultations
+  only when verified. Review events are audit-logged.
+- RSS imports cannot qualify for AI drafting until both profile review and
+  English online-session evidence are confirmed. Suppression always blocks
+  drafting. Existing manually entered candidates retain their previous domain
+  contract and behavior for backward compatibility.
+- New manual-candidate forms start with English online sessions **unchecked**.
+- This review is human attestation, not automatic profile verification or AI
+  qualification. Any later AI qualification needs a separate evidence contract
+  and acceptance tests.
+
+The reviewed profile is distinct from a legal permission to email. No
+outbound sending endpoint is introduced.
