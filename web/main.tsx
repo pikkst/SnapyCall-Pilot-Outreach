@@ -31,8 +31,10 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   const result: unknown = await response.json();
   if (!response.ok) {
-    const message = typeof result === "object" && result !== null && "error" in result
-      ? String((result as { error: string }).error) : "Request failed";
+    const info = typeof result === "object" && result !== null ? result as { error?: string; code?: string; stage?: string } : null;
+    const message = info?.code && info.stage
+      ? "Discovery source error: " + info.code + " (" + info.stage + "). No candidates were imported."
+      : (info?.error ?? "Request failed");
     throw new Error(message);
   }
   return result as T;
