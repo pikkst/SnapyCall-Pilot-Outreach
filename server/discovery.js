@@ -5,6 +5,16 @@ const MAX_ROBOTS_BYTES = 512 * 1024; // RFC 9309: process at least 500 KiB
 const MAX_ITEMS = 40;
 export const DISCOVERY_AGENT = "SnapyCallPilotDiscovery";
 
+// Publisher terms explicitly prohibit automated commercial prospect collection.
+// robots.txt does not override contractual restrictions.
+export const RESTRICTED_SOURCE_DOMAINS = Object.freeze([
+  "linkedin.com", "community.n8n.io", "community.make.com", "consultingsuccess.com",
+]);
+function prohibitedSource(hostname) {
+  const host = hostname.toLowerCase();
+  return RESTRICTED_SOURCE_DOMAINS.some(name => host === name || host.endsWith("." + name));
+}
+
 export function parseApprovedSources(value) {
   if (!value?.trim()) return [];
   const urls = value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
@@ -15,7 +25,7 @@ export function parseApprovedSources(value) {
     if (url.protocol !== "https:" || url.username || url.password || url.port ||
       !url.hostname.includes(".") || !/^[a-z0-9.-]+$/i.test(url.hostname) ||
       url.hostname === "localhost" || url.hostname.endsWith(".local") ||
-      url.hostname.endsWith(".internal") || /(?:^|\.)linkedin\.com$/.test(url.hostname) ||
+      url.hostname.endsWith(".internal") || prohibitedSource(url.hostname) ||
       /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname) || url.hostname.includes("..") ||
       url.pathname.length > 500 || url.search.length > 500) {
       throw new Error("Configured discovery feeds must use public HTTPS domains (LinkedIn is excluded)");
