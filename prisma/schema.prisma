@@ -56,3 +56,10 @@ model AuditEvent {
   createdAt DateTime @default(now())
   @@index([action, createdAt])
 }
+
+model AdminCredential {
+  id String @id
+  email String
+  passwordHash String
+  createdAt DateTime @default(now())
+}
