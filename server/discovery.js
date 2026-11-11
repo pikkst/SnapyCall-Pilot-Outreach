@@ -72,8 +72,16 @@ function atomHref(block) {
  // Do not rewrite arbitrary usernames, multiple authors or profile data.
 export function normalizeFeedAuthor(value) {
   const author = decodeXml(value);
-  const match = author.match(/^\\[(['"])([^\\[\\]'"]{1,160})\\1\\]$/u);
-  return (match ? match[2] : author).trim().slice(0, 160);
+  const singleQuoted = author.startsWith("['") && author.endsWith("']");
+  const doubleQuoted = author.startsWith('["') && author.endsWith('"]');
+  if (singleQuoted || doubleQuoted) {
+    const candidate = author.slice(2, -2).trim();
+    // Do not silently flatten multi-author list repr or ambiguous names.
+    if (candidate && candidate.length <= 160 && !/['"\\[\\],]/u.test(candidate)) {
+      return candidate;
+    }
+  }
+  return author.slice(0, 160);
 }
 
 export function parseSyndication(xml, feedUrl) {
