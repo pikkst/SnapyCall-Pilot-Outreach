@@ -26,6 +26,10 @@ export function parseApprovedSources(value) {
   return [...new Set(result)];
 }
 
+export function discoveryKeyFor(feedUrl, author) {
+  return createHash("sha256").update("rss:" + feedUrl + ":" + author.trim().toLocaleLowerCase("en")).digest("hex");
+}
+
 function decodeXml(value) {
   return value
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
@@ -72,7 +76,7 @@ export function parseSyndication(xml, feedUrl) {
     if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || !url.hostname.includes(".")) continue;
     // The feed claims authorship; this is not proof of a professional identity.
     // Do not infer personal email addresses or online language eligibility.
-    const key = createHash("sha256").update("rss:" + feedUrl + ":" + author.trim().toLocaleLowerCase("en")).digest("hex");
+    const key = discoveryKeyFor(feedUrl, author);
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(Object.freeze({ discoveryKey: key, name: author, headline: title, sourceUrl: url.toString(), feedUrl }));
