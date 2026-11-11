@@ -65,7 +65,7 @@ try {
   try {
     const admin = await database.adminCredential.findUnique({ where: { id: "admin" } });
     assert.equal(admin.email, env.ADMIN_EMAIL);
-    assert.match(admin.passwordHash, /^\\$2[aby]\\$12\\$/);
+    assert.equal(/^\$2[aby]\$12\$/.test(admin.passwordHash), true);
     assert.equal(admin.passwordHash.includes(env.ADMIN_PASSWORD), false);
     const bootstrapAudits = await database.auditEvent.count({ where: { action: "admin.bootstrap.completed" } });
     assert.equal(bootstrapAudits, 1);
