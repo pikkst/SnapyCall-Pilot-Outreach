@@ -13,6 +13,8 @@ model Candidate {
   email String?
   emailNormalized String? @unique
   discoveryKey String? @unique
+  expertProfileUrl String?
+  profileReviewed Boolean @default(false)
   category String
   region String?
   onlineEnglish Boolean @default(false)

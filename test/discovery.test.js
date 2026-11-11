@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseApprovedSources, parseSyndication, robotsAllowed, discoverFeed, DiscoverySourceError } from "../server/discovery.js";
+import { parseApprovedSources, parseSyndication, robotsAllowed, discoverFeed, DiscoverySourceError, normalizeFeedAuthor, discoveryKeyFor } from "../server/discovery.js";
 
 const feedUrl = "https://example.org/feed.xml";
 const xml = `<?xml version="1.0"?><rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -154,4 +154,19 @@ test("XML parser applies UTF-8 byte cap rather than JavaScript character count",
   assert.ok(multibyte.length < 2 * 1024 * 1024);
   assert.ok(Buffer.byteLength(multibyte, "utf8") > 2 * 1024 * 1024);
   assert.throws(() => parseSyndication("<rss><channel>" + multibyte + "</channel></rss>", feedUrl), /Unsafe or oversized feed/);
+});
+
+test("single-item Python-list bylines are normalized while keeping stable legacy import identity", () => {
+  const sample = `<rss xmlns:dc="http://purl.org/dc/elements/1.1/"><channel>
+    <item><title>Automation article</title><dc:creator>['TimidRobot']</dc:creator>
+    <link>https://example.org/article</link></item>
+  </channel></rss>`;
+  const [entry] = parseSyndication(sample, feedUrl);
+  assert.equal(entry.name, "TimidRobot");
+  assert.equal(entry.discoveryKey, discoveryKeyFor(feedUrl, "['TimidRobot']"));
+  assert.equal(normalizeFeedAuthor("['TimidRobot']"), "TimidRobot");
+  assert.equal(normalizeFeedAuthor('["Sara Example"]'), "Sara Example");
+  assert.equal(normalizeFeedAuthor("['Alice', 'Bob']"), "['Alice', 'Bob']");
+  assert.equal(normalizeFeedAuthor("O'Reilly"), "O'Reilly");
+  assert.equal(normalizeFeedAuthor("['unfinished'"), "['unfinished'");
 });

@@ -5,7 +5,8 @@ import "./style.css";
 type Candidate = {
   id: string; name: string; email: string | null; category: string;
   region: string | null; onlineEnglish: boolean; status: string;
-  sourceUrl: string; suppressed: boolean; score: { score: number; eligible: boolean };
+  sourceUrl: string; discoveryKey: string | null; expertProfileUrl: string | null;
+  profileReviewed: boolean; suppressed: boolean; score: { score: number; eligible: boolean };
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
@@ -56,9 +57,13 @@ function App() {
   const [selectedFeed, setSelectedFeed] = useState("");
   const [discovered, setDiscovered] = useState<FeedEntry[]>([]);
   const [discoveryCategory, setDiscoveryCategory] = useState("AI_AUTOMATION");
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [reviewProfileUrl, setReviewProfileUrl] = useState("");
+  const [reviewRegion, setReviewRegion] = useState("");
+  const [reviewEnglish, setReviewEnglish] = useState(false);
   const [candidate, setCandidate] = useState({
     name: "", email: "", category: "AI_AUTOMATION", region: "US", sourceUrl: "",
-    onlineEnglish: true, legalBasis: "", contactReviewed: false,
+    onlineEnglish: false, legalBasis: "", contactReviewed: false,
   });
 
   async function load() {
@@ -130,6 +135,30 @@ function App() {
       await api("/candidates/" + encodeURIComponent(id) + "/draft", { method: "POST" });
       await load(); setTab("drafts");
       setNotice("Draft generated. Nothing was sent.");
+    });
+  }
+
+  function beginProfileReview(item: Candidate) {
+    setReviewId(item.id);
+    setReviewProfileUrl(item.expertProfileUrl ?? "");
+    setReviewRegion(item.region ?? "");
+    setReviewEnglish(item.onlineEnglish);
+  }
+
+  async function saveProfileReview(event: React.FormEvent) {
+    event.preventDefault();
+    if (!reviewId) return;
+    await execute(async () => {
+      await api("/candidates/" + encodeURIComponent(reviewId) + "/expert-review", {
+        method: "PATCH",
+        body: JSON.stringify({
+          expertProfileUrl: reviewProfileUrl, region: reviewRegion || null,
+          onlineEnglish: reviewEnglish, profileReviewed: true,
+        }),
+      });
+      await load();
+      setReviewId(null);
+      setNotice("Expert profile review saved. Article provenance remains unchanged; no email sent.");
     });
   }
 
@@ -206,9 +235,42 @@ function App() {
           </form>
         </section>
         <section className="panel"><h2>Candidate pipeline</h2><div className="table-scroll"><table><thead><tr><th>Candidate</th><th>Category</th><th>Region</th><th>Score</th><th>Action</th></tr></thead><tbody>
-          {candidates.map(c => <tr key={c.id}><td><strong>{c.name}</strong><small>{c.email ?? "No email"}</small></td><td>{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td><td>{c.region ?? "Unconfirmed"}</td><td>{c.score.eligible ? c.score.score : "Not eligible"}</td><td><button disabled={busy || !c.score.eligible || c.suppressed || !setting.keyConfigured} onClick={() => makeDraft(c.id)}>Generate draft</button></td></tr>)}
+          {candidates.map(c => <tr key={c.id}><td>
+              <strong>{c.name}</strong><small>{c.email ?? "No email"}</small>
+              <small><a href={c.sourceUrl} target="_blank" rel="noopener noreferrer">{c.discoveryKey ? "Source article (unverified author)" : "Source profile"}</a></small>
+              {c.discoveryKey && <small>{c.profileReviewed && c.expertProfileUrl
+                ? <a href={c.expertProfileUrl} target="_blank" rel="noopener noreferrer">Reviewed expert profile</a>
+                : "Expert profile not reviewed"}</small>}
+            </td><td>{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td>
+            <td>{c.region ?? "Unconfirmed"}</td>
+            <td>{c.score.eligible ? c.score.score : "Not eligible"}</td>
+            <td>
+              {c.discoveryKey && <button type="button" className="secondary" disabled={busy} onClick={() => beginProfileReview(c)}>Review profile</button>}
+              <button type="button" disabled={busy || !c.score.eligible || c.suppressed || !setting.keyConfigured} onClick={() => makeDraft(c.id)}>Generate draft</button>
+            </td></tr>)}
           {!candidates.length && <tr><td colSpan={5} className="empty">No candidates yet. Add one above to start.</td></tr>}
-        </tbody></table></div></section>
+        </tbody></table></div>
+        {reviewId && <form className="form-grid review-panel" onSubmit={saveProfileReview}>
+          <h3 className="wide">Verify an independently sourced expert profile</h3>
+          <p className="wide muted">A blog byline is not evidence of an online consulting service. Check the linked profile yourself. Only attest English online sessions if the profile explicitly confirms them.</p>
+          <label className="wide">Expert profile URL (not the article URL)
+            <input type="url" required maxLength={2048} value={reviewProfileUrl}
+              onChange={e => setReviewProfileUrl(e.target.value)} />
+          </label>
+          <label>Verified region
+            <select value={reviewRegion} onChange={e => setReviewRegion(e.target.value)}>
+              <option value="">Not confirmed</option>
+              {regions.map(([v, name]) => <option key={v} value={v}>{name}</option>)}
+            </select>
+          </label>
+          <label className="checkbox-review"><input type="checkbox" checked={reviewEnglish}
+            onChange={e => setReviewEnglish(e.target.checked)} />
+            English online consultations explicitly confirmed
+          </label>
+          <button type="submit" disabled={busy}>Save manual review</button>
+          <button type="button" className="secondary" onClick={() => setReviewId(null)}>Cancel</button>
+        </form>}
+      </section>
       </>}
       {tab === "discovery" && <section className="panel">
         <h2>Find prospective experts from free RSS / Atom sources</h2>

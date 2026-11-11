@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { normalizeCandidate, outreachDecision, scoreCandidate, EXPERT_CATEGORIES } from "../src/domain.js";
-import { parseApprovedSources, discoverFeed, discoveryKeyFor, DiscoverySourceError } from "./discovery.js";
+import { parseApprovedSources, discoverFeed, normalizeFeedAuthor, DiscoverySourceError } from "./discovery.js";
 import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
@@ -119,10 +119,13 @@ app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req,
   const candidate = normalizeCandidate({
     name: input.name, sourceUrl: input.sourceUrl, category: input.category, onlineEnglish: false,
   });
-  const discoveryKey = discoveryKeyFor(input.feedUrl, candidate.name);
-  if (input.discoveryKey !== discoveryKey || !verifyScanEntry(input, env.SESSION_SIGNING_KEY)) {
+  // Signed scan proof authenticates the original discovery key, normalized name
+  // and article URL. Do not recalculate the key from a display-normalized byline:
+  // old imports use the publisher's raw author representation.
+  if (!verifyScanEntry(input, env.SESSION_SIGNING_KEY)) {
     return res.status(403).json({ error: "Valid recent scan evidence is required" });
   }
+  const discoveryKey = input.discoveryKey;
   let result;
   try {
     result = await prisma.$transaction(async (tx) => {
@@ -151,9 +154,56 @@ app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req,
   }
   res.status(result.created ? 201 : 200).json(result);
 }));
+// Review is an explicit administrative attestation, not an inference from an RSS
+// byline. Keep the original article URL unchanged as source provenance.
+app.patch("/api/candidates/:id/expert-review", ...write, safe(async (req, res) => {
+  const input = z.object({
+    expertProfileUrl: z.string().url().max(2048),
+    region: z.enum(["US", "UK_IRELAND", "OTHER_ENGLISH_SPEAKING"]).nullable(),
+    onlineEnglish: z.boolean(),
+    profileReviewed: z.literal(true),
+  }).strict().parse(req.body);
+  const result = await prisma.$transaction(async (tx) => {
+    const row = await tx.candidate.findUnique({ where: { id: req.params.id } });
+    if (!row) return { status: 404, error: "Candidate not found" };
+    if (!row.discoveryKey) return { status: 409, error: "Only discovered candidates use this review flow" };
+    if (row.suppressed) return { status: 409, error: "Suppressed candidate cannot be reviewed" };
+    if (input.expertProfileUrl === row.sourceUrl) {
+      return { status: 400, error: "Expert profile must be distinct from article evidence" };
+    }
+    // Validate the profile URL through the existing candidate domain contract.
+    const verified = normalizeCandidate({ ...row, ...input });
+    if (!verified.expertProfileUrl) return { status: 400, error: "Expert profile URL required" };
+    const changed = row.expertProfileUrl !== verified.expertProfileUrl ||
+      !row.profileReviewed || row.onlineEnglish !== verified.onlineEnglish ||
+      row.region !== verified.region;
+    if (!changed) return { status: 200, reviewed: true, changed: false };
+    await tx.candidate.update({
+      where: { id: row.id },
+      data: {
+        name: normalizeFeedAuthor(row.name),
+        expertProfileUrl: verified.expertProfileUrl,
+        profileReviewed: true,
+        onlineEnglish: verified.onlineEnglish,
+        region: verified.region,
+        status: "REVIEWED",
+      },
+    });
+    await tx.auditEvent.create({ data: {
+      actorId: "admin", action: "discovery.expert.reviewed", entityId: row.id,
+      metadata: { profileUrl: verified.expertProfileUrl, articleUrl: row.sourceUrl,
+        onlineEnglish: verified.onlineEnglish, region: verified.region },
+    } });
+    return { status: 200, reviewed: true, changed: true };
+  });
+  return res.status(result.status).json(result);
+}));
 app.get("/api/candidates", authenticated, safe(async (_req, res) => {
   const items = await prisma.candidate.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
-  res.json(items.map((item) => ({ ...item, score: scoreCandidate(item) })));
+  res.json(items.map((item) => ({ ...item,
+    name: item.discoveryKey ? normalizeFeedAuthor(item.name) : item.name,
+    score: scoreCandidate(item),
+  })));
 }));
 app.post("/api/candidates", ...write, safe(async (req, res) => {
   const candidate = normalizeCandidate(req.body);

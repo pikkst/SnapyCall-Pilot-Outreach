@@ -96,6 +96,63 @@ try {
   assert.equal(unauthorizedImport.status, 403);
 
   const protectedHeaders = { origin, cookie, "content-type": "application/json" };
+  // A source article never qualifies a discovered byline as an expert.
+  // Exercise real Prisma persistence, access controls, provenance and audit.
+  const { PrismaClient: ReviewPrisma } = await import("@prisma/client");
+  const reviewDb = new ReviewPrisma();
+  try {
+    const discovered = await reviewDb.candidate.create({
+      data: {
+        discoveryKey: "c".repeat(64),
+        name: "['TimidRobot']",
+        category: "AI_AUTOMATION",
+        sourceUrl: "https://example.org/articles/automation",
+        onlineEnglish: false,
+        status: "REVIEW_PENDING",
+      },
+    });
+    const reviewPath = "/candidates/" + discovered.id + "/expert-review";
+    assert.equal((await call(reviewPath, {
+      method: "PATCH", headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ expertProfileUrl: "https://example.org/experts/robot",
+        region: "US", onlineEnglish: true, profileReviewed: true }),
+    })).status, 403, "Profile review must enforce CSRF origin");
+    const blocked = await call("/candidates/" + discovered.id + "/draft", {
+      method: "POST", headers: protectedHeaders,
+    });
+    assert.equal(blocked.status, 409, "RSS byline must not draft before profile review");
+    const invalid = await call(reviewPath, {
+      method: "PATCH", headers: protectedHeaders,
+      body: JSON.stringify({ expertProfileUrl: discovered.sourceUrl,
+        region: "US", onlineEnglish: true, profileReviewed: true }),
+    });
+    assert.equal(invalid.status, 400, "Article must not be accepted as independent profile");
+    const payload = JSON.stringify({ expertProfileUrl: "https://example.org/experts/robot",
+      region: "US", onlineEnglish: true, profileReviewed: true });
+    const reviewed = await call(reviewPath, {
+      method: "PATCH", headers: protectedHeaders, body: payload,
+    });
+    assert.equal(reviewed.status, 200, "Review API: " + await reviewed.text());
+    const replay = await call(reviewPath, {
+      method: "PATCH", headers: protectedHeaders, body: payload,
+    });
+    assert.equal(replay.status, 200);
+    const persisted = await reviewDb.candidate.findUnique({ where: { id: discovered.id } });
+    assert.equal(persisted.sourceUrl, discovered.sourceUrl);
+    assert.equal(persisted.expertProfileUrl, "https://example.org/experts/robot");
+    assert.equal(persisted.profileReviewed, true);
+    assert.equal(persisted.name, "TimidRobot");
+    assert.equal(persisted.onlineEnglish, true);
+    assert.equal(await reviewDb.auditEvent.count({
+      where: { action: "discovery.expert.reviewed", entityId: discovered.id },
+    }), 1, "Duplicate review cannot write duplicate audits");
+    const candidateList = await call("/candidates", { headers: { cookie } });
+    const entries = await candidateList.json();
+    assert.equal(entries.find(item => item.id === discovered.id).name, "TimidRobot");
+  } finally {
+    await reviewDb.$disconnect();
+  }
+
   const saving = await call("/ai-settings", { method: "PUT", headers: protectedHeaders,
     body: JSON.stringify({ provider: "gemini", model: "gemini-2.5-flash", apiKey: "test-only-provider-secret-value" }),
   });
