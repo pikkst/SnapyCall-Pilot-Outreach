@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { normalizeCandidate, outreachDecision, scoreCandidate, EXPERT_CATEGORIES } from "../src/domain.js";
-import { parseApprovedSources, discoverFeed, discoveryKeyFor, DiscoverySourceError } from "./discovery.js";
+import { parseApprovedSources, discoverFeed, DiscoverySourceError } from "./discovery.js";
 import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
@@ -119,10 +119,13 @@ app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req,
   const candidate = normalizeCandidate({
     name: input.name, sourceUrl: input.sourceUrl, category: input.category, onlineEnglish: false,
   });
-  const discoveryKey = discoveryKeyFor(input.feedUrl, candidate.name);
-  if (input.discoveryKey !== discoveryKey || !verifyScanEntry(input, env.SESSION_SIGNING_KEY)) {
+  // Signed scan proof authenticates the original discovery key, normalized name
+  // and article URL. Do not recalculate the key from a display-normalized byline:
+  // old imports use the publisher's raw author representation.
+  if (!verifyScanEntry(input, env.SESSION_SIGNING_KEY)) {
     return res.status(403).json({ error: "Valid recent scan evidence is required" });
   }
+  const discoveryKey = input.discoveryKey;
   let result;
   try {
     result = await prisma.$transaction(async (tx) => {
