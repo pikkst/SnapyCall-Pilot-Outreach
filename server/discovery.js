@@ -126,6 +126,51 @@ export function robotsAllowed(robots, path, agent = DISCOVERY_AGENT) {
   return matches[0]?.allow ?? (matches.length === 0);
 }
 
+export class DiscoverySourceError extends Error {
+  constructor(code, stage, status = 502) {
+    super(code);
+    this.name = "DiscoverySourceError";
+    this.code = code;
+    this.stage = stage;
+    this.status = status;
+  }
+}
+
+// Do not expose upstream error bodies, tokens, hostnames or stack traces to clients.
+async function requestSource(url, options, stage, fetcher) {
+  let response;
+  try {
+    response = await fetcher(url, options);
+  } catch (error) {
+    const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+    throw new DiscoverySourceError(timedOut ? "SOURCE_TIMEOUT" : "SOURCE_NETWORK_ERROR", stage, timedOut ? 504 : 502);
+  }
+  if (response.status >= 300 && response.status < 400) {
+    throw new DiscoverySourceError("SOURCE_REDIRECT_BLOCKED", stage);
+  }
+  if (response.status >= 500) throw new DiscoverySourceError("SOURCE_UPSTREAM_ERROR", stage);
+  if (response.status === 429) throw new DiscoverySourceError("SOURCE_RATE_LIMITED", stage, 503);
+  if (response.status === 401 || response.status === 403) {
+    throw new DiscoverySourceError("SOURCE_ACCESS_DENIED", stage);
+  }
+  if (response.status >= 400 && !(stage === "robots" && [404, 410].includes(response.status))) {
+    throw new DiscoverySourceError("SOURCE_NOT_FOUND", stage);
+  }
+  return response;
+}
+
+async function readSource(response, maxBytes, stage) {
+  try {
+    return await limitedText(response, maxBytes);
+  } catch (error) {
+    if (error instanceof DiscoverySourceError) throw error;
+    const code = /too large/i.test(error?.message ?? "") ? "SOURCE_TOO_LARGE" :
+      /XML\/text feed/i.test(error?.message ?? "") ? "SOURCE_INVALID_CONTENT_TYPE" :
+      "SOURCE_READ_FAILED";
+    throw new DiscoverySourceError(code, stage);
+  }
+}
+
 async function limitedText(response, maxBytes) {
   if (!response.ok) throw new Error("Source responded with HTTP " + response.status);
   const type = response.headers.get("content-type") ?? "";
@@ -151,12 +196,18 @@ export async function discoverFeed({ url, approvedSources, fetcher = fetch }) {
   const parsed = new URL(url);
   const robotsUrl = parsed.origin + "/robots.txt";
   const options = { redirect: "manual", signal: AbortSignal.timeout(8_000), headers: { "user-agent": DISCOVERY_AGENT } };
-  const robotsResponse = await fetcher(robotsUrl, options);
+  const robotsResponse = await requestSource(robotsUrl, options, "robots", fetcher);
   if (robotsResponse.status !== 404 && robotsResponse.status !== 410) {
-    const robots = await limitedText(robotsResponse, MAX_ROBOTS_BYTES);
-    if (!robotsAllowed(robots, parsed.pathname + parsed.search)) throw new Error("Source disallows automated access");
+    const robots = await readSource(robotsResponse, MAX_ROBOTS_BYTES, "robots");
+    if (!robotsAllowed(robots, parsed.pathname + parsed.search)) {
+      throw new DiscoverySourceError("SOURCE_ROBOTS_DISALLOWED", "robots", 403);
+    }
   }
-  const response = await fetcher(url, options);
-  const xml = await limitedText(response, MAX_FEED_BYTES);
-  return parseSyndication(xml, url);
+  const response = await requestSource(url, options, "feed", fetcher);
+  const xml = await readSource(response, MAX_FEED_BYTES, "feed");
+  try {
+    return parseSyndication(xml, url);
+  } catch {
+    throw new DiscoverySourceError("SOURCE_INVALID_FEED", "feed");
+  }
 }

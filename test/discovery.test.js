@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseApprovedSources, parseSyndication, robotsAllowed, discoverFeed } from "../server/discovery.js";
+import { parseApprovedSources, parseSyndication, robotsAllowed, discoverFeed, DiscoverySourceError } from "../server/discovery.js";
 
 const feedUrl = "https://example.org/feed.xml";
 const xml = `<?xml version="1.0"?><rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -57,4 +57,49 @@ test("discovery fetches only approved robots + feed URLs, never redirects", asyn
 test("robots unavailable or denying access blocks feed processing", async () => {
   const fetcher = async () => new Response("unavailable", { status: 503, headers: { "content-type": "text/plain" } });
   await assert.rejects(() => discoverFeed({ url: feedUrl, approvedSources: [feedUrl], fetcher }));
+});
+
+test("upstream robots failure is classified without fetching the feed", async () => {
+  const calls = [];
+  const fetcher = async (url) => {
+    calls.push(url);
+    return new Response("unavailable", { status: 503, headers: { "content-type": "text/plain" } });
+  };
+  await assert.rejects(
+    discoverFeed({ url: feedUrl, approvedSources: [feedUrl], fetcher }),
+    (error) => error instanceof DiscoverySourceError && error.code === "SOURCE_UPSTREAM_ERROR" && error.stage === "robots",
+  );
+  assert.deepEqual(calls, ["https://example.org/robots.txt"]);
+});
+test("upstream timeout reports stage and status without disclosing fetch error", async () => {
+  const fetcher = async () => { throw new DOMException("sensitive-provider-details", "TimeoutError"); };
+  await assert.rejects(
+    discoverFeed({ url: feedUrl, approvedSources: [feedUrl], fetcher }),
+    (error) => error.code === "SOURCE_TIMEOUT" && error.status === 504 && error.stage === "robots" &&
+      !error.message.includes("sensitive-provider-details"),
+  );
+});
+test("feed redirect remains blocked and is not followed", async () => {
+  const fetcher = async (url) => url.endsWith("/robots.txt")
+    ? new Response("User-agent: *\\nAllow: /", { headers: { "content-type": "text/plain" } })
+    : new Response(null, { status: 302, headers: { location: "https://other.example/feed" } });
+  await assert.rejects(
+    discoverFeed({ url: feedUrl, approvedSources: [feedUrl], fetcher }),
+    (error) => error.code === "SOURCE_REDIRECT_BLOCKED" && error.stage === "feed",
+  );
+});
+test("invalid feed response reports distinct content type and format errors", async () => {
+  const robots = new Response("User-agent: *\\nAllow: /", { headers: { "content-type": "text/plain" } });
+  const badContentType = async (url) => url.endsWith("/robots.txt") ? robots.clone()
+    : new Response("<html>not a feed</html>", { headers: { "content-type": "application/json" } });
+  await assert.rejects(
+    discoverFeed({ url: feedUrl, approvedSources: [feedUrl], fetcher: badContentType }),
+    (error) => error.code === "SOURCE_INVALID_CONTENT_TYPE" && error.stage === "feed",
+  );
+  const badFeed = async (url) => url.endsWith("/robots.txt") ? robots.clone()
+    : new Response("<html>not a feed</html>", { headers: { "content-type": "application/xml" } });
+  await assert.rejects(
+    discoverFeed({ url: feedUrl, approvedSources: [feedUrl], fetcher: badFeed }),
+    (error) => error.code === "SOURCE_INVALID_FEED" && error.stage === "feed",
+  );
 });
