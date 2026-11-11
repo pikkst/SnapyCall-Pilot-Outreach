@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 const MAX_FEED_BYTES = 250_000;
-const MAX_ROBOTS_BYTES = 100_000;
+const MAX_ROBOTS_BYTES = 512 * 1024; // RFC 9309: process at least 500 KiB
 const MAX_ITEMS = 40;
 export const DISCOVERY_AGENT = "SnapyCallPilotDiscovery";
 
