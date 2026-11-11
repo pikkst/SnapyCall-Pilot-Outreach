@@ -10,7 +10,10 @@ test("API key envelope encryption is randomized and authenticated", () => {
   const b = encryptKey("sensitive-api-key-value", key);
   assert.notEqual(a, b);
   assert.equal(decryptKey(a, key), "sensitive-api-key-value");
-  assert.throws(() => decryptKey(a.replace(/.$/, "x"), key));
+  // Flip a significant character in the authenticated GCM tag deterministically.
+  const parts = a.split(".");
+  parts[2] = (parts[2][0] === "A" ? "B" : "A") + parts[2].slice(1);
+  assert.throws(() => decryptKey(parts.join("."), key));
   assert.ok(!a.includes("sensitive"));
 });
 test("session is signed and cannot be forged", () => {
