@@ -9,7 +9,7 @@ type Candidate = {
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
-type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string };
+type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
 
 const categories = [
   ["AI_AUTOMATION", "AI automation / no-code"],
@@ -145,7 +145,8 @@ function App() {
     await execute(async () => {
       const result = await api<{ id: string; created: boolean }>("/discovery/import", {
         method: "POST", body: JSON.stringify({
-          feedUrl: entry.feedUrl, name: entry.name, sourceUrl: entry.sourceUrl, category: discoveryCategory,
+          feedUrl: entry.feedUrl, name: entry.name, sourceUrl: entry.sourceUrl,
+          discoveryKey: entry.discoveryKey, proof: entry.proof, category: discoveryCategory,
         }),
       });
       await load();
