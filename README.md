@@ -24,3 +24,17 @@ Private, independent pilot-expert acquisition workspace for SnapyCall.
 5. Import approved partner/expert lists only after privacy and source review.
 
 See `docs/architecture.md` for domain contracts and rollout gates.
+
+## Zero-paid-API lead discovery (staging feature)
+
+The `Free discovery` view provides two no-paid-search-API workflows:
+- One-click manual web searches for each SnapyCall category and priority region.
+- Admin-triggered RSS/Atom author discovery from exact, reviewed feeds configured
+  in `DISCOVERY_FEED_URLS` on the **server**; each result must be explicitly
+  imported for review. Sources are disabled until the operator approves them.
+
+RSS author names are leads to investigate, **not verified experts or contacts**.
+No email addresses, language availability, qualifications or permissions are
+inferred. Neither workflow calls an AI provider or sends email automatically.
+
+See [free discovery design and configuration](docs/free-discovery.md).
