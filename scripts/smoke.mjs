@@ -90,6 +90,7 @@ try {
     body: JSON.stringify({
       feedUrl: "https://unapproved.example/rss.xml", name: "Test Author",
       sourceUrl: "https://unapproved.example/posts/1", category: "COACHING",
+      discoveryKey: "a".repeat(64), proof: "forged",
     }),
   });
   assert.equal(unauthorizedImport.status, 403);
