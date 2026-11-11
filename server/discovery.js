@@ -77,7 +77,7 @@ export function normalizeFeedAuthor(value) {
   if (singleQuoted || doubleQuoted) {
     const candidate = author.slice(2, -2).trim();
     // Do not silently flatten multi-author list repr or ambiguous names.
-    if (candidate && candidate.length <= 160 && !/['"\\[\\],]/u.test(candidate)) {
+    if (candidate && candidate.length <= 160 && !["\u0027", "\u0022", "[", "]", ","].some(char => candidate.includes(char))) {
       return candidate;
     }
   }
