@@ -6,7 +6,7 @@ services:
     region: frankfurt
     branch: main
     autoDeployTrigger: off
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci --include=dev && npm run build
     # Migration is idempotent. Free Render web services do not support preDeployCommand.
     startCommand: npm run db:deploy && npm start
     healthCheckPath: /api/ready

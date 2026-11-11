@@ -1,0 +1,38 @@
+name: Render production build smoke
+on:
+  pull_request:
+    paths:
+      - "render.yaml"
+      - "package.json"
+      - "package-lock.json"
+      - "prisma/schema.prisma"
+      - "vite.config.ts"
+      - ".github/workflows/render-build-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "render.yaml"
+      - "package.json"
+      - "package-lock.json"
+      - "prisma/schema.prisma"
+      - "vite.config.ts"
+      - ".github/workflows/render-build-ci.yml"
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      DIRECT_URL: postgresql://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - run: npm run build
+      - run: test -f dist/index.html
