@@ -106,22 +106,32 @@ app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req,
     name: input.name, sourceUrl: input.sourceUrl, category: input.category, onlineEnglish: false,
   });
   const discoveryKey = discoveryKeyFor(input.feedUrl, candidate.name);
-  const result = await prisma.$transaction(async (tx) => {
-    const existing = await tx.candidate.findUnique({ where: { discoveryKey } });
-    if (existing) return { id: existing.id, created: false };
-    const created = await tx.candidate.create({
-      data: {
-        discoveryKey, name: candidate.name, category: candidate.category,
-        sourceUrl: candidate.sourceUrl, onlineEnglish: false,
-        contactReviewed: false, status: "REVIEW_PENDING",
-      },
+  let result;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      const existing = await tx.candidate.findUnique({ where: { discoveryKey } });
+      if (existing) return { id: existing.id, created: false };
+      const created = await tx.candidate.create({
+        data: {
+          discoveryKey, name: candidate.name, category: candidate.category,
+          sourceUrl: candidate.sourceUrl, onlineEnglish: false,
+          contactReviewed: false, status: "REVIEW_PENDING",
+        },
+      });
+      await tx.auditEvent.create({ data: {
+        actorId: "admin", action: "discovery.candidate.imported", entityId: created.id,
+        metadata: { feedUrl: input.feedUrl, sourceUrl: candidate.sourceUrl },
+      } });
+      return { id: created.id, created: true };
     });
-    await tx.auditEvent.create({ data: {
-      actorId: "admin", action: "discovery.candidate.imported", entityId: created.id,
-      metadata: { feedUrl: input.feedUrl, sourceUrl: candidate.sourceUrl },
-    } });
-    return { id: created.id, created: true };
-  });
+  } catch (error) {
+    // Concurrent review clicks can race the initial existence check.
+    // The unique DB constraint determines the winner; the loser reads it.
+    if (error?.code !== "P2002") throw error;
+    const winner = await prisma.candidate.findUnique({ where: { discoveryKey } });
+    if (!winner) throw error;
+    result = { id: winner.id, created: false };
+  }
   res.status(result.created ? 201 : 200).json(result);
 }));
 app.get("/api/candidates", authenticated, safe(async (_req, res) => {
