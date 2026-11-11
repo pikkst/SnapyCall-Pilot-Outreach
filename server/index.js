@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { normalizeCandidate, outreachDecision, scoreCandidate, EXPERT_CATEGORIES } from "../src/domain.js";
-import { parseApprovedSources, discoverFeed, DiscoverySourceError } from "./discovery.js";
+import { parseApprovedSources, discoverFeed, normalizeFeedAuthor, DiscoverySourceError } from "./discovery.js";
 import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
@@ -181,6 +181,7 @@ app.patch("/api/candidates/:id/expert-review", ...write, safe(async (req, res) =
     await tx.candidate.update({
       where: { id: row.id },
       data: {
+        name: normalizeFeedAuthor(row.name),
         expertProfileUrl: verified.expertProfileUrl,
         profileReviewed: true,
         onlineEnglish: verified.onlineEnglish,
@@ -199,7 +200,10 @@ app.patch("/api/candidates/:id/expert-review", ...write, safe(async (req, res) =
 }));
 app.get("/api/candidates", authenticated, safe(async (_req, res) => {
   const items = await prisma.candidate.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
-  res.json(items.map((item) => ({ ...item, score: scoreCandidate(item) })));
+  res.json(items.map((item) => ({ ...item,
+    name: item.discoveryKey ? normalizeFeedAuthor(item.name) : item.name,
+    score: scoreCandidate(item),
+  })));
 }));
 app.post("/api/candidates", ...write, safe(async (req, res) => {
   const candidate = normalizeCandidate(req.body);
