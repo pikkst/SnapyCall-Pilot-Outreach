@@ -33,6 +33,8 @@ export function normalizeCandidate(input) {
   }
   const region = text(input.region, 40);
   const onlineEnglish = input.onlineEnglish === true;
+  const expertProfileUrl = text(input.expertProfileUrl, 2048);
+  if (expertProfileUrl && !isPublicHttpUrl(expertProfileUrl)) throw new TypeError("Invalid expert profile URL");
   return Object.freeze({
     name,
     category,
@@ -40,6 +42,8 @@ export function normalizeCandidate(input) {
     email: email || null,
     region: Object.hasOwn(REGION_PRIORITIES, region) ? region : null,
     onlineEnglish,
+    expertProfileUrl: expertProfileUrl || null,
+    profileReviewed: input.profileReviewed === true && Boolean(expertProfileUrl),
     legalBasis: text(input.legalBasis, 120) || null,
     contactReviewed: input.contactReviewed === true,
     suppressed: input.suppressed === true,
@@ -73,6 +77,7 @@ function isPublicHttpUrl(value) {
 export function scoreCandidate(candidate) {
   const c = normalizeCandidate(candidate);
   if (!c.onlineEnglish) return Object.freeze({ eligible: false, score: 0, reasons: ["english_online_requirement_unconfirmed"] });
+  if (candidate.discoveryKey && !c.profileReviewed) return Object.freeze({ eligible: false, score: 0, reasons: ["expert_profile_review_pending"] });
   const regionScore = c.region ? REGION_PRIORITIES[c.region] : 0;
   return Object.freeze({
     eligible: true,
@@ -86,9 +91,10 @@ export function outreachDecision(candidate) {
   const c = normalizeCandidate(candidate);
   const errors = [];
   if (!c.onlineEnglish) errors.push("english_online_requirement_unconfirmed");
+  if (candidate.discoveryKey && !c.profileReviewed) errors.push("expert_profile_review_pending");
   if (!c.email) errors.push("email_missing");
   if (!c.legalBasis) errors.push("legal_basis_missing");
   if (!c.contactReviewed) errors.push("contact_review_pending");
   if (c.suppressed) errors.push("suppressed");
-  return Object.freeze({ canDraft: c.onlineEnglish, canSend: false, blockers: errors });
+  return Object.freeze({ canDraft: c.onlineEnglish && (!candidate.discoveryKey || c.profileReviewed) && !c.suppressed, canSend: false, blockers: errors });
 }
