@@ -10,7 +10,7 @@ const xml = `<?xml version="1.0"?><rss version="2.0" xmlns:dc="http://purl.org/d
 
 test("only configured HTTPS feeds can be used", () => {
   assert.deepEqual(parseApprovedSources(feedUrl + "," + feedUrl), [feedUrl]);
-  for (const url of ["http://example.org/feed", "https://localhost/feed", "https://127.0.0.1/feed", "https://linkedin.com/feed", "https://user:pass@example.org/feed"]) {
+  for (const url of ["http://example.org/feed", "https://localhost/feed", "https://127.0.0.1/feed", "https://linkedin.com/feed", "https://community.n8n.io/latest.rss", "https://community.make.com/latest.rss", "https://www.consultingsuccess.com/feed", "https://user:pass@example.org/feed"]) {
     assert.throws(() => parseApprovedSources(url));
   }
 });
