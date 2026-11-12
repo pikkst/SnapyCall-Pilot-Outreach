@@ -245,17 +245,21 @@ app.post("/api/candidates/:id/evidence", ...write, safe(async (req, res) => {
 app.get("/api/candidates/:id/possible-duplicates", authenticated, safe(async (req, res) => {
   const candidate = await prisma.candidate.findUnique({ where: { id: req.params.id } });
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
+  if (!candidate.expertProfileUrl && !candidate.emailNormalized) {
+    return res.json({ suggestions: [], automaticallyMerged: false });
+  }
+  // Candidate counts are bounded in this single-admin pilot. Do not claim a
+  // complete cross-dataset identity match if the scan hits the bounded cap.
+  const MAX_IDENTITY_CANDIDATES = 500;
   const others = await prisma.candidate.findMany({
-    where: { id: { not: candidate.id },
-      OR: [
-        ...(candidate.emailNormalized ? [{ emailNormalized: candidate.emailNormalized }] : []),
-        ...(candidate.expertProfileUrl ? [{ expertProfileUrl: candidate.expertProfileUrl }] : []),
-      ],
-    },
+    where: { id: { not: candidate.id } },
     select: { id: true, emailNormalized: true, expertProfileUrl: true },
-    take: 100,
+    orderBy: { id: "asc" },
+    take: MAX_IDENTITY_CANDIDATES + 1,
   });
-  return res.json({ suggestions: sameIdentityHints(candidate, others), automaticallyMerged: false });
+  const incomplete = others.length > MAX_IDENTITY_CANDIDATES;
+  const suggestions = sameIdentityHints(candidate, others.slice(0, MAX_IDENTITY_CANDIDATES));
+  return res.json({ suggestions, automaticallyMerged: false, incomplete });
 }));
 app.get("/api/candidates", authenticated, safe(async (_req, res) => {
   const items = await prisma.candidate.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
