@@ -74,27 +74,66 @@ function isPublicHttpUrl(value) {
   }
 }
 
-export function scoreCandidate(candidate) {
+// Campaign target percentages are allocation goals, never candidate merit points.
+// Qualification is evidence-gated and intentionally has no numeric score until
+// an independently calibrated evidence/scoring contract exists.
+export const QUALIFICATION_STAGES = Object.freeze({
+  DISCOVERED: "DISCOVERED",
+  EVIDENCE_PENDING: "EVIDENCE_PENDING",
+  QUALIFIED: "QUALIFIED",
+  CONTACT_REVIEW: "CONTACT_REVIEW",
+  DRAFT_READY: "DRAFT_READY",
+  SUPPRESSED: "SUPPRESSED",
+  REJECTED: "REJECTED",
+});
+
+export function qualificationDecision(candidate) {
   const c = normalizeCandidate(candidate);
-  if (!c.onlineEnglish) return Object.freeze({ eligible: false, score: 0, reasons: ["english_online_requirement_unconfirmed"] });
-  if (candidate.discoveryKey && !c.profileReviewed) return Object.freeze({ eligible: false, score: 0, reasons: ["expert_profile_review_pending"] });
-  const regionScore = c.region ? REGION_PRIORITIES[c.region] : 0;
-  return Object.freeze({
-    eligible: true,
-    score: EXPERT_CATEGORIES[c.category] + regionScore,
-    reasons: c.region ? [] : ["region_unconfirmed"],
-  });
+  const discovered = Boolean(candidate.discoveryKey);
+  const rejected = ["REJECTED", "DISQUALIFIED"].includes(candidate.status);
+  const evidence = [];
+  if (!c.onlineEnglish) evidence.push("english_online_requirement_unconfirmed");
+  if (discovered && !c.profileReviewed) evidence.push("expert_profile_review_pending");
+  if (c.suppressed) {
+    return Object.freeze({ stage: QUALIFICATION_STAGES.SUPPRESSED, qualified: false,
+      score: null, blockers: Object.freeze(["suppressed"]), evidence: Object.freeze(evidence) });
+  }
+  if (rejected) {
+    return Object.freeze({ stage: QUALIFICATION_STAGES.REJECTED, qualified: false,
+      score: null, blockers: Object.freeze(["candidate_rejected"]), evidence: Object.freeze(evidence) });
+  }
+  if (evidence.length) {
+    const untouched = discovered && !c.onlineEnglish && !c.profileReviewed;
+    return Object.freeze({ stage: untouched ? QUALIFICATION_STAGES.DISCOVERED : QUALIFICATION_STAGES.EVIDENCE_PENDING,
+      qualified: false, score: null, blockers: Object.freeze([...evidence]),
+      evidence: Object.freeze(evidence) });
+  }
+  // Qualification attests to a reviewed online English expert, NOT permission
+  // to contact them or a numerical quality/merit ranking.
+  const contact = [];
+  if (!c.email) contact.push("email_missing");
+  if (!c.legalBasis) contact.push("legal_basis_missing");
+  if (!c.contactReviewed) contact.push("contact_review_pending");
+  const stage = !c.email ? QUALIFICATION_STAGES.QUALIFIED :
+    contact.length ? QUALIFICATION_STAGES.CONTACT_REVIEW : QUALIFICATION_STAGES.DRAFT_READY;
+  return Object.freeze({ stage, qualified: true, score: null,
+    blockers: Object.freeze(contact), evidence: Object.freeze([]) });
 }
 
-// Draft eligibility is distinct from send permission.
+// Compatibility: consumers may still call scoreCandidate(), but a numeric score
+// is unavailable by design; never substitute campaign allocation percentages.
+export function scoreCandidate(candidate) {
+  const q = qualificationDecision(candidate);
+  return Object.freeze({ eligible: q.qualified, score: q.score, reasons: q.blockers, stage: q.stage });
+}
+
+// Drafting is a separate, stricter step; email sending is not implemented.
 export function outreachDecision(candidate) {
-  const c = normalizeCandidate(candidate);
-  const errors = [];
-  if (!c.onlineEnglish) errors.push("english_online_requirement_unconfirmed");
-  if (candidate.discoveryKey && !c.profileReviewed) errors.push("expert_profile_review_pending");
-  if (!c.email) errors.push("email_missing");
-  if (!c.legalBasis) errors.push("legal_basis_missing");
-  if (!c.contactReviewed) errors.push("contact_review_pending");
-  if (c.suppressed) errors.push("suppressed");
-  return Object.freeze({ canDraft: c.onlineEnglish && (!candidate.discoveryKey || c.profileReviewed) && !c.suppressed, canSend: false, blockers: errors });
+  const decision = qualificationDecision(candidate);
+  return Object.freeze({
+    canDraft: decision.stage === QUALIFICATION_STAGES.DRAFT_READY,
+    canSend: false,
+    blockers: decision.blockers,
+    stage: decision.stage,
+  });
 }
