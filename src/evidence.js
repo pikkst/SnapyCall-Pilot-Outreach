@@ -29,7 +29,7 @@ export function sameIdentityHints(candidate, others) {
   const email = typeof candidate.emailNormalized === "string" ? candidate.emailNormalized.toLowerCase() : null;
   return others.filter(other => other.id !== candidate.id).flatMap(other => {
     const reasons = [];
-    if (email && other.emailNormalized?.toLowerCase() === email) reasons.push("same_verified_email");
+    if (email && other.emailNormalized?.toLowerCase() === email) reasons.push("same_email_address");
     if (profile && other.expertProfileUrl) {
       try { if (canonicalEvidenceUrl(other.expertProfileUrl) === profile) reasons.push("same_profile_url"); }
       catch { /* An invalid historical URL cannot establish identity. */ }
