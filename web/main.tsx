@@ -13,6 +13,7 @@ type Candidate = {
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
+type DuplicateHint = { id: string; reasons: string[] };
 type Evidence = { id: string; kind: string; sourceUrl: string; note: string | null; capturedAt: string };
 type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
 
@@ -76,6 +77,8 @@ function App() {
   const [reviewId, setReviewId] = useState<string | null>(null);
   const [evidenceId, setEvidenceId] = useState<string | null>(null);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
+  const [duplicateHints, setDuplicateHints] = useState<DuplicateHint[]>([]);
+  const [duplicateScanIncomplete, setDuplicateScanIncomplete] = useState(false);
   const [evidenceKind, setEvidenceKind] = useState("ARTICLE");
   const [evidenceUrl, setEvidenceUrl] = useState("");
   const [evidenceNote, setEvidenceNote] = useState("");
@@ -161,9 +164,15 @@ function App() {
 
   async function showEvidence(id: string) {
     await execute(async () => {
-      const rows = await api<Evidence[]>("/candidates/" + encodeURIComponent(id) + "/evidence");
+      const key = encodeURIComponent(id);
+      const [rows, matches] = await Promise.all([
+        api<Evidence[]>("/candidates/" + key + "/evidence"),
+        api<{ suggestions: DuplicateHint[]; incomplete: boolean }>("/candidates/" + key + "/possible-duplicates"),
+      ]);
       setEvidenceId(id);
       setEvidence(rows);
+      setDuplicateHints(matches.suggestions);
+      setDuplicateScanIncomplete(matches.incomplete);
       setEvidenceUrl(""); setEvidenceNote("");
     });
   }
@@ -300,6 +309,15 @@ function App() {
         {evidenceId && <section className="review-panel" aria-label="Candidate evidence">
           <h3>Source evidence</h3>
           <p className="muted">Keep articles and profiles as separate references. Adding a link does not automatically verify an identity, qualification or right to contact.</p>
+          {duplicateHints.length > 0 && <div className="review-panel">
+            <strong>Possible duplicate profiles — review only</strong>
+            <p className="muted">A matching URL or email is not proof that two entries represent the same person. No records have been combined.</p>
+            {duplicateHints.map(match => <p key={match.id}>
+              Candidate {candidates.find(c => c.id === match.id)?.name ?? match.id}
+              <small>{match.reasons.join(", ")}</small>
+            </p>)}
+          </div>}
+          {duplicateScanIncomplete && <p className="hint">Duplicate check is incomplete because the review set exceeds the pilot search limit.</p>}
           {evidence.length ? <ul>{evidence.map(item => <li key={item.id}>
             <strong>{item.kind}</strong> · <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">{item.sourceUrl}</a>
             {item.note && <small>{item.note}</small>}
