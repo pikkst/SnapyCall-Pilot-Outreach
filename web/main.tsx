@@ -6,7 +6,10 @@ type Candidate = {
   id: string; name: string; email: string | null; category: string;
   region: string | null; onlineEnglish: boolean; status: string;
   sourceUrl: string; discoveryKey: string | null; expertProfileUrl: string | null;
-  profileReviewed: boolean; suppressed: boolean; score: { score: number; eligible: boolean };
+  profileReviewed: boolean; suppressed: boolean;
+  score: { score: number | null; eligible: boolean; stage: string };
+  qualification: { stage: string; qualified: boolean; score: null; blockers: string[] };
+  outreach: { stage: string; canDraft: boolean; canSend: false; blockers: string[] };
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
@@ -18,6 +21,18 @@ const categories = [
   ["MARKETING_GROWTH", "Marketing & growth"],
   ["BUSINESS_STRATEGY", "Business strategy"],
 ];
+const stageNames: Record<string, string> = {
+  DISCOVERED: "Found — check expertise", EVIDENCE_PENDING: "Evidence needed",
+  QUALIFIED: "Qualified — find contact", CONTACT_REVIEW: "Contact review needed",
+  DRAFT_READY: "Ready for AI draft", SUPPRESSED: "Suppressed", REJECTED: "Rejected",
+};
+const reasonNames: Record<string, string> = {
+  english_online_requirement_unconfirmed: "Confirm English online consultations",
+  expert_profile_review_pending: "Review a separate expert profile",
+  email_missing: "Add a verified contact channel", legal_basis_missing: "Review legal basis",
+  contact_review_pending: "Review contact details", suppressed: "Contact is suppressed",
+  candidate_rejected: "Candidate was rejected",
+};
 const regions = [
   ["US", "United States"],
   ["UK_IRELAND", "United Kingdom / Ireland"],
@@ -218,7 +233,7 @@ function App() {
       {tab === "candidates" && <>
         <div className="metrics">
           <div className="metric"><strong>{candidates.length}</strong><span>Total candidates</span></div>
-          <div className="metric"><strong>{candidates.filter(c => c.score.eligible).length}</strong><span>Eligible for review</span></div>
+          <div className="metric"><strong>{candidates.filter(c => c.qualification.qualified).length}</strong><span>Qualified experts</span></div>
           <div className="metric"><strong>{drafts.length}</strong><span>Saved drafts</span></div>
         </div>
         <section className="panel">
@@ -234,7 +249,7 @@ function App() {
             <button disabled={busy}>Add candidate</button>
           </form>
         </section>
-        <section className="panel"><h2>Candidate pipeline</h2><div className="table-scroll"><table><thead><tr><th>Candidate</th><th>Category</th><th>Region</th><th>Score</th><th>Action</th></tr></thead><tbody>
+        <section className="panel"><h2>Candidate pipeline</h2><div className="table-scroll"><table><thead><tr><th>Candidate</th><th>Category</th><th>Region</th><th>Next action</th><th>Action</th></tr></thead><tbody>
           {candidates.map(c => <tr key={c.id}><td>
               <strong>{c.name}</strong><small>{c.email ?? "No email"}</small>
               <small><a href={c.sourceUrl} target="_blank" rel="noopener noreferrer">{c.discoveryKey ? "Source article (unverified author)" : "Source profile"}</a></small>
@@ -243,10 +258,11 @@ function App() {
                 : "Expert profile not reviewed"}</small>}
             </td><td>{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td>
             <td>{c.region ?? "Unconfirmed"}</td>
-            <td>{c.score.eligible ? c.score.score : "Not eligible"}</td>
+            <td><strong>{stageNames[c.qualification.stage] ?? c.qualification.stage}</strong>
+              {c.outreach.blockers.length > 0 && <small>{c.outreach.blockers.map(r => reasonNames[r] ?? r).join(" · ")}</small>}</td>
             <td>
               {c.discoveryKey && <button type="button" className="secondary" disabled={busy} onClick={() => beginProfileReview(c)}>Review profile</button>}
-              <button type="button" disabled={busy || !c.score.eligible || c.suppressed || !setting.keyConfigured} onClick={() => makeDraft(c.id)}>Generate draft</button>
+              <button type="button" disabled={busy || !c.outreach.canDraft || !setting.keyConfigured} onClick={() => makeDraft(c.id)}>Generate draft</button>
             </td></tr>)}
           {!candidates.length && <tr><td colSpan={5} className="empty">No candidates yet. Add one above to start.</td></tr>}
         </tbody></table></div>
