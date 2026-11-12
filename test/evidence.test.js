@@ -28,7 +28,7 @@ test("only exact normalized profile or email can suggest a duplicate", () => {
   ];
   assert.deepEqual(sameIdentityHints(source, other), [
     { id: "c", reasons: ["same_profile_url"] },
-    { id: "d", reasons: ["same_verified_email"] },
+    { id: "d", reasons: ["same_email_address"] },
   ]);
 });
 test("homonymous names never create a suggestion", () => {
