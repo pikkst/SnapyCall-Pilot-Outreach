@@ -10,6 +10,7 @@ import { z } from "zod";
 import { normalizeCandidate, outreachDecision, scoreCandidate, qualificationDecision, EXPERT_CATEGORIES } from "../src/domain.js";
 import { parseApprovedSources, discoverFeed, normalizeFeedAuthor, DiscoverySourceError } from "./discovery.js";
 import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
+import { canonicalEvidenceUrl, EVIDENCE_KINDS, sameIdentityHints } from "../src/evidence.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
@@ -197,6 +198,64 @@ app.patch("/api/candidates/:id/expert-review", ...write, safe(async (req, res) =
     return { status: 200, reviewed: true, changed: true };
   });
   return res.status(result.status).json(result);
+}));
+// Append-only source observations. An observation never auto-confirms
+// eligibility, ownership of the identity, or consent to contact.
+app.get("/api/candidates/:id/evidence", authenticated, safe(async (req, res) => {
+  const candidate = await prisma.candidate.findUnique({ where: { id: req.params.id }, select: { id: true } });
+  if (!candidate) return res.status(404).json({ error: "Candidate not found" });
+  const items = await prisma.candidateEvidence.findMany({
+    where: { candidateId: candidate.id }, orderBy: { capturedAt: "asc" }, take: 100,
+  });
+  return res.json(items);
+}));
+app.post("/api/candidates/:id/evidence", ...write, safe(async (req, res) => {
+  const input = z.object({
+    kind: z.enum(EVIDENCE_KINDS),
+    sourceUrl: z.string().url().max(2048),
+    note: z.string().trim().max(500).optional(),
+  }).strict().parse(req.body);
+  const normalizedUrl = canonicalEvidenceUrl(input.sourceUrl);
+  const key = { candidateId_kind_normalizedUrl: {
+    candidateId: req.params.id, kind: input.kind, normalizedUrl,
+  } };
+  const result = await prisma.$transaction(async tx => {
+    const row = await tx.candidate.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!row) return { status: 404, body: { error: "Candidate not found" } };
+    const existing = await tx.candidateEvidence.findUnique({ where: key });
+    if (existing) return { status: 200, body: { id: existing.id, created: false } };
+    const observation = await tx.candidateEvidence.create({ data: {
+      candidateId: row.id, kind: input.kind, sourceUrl: input.sourceUrl,
+      normalizedUrl, note: input.note ?? null, capturedBy: "admin",
+    } });
+    await tx.auditEvent.create({ data: {
+      actorId: "admin", action: "candidate.evidence.added", entityId: row.id,
+      metadata: { evidenceId: observation.id, kind: input.kind, sourceUrl: normalizedUrl },
+    } });
+    return { status: 201, body: { id: observation.id, created: true } };
+  }).catch(async error => {
+    if (error?.code !== "P2002") throw error;
+    const existing = await prisma.candidateEvidence.findUnique({ where: key });
+    if (!existing) throw error;
+    return { status: 200, body: { id: existing.id, created: false } };
+  });
+  return res.status(result.status).json(result.body);
+}));
+// Exact matches are review hints, not automatic identity merges. No name-only matches.
+app.get("/api/candidates/:id/possible-duplicates", authenticated, safe(async (req, res) => {
+  const candidate = await prisma.candidate.findUnique({ where: { id: req.params.id } });
+  if (!candidate) return res.status(404).json({ error: "Candidate not found" });
+  const others = await prisma.candidate.findMany({
+    where: { id: { not: candidate.id },
+      OR: [
+        ...(candidate.emailNormalized ? [{ emailNormalized: candidate.emailNormalized }] : []),
+        ...(candidate.expertProfileUrl ? [{ expertProfileUrl: candidate.expertProfileUrl }] : []),
+      ],
+    },
+    select: { id: true, emailNormalized: true, expertProfileUrl: true },
+    take: 100,
+  });
+  return res.json({ suggestions: sameIdentityHints(candidate, others), automaticallyMerged: false });
 }));
 app.get("/api/candidates", authenticated, safe(async (_req, res) => {
   const items = await prisma.candidate.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
