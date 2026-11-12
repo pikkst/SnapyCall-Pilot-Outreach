@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { normalizeCandidate, outreachDecision, scoreCandidate, EXPERT_CATEGORIES } from "../src/domain.js";
+import { normalizeCandidate, outreachDecision, scoreCandidate, qualificationDecision, EXPERT_CATEGORIES } from "../src/domain.js";
 import { parseApprovedSources, discoverFeed, normalizeFeedAuthor, DiscoverySourceError } from "./discovery.js";
 import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
@@ -203,6 +203,8 @@ app.get("/api/candidates", authenticated, safe(async (_req, res) => {
   res.json(items.map((item) => ({ ...item,
     name: item.discoveryKey ? normalizeFeedAuthor(item.name) : item.name,
     score: scoreCandidate(item),
+    qualification: qualificationDecision(item),
+    outreach: outreachDecision(item),
   })));
 }));
 app.post("/api/candidates", ...write, safe(async (req, res) => {
@@ -275,7 +277,7 @@ app.post("/api/candidates/:id/draft", ...write, draftLimiter, safe(async (req, r
   const candidate = await prisma.candidate.findUnique({ where: { id: req.params.id } });
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
   const eligibility = outreachDecision(candidate);
-  if (!eligibility.canDraft || candidate.suppressed) return res.status(409).json({ error: "Candidate ineligible for drafting" });
+  if (!eligibility.canDraft) return res.status(409).json({ error: "Candidate not draft-ready", stage: eligibility.stage, blockers: eligibility.blockers });
   const setting = await prisma.aiSetting.findUnique({ where: { ownerId: "admin" } });
   if (!setting) return res.status(409).json({ error: "Configure an AI provider first" });
   const apiKey = decryptKey(setting.encryptedApiKey, env.AI_ENCRYPTION_KEY);
