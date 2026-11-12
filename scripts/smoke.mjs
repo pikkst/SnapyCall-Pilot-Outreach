@@ -161,6 +161,47 @@ try {
     await reviewDb.$disconnect();
   }
 
+  // The evidence ledger appends only once and never upgrades qualification.
+  const evidenceDb = new (await import("@prisma/client")).PrismaClient();
+  try {
+    const lead = await evidenceDb.candidate.findFirst({
+      where: { discoveryKey: "c".repeat(64) },
+    });
+    assert.ok(lead);
+    const url = "/candidates/" + lead.id + "/evidence";
+    assert.equal((await call(url)).status, 401);
+    assert.equal((await call(url, { method: "POST", headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ kind: "PROFILE", sourceUrl: "https://example.org/author" }) })).status, 403);
+    const item = { kind: "ARTICLE", sourceUrl: "https://example.org/posts/1?utm_source=test",
+      note: "Article source only; not proof of services" };
+    const created = await call(url, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify(item) });
+    assert.equal(created.status, 201, "Evidence creation: " + await created.text());
+    const replay = await call(url, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ ...item, sourceUrl: "https://example.org/posts/1" }) });
+    assert.equal(replay.status, 200);
+    const saved = await call(url, { headers: { cookie } });
+    assert.equal(saved.status, 200);
+    const evidences = await saved.json();
+    assert.equal(evidences.length, 1);
+    assert.equal(evidences[0].kind, "ARTICLE");
+    assert.equal(evidences[0].normalizedUrl, "https://example.org/posts/1");
+    assert.equal(await evidenceDb.auditEvent.count({
+      where: { entityId: lead.id, action: "candidate.evidence.added" },
+    }), 1);
+    const suggestions = await call("/candidates/" + lead.id + "/possible-duplicates", { headers: { cookie } });
+    assert.equal(suggestions.status, 200);
+    assert.deepEqual((await suggestions.json()).suggestions, []);
+    const untouched = await evidenceDb.candidate.findUnique({ where: { id: lead.id } });
+    assert.equal(untouched.profileReviewed, true);
+    assert.equal(untouched.sourceUrl, "https://example.org/articles/automation");
+    assert.equal((await call("/candidates/" + lead.id + "/draft", {
+      method: "POST", headers: protectedHeaders,
+    })).status, 409);
+  } finally {
+    await evidenceDb.$disconnect();
+  }
+
   const saving = await call("/ai-settings", { method: "PUT", headers: protectedHeaders,
     body: JSON.stringify({ provider: "gemini", model: "gemini-2.5-flash", apiKey: "test-only-provider-secret-value" }),
   });
