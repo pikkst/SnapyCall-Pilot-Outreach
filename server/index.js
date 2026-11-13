@@ -277,6 +277,7 @@ app.get("/api/admin/partners/invitations", authenticated, safe(async (_req, res)
       id: m.id, workspaceId: m.partnerId, workspace: m.partner.name,
       email: m.user.emailNormalized, status: publicInvitationStatus(m),
       sentAt: m.inviteSentAt, acceptedAt: m.acceptedAt,
+      leaseUntil: m.inviteLeaseUntil,
       errorCode: m.inviteErrorCode, attempt: m.inviteAttempt,
     })) });
 }));
@@ -286,7 +287,10 @@ app.post("/api/admin/partners/invitations/:id/resend", authenticated, requireOri
     const member = await prisma.partnerMembership.findUnique({ where: { id: req.params.id } });
     if (!member) return res.status(404).json({ error: "Invitation not found" });
     if (member.revokedAt || member.acceptedAt) return res.status(409).json({ error: "Invitation no longer pending" });
-    if (member.inviteStatus === "SENDING") return res.status(409).json({ error: "Invitation send is in progress; verify delivery before retrying" });
+    if (member.inviteStatus === "SENDING" &&
+        (!member.inviteLeaseUntil || member.inviteLeaseUntil.getTime() > Date.now())) {
+      return res.status(409).json({ error: "Invitation send is in progress; verify delivery before retrying" });
+    }
     if (member.inviteStatus === "SENT" && !input.newAttempt) {
       return res.status(409).json({ error: "Invitation already sent. Confirm a new attempt explicitly." });
     }
