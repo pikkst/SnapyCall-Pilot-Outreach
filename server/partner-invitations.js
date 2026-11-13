@@ -10,7 +10,7 @@ export function invitationEmailConfig(env = process.env) {
   }
   const redirect = new URL(redirectUri);
   if (redirect.protocol !== "https:" || redirect.username || redirect.password ||
-      redirect.pathname !== "/api/auth/google/callback") {
+      redirect.search || redirect.hash || redirect.pathname !== "/api/auth/google/callback") {
     throw new Error("Invalid partner invitation login origin");
   }
   return { apiKey, from, loginUrl: new URL("/", redirect.origin).toString() };
@@ -85,14 +85,26 @@ export async function deliverPartnerInvitation(prisma, membershipId, env = proce
     return { status: "UNCONFIGURED" };
   }
   if (member.inviteStatus === "SENT") return { status: "SENT" };
-  if (member.inviteStatus === "SENDING") return { status: "SENDING" };
+  const staleLease = member.inviteStatus === "SENDING" &&
+    member.inviteLeaseUntil && member.inviteLeaseUntil.getTime() <= now.getTime();
+  if (member.inviteStatus === "SENDING" && !staleLease) return { status: "SENDING" };
+  if (member.inviteStatus === "MANUAL_REVIEW") return { status: "MANUAL_REVIEW" };
   if (member.inviteAttemptAt && now.getTime() - member.inviteAttemptAt.getTime() >= RETRY_WINDOW_MS) {
+    await prisma.partnerMembership.updateMany({
+      where: { id: member.id, inviteAttempt: member.inviteAttempt,
+        inviteStatus: member.inviteStatus },
+      data: { inviteStatus: "MANUAL_REVIEW", inviteErrorCode: "RETRY_WINDOW_EXPIRED" },
+    });
     return { status: "MANUAL_REVIEW" };
   }
   const leaseUntil = new Date(now.getTime() + 120000);
   const claimed = await prisma.partnerMembership.updateMany({
-    where: { id: member.id, acceptedAt: null, revokedAt: null,
-      inviteStatus: { in: ["PENDING", "FAILED", "UNCONFIGURED"] } },
+    where: { id: member.id, inviteAttempt: member.inviteAttempt,
+      acceptedAt: null, revokedAt: null,
+      OR: [
+        { inviteStatus: { in: ["PENDING", "FAILED", "UNCONFIGURED"] } },
+        { inviteStatus: "SENDING", inviteLeaseUntil: { lte: now } },
+      ] },
     data: { inviteStatus: "SENDING", inviteLeaseUntil: leaseUntil,
       inviteAttemptAt: member.inviteAttemptAt ?? now, inviteErrorCode: null },
   });
