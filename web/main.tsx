@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./style.css";
 
 type PartnerSession = { authenticated: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
+type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
 type Candidate = {
   id: string; name: string; email: string | null; category: string;
   region: string | null; onlineEnglish: boolean; status: string;
@@ -45,6 +46,7 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [partnerSession, setPartnerSession] = useState<PartnerSession | null>(null);
+  const [googleConnections, setGoogleConnections] = useState<GoogleConnection[]>([]);
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
@@ -93,7 +95,11 @@ function App() {
       api<PartnerSession>("/partner/session")])
       .then(async ([session, partner]) => {
         if (session.authenticated) { setLoggedIn(true); await load(); }
-        else if (partner.authenticated) setPartnerSession(partner);
+        else if (partner.authenticated) {
+          setPartnerSession(partner);
+          const result = await api<{ connections: GoogleConnection[] }>("/partner/google/connections");
+          setGoogleConnections(result.connections);
+        }
       }).catch(() => setError("Unable to reach the authentication API"));
   }, []);
 
@@ -123,6 +129,16 @@ function App() {
     await execute(async () => {
       await api("/partner/session", { method: "DELETE" });
       setPartnerSession(null);
+      setGoogleConnections([]);
+    });
+  }
+
+  async function disconnectGoogle(partnerId: string) {
+    await execute(async () => {
+      await api("/partner/google/connections/" + encodeURIComponent(partnerId), { method: "DELETE" });
+      const data = await api<{ connections: GoogleConnection[] }>("/partner/google/connections");
+      setGoogleConnections(data.connections);
+      setNotice("Google access removed locally. You can also revoke the app in your Google Account.");
     });
   }
 
@@ -222,7 +238,19 @@ function App() {
         <h1>Welcome{partnerSession.displayName ? ", " + partnerSession.displayName : ""}</h1>
         <p className="muted">Your Google identity has been verified. Partner-specific candidate data and Google Forms connections are not yet enabled.</p>
         <h2>My workspaces</h2>
-        {(partnerSession.partners ?? []).map(p => <p key={p.id}><strong>{p.name}</strong> · {p.role}</p>)}
+        {(partnerSession.partners ?? []).map(p => {
+          const connection = googleConnections.find(c => c.partnerId === p.id);
+          return <div key={p.id}>
+            <p><strong>{p.name}</strong> · {p.role}</p>
+            {connection ? <>
+              <p className="muted">Google Forms & Sheets: connected (read-only)</p>
+              <button className="secondary" disabled={busy}
+                onClick={() => disconnectGoogle(p.id)}>Disconnect Google</button>
+            </> : <a className="secondary" href={"/api/partner/google/connect/start?partnerId=" + encodeURIComponent(p.id)}>
+              Connect Google Forms & Sheets
+            </a>}
+          </div>;
+        })}
         {error && <div className="error" role="alert">{error}</div>}
         <button className="secondary" disabled={busy} onClick={logoutPartner}>Sign out</button>
       </section>
