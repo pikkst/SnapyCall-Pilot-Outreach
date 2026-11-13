@@ -119,21 +119,38 @@ app.delete("/api/partner/session", requireOrigin, (_req, res) => {
 // proves its verified email and permanently binds the Google subject.
 app.post("/api/admin/partners/invite", ...[authenticated, requireOrigin], safe(async (req, res) => {
   const input = z.object({
-    partnerName: z.string().trim().min(2).max(120),
+    partnerName: z.string().trim().min(2).max(120).optional(),
+    partnerId: z.string().cuid().optional(),
     email: z.string().email().max(254),
-  }).strict().parse(req.body);
+  }).strict().refine(value => Boolean(value.partnerName) !== Boolean(value.partnerId), {
+    message: "Supply exactly one of partnerName or partnerId",
+  }).parse(req.body);
   const emailNormalized = input.email.trim().toLowerCase();
   const result = await prisma.$transaction(async tx => {
-    const existing = await tx.partnerUser.findUnique({ where: { emailNormalized } });
-    if (existing) return { status: 409, error: "Partner invitation already exists" };
-    const partner = await tx.partner.create({ data: { name: input.partnerName } });
-    const user = await tx.partnerUser.create({ data: { emailNormalized } });
+    // An existing workspace is selected by its opaque ID, never by a
+    // non-unique display name. The admin session is required by this route.
+    const partner = input.partnerId
+      ? await tx.partner.findUnique({ where: { id: input.partnerId } })
+      : await tx.partner.create({ data: { name: input.partnerName } });
+    if (!partner) return { status: 404, error: "Partner workspace not found" };
+    let user = await tx.partnerUser.findUnique({ where: { emailNormalized } });
+    if (user && !input.partnerId) {
+      return { status: 409, error: "Existing identity requires a workspace ID" };
+    }
+    if (!user) user = await tx.partnerUser.create({ data: { emailNormalized } });
+    const membership = await tx.partnerMembership.findUnique({
+      where: { partnerId_userId: { partnerId: partner.id, userId: user.id } },
+    });
+    if (membership?.revokedAt) {
+      return { status: 409, error: "Revoked membership requires explicit administrator reactivation" };
+    }
+    if (membership) return { status: 200, partnerId: partner.id, invited: true, existing: true };
     await tx.partnerMembership.create({ data: { userId: user.id, partnerId: partner.id } });
     await tx.auditEvent.create({ data: { actorId: "admin",
       action: "partner.invited", entityId: partner.id } });
     return { status: 201, partnerId: partner.id, invited: true };
   }).catch(error => {
-    if (error?.code === "P2002") return { status: 409, error: "Partner invitation already exists" };
+    if (error?.code === "P2002") return { status: 409, error: "Concurrent invitation conflict; retry with the workspace ID" };
     throw error;
   });
   return res.status(result.status).json(result);
