@@ -93,6 +93,7 @@ model PartnerMembership {
   revokedAt DateTime?
   partner Partner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
   user PartnerUser @relation(fields: [userId], references: [id], onDelete: Restrict)
+  inviteDelivery PartnerInviteDelivery?
   createdAt DateTime @default(now())
   @@unique([partnerId, userId])
   @@index([userId, revokedAt])
@@ -111,4 +112,21 @@ model PartnerGoogleConnection {
   user PartnerUser @relation(fields: [userId], references: [id], onDelete: Restrict)
   @@unique([partnerId, userId])
   @@index([userId])
+}
+
+model PartnerInviteDelivery {
+  id String @id @default(cuid())
+  membershipId String @unique
+  emailNormalized String
+  status String @default("PENDING")
+  deliveryKey String @unique
+  attempts Int @default(0)
+  claimedAt DateTime?
+  sentAt DateTime?
+  providerMessageId String?
+  errorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  membership PartnerMembership @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+  @@index([status, claimedAt])
 }
