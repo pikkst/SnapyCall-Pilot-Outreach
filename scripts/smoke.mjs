@@ -196,6 +196,35 @@ try {
       method: "POST", headers: protectedHeaders, body: "{}",
     });
     assert.equal(repeatSend.status, 409, "Sent invite requires explicit new attempt");
+    // Exact PostgreSQL CAS regression: another request reclaims an expired
+    // SENDING lease after this request has read it. A stale newAttempt must
+    // not reset that active lease or allocate a different provider key.
+    const staleLease = new Date(Date.now() - 20_000);
+    const renewedLease = new Date(Date.now() + 120_000);
+    await partnerDb.partnerMembership.update({
+      where: { id: firstMembership.id },
+      data: { inviteStatus: "SENDING", inviteLeaseUntil: staleLease,
+        inviteAttemptAt: new Date(Date.now() - 40_000) },
+    });
+    const staleSnapshot = await partnerDb.partnerMembership.findUnique({
+      where: { id: firstMembership.id },
+    });
+    await partnerDb.partnerMembership.update({
+      where: { id: firstMembership.id },
+      data: { inviteLeaseUntil: renewedLease },
+    });
+    const { resetInvitationAttempt } = await import("../server/partner-invitations.js");
+    assert.equal(await resetInvitationAttempt(partnerDb, staleSnapshot), false,
+      "Concurrent lease renewal must fence stale resend reset");
+    const afterRace = await partnerDb.partnerMembership.findUnique({
+      where: { id: firstMembership.id },
+    });
+    assert.equal(afterRace.inviteAttempt, staleSnapshot.inviteAttempt);
+    assert.equal(afterRace.inviteLeaseUntil.getTime(), renewedLease.getTime());
+    await partnerDb.partnerMembership.update({
+      where: { id: firstMembership.id },
+      data: { inviteStatus: "SENT", inviteLeaseUntil: null, inviteAttemptAt: null },
+    });
     const newAttempt = await call("/admin/partners/invitations/" + firstMembership.id + "/resend", {
       method: "POST", headers: protectedHeaders, body: JSON.stringify({ newAttempt: true }),
     });
