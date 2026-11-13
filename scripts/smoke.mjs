@@ -205,6 +205,27 @@ try {
     assert.equal(firstRetry.status, 200);
     assert.equal((await call("/candidates", { headers: { cookie: partnerCookie } })).status, 401);
     assert.equal((await call("/ai-settings", { headers: { cookie: partnerCookie } })).status, 401);
+    assert.equal((await call("/partner/google/connections")).status, 401,
+      "Unauthenticated callers cannot list Google connections");
+    assert.equal((await call("/partner/google/connections", { headers: { cookie } })).status, 401,
+      "Admin session cannot impersonate a partner");
+    const googleList = await call("/partner/google/connections", { headers: { cookie: partnerCookie } });
+    assert.equal(googleList.status, 200);
+    assert.deepEqual(await googleList.json(), { connections: [] });
+    assert.equal((await call("/partner/google/connect/start?partnerId=" + firstWorkspace)).status, 401);
+    assert.equal((await call("/partner/google/connect/start?partnerId=" + firstWorkspace,
+      { headers: { cookie: partnerCookie } })).status, 503,
+      "Data OAuth stays disabled until separately configured");
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: partnerCookie },
+    })).status, 403, "Disconnect requires CSRF origin");
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: partnerCookie, origin },
+    })).status, 200);
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: partnerCookie, origin },
+    })).status, 200, "Disconnect is idempotent");
+
     assert.equal((await call(inviteUrl, { method: "POST",
       headers: { origin, cookie: partnerCookie, "content-type": "application/json" },
       body: JSON.stringify({ partnerName: "Attack", email: "new@example.org" }) })).status, 401);
