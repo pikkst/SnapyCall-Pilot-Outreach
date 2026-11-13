@@ -21,8 +21,10 @@ function sign(data, key) {
 }
 function unsign(value, key) {
   if (typeof value !== "string" || value.length > 4096) return null;
-  const [payload, signature, extra] = value.split(".");
-  if (!payload || !signature || extra || !safeEqual(hmac(payload, key), signature)) return null;
+  const parts = value.split(".");
+  if (parts.length !== 2) return null;
+  const [payload, signature] = parts;
+  if (!payload || !signature || !safeEqual(hmac(payload, key), signature)) return null;
   try {
     return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
   } catch { return null; }
@@ -94,8 +96,10 @@ export async function verifyGoogleIdToken(idToken, config, nonce, fetcher = fetc
   if (!res.ok) throw new Error("Google certificate lookup failed");
   const keys = await res.json();
   const jwk = keys?.keys?.find(k => k.kid === header.kid && k.kty === "RSA" && k.use === "sig" && k.alg === "RS256");
-  if (!jwk || !verify("RSA-SHA256", Buffer.from(parts[0] + "." + parts[1]),
-    createPublicKey({ key: jwk, format: "jwk" }), Buffer.from(parts[2], "base64url"))) {
+  const signature = Buffer.from(parts[2], "base64url");
+  if (signature.toString("base64url") !== parts[2] || !jwk ||
+      !verify("RSA-SHA256", Buffer.from(parts[0] + "." + parts[1]),
+        createPublicKey({ key: jwk, format: "jwk" }), signature)) {
     throw new Error("ID token signature invalid");
   }
   const seconds = Math.floor(now / 1000);
