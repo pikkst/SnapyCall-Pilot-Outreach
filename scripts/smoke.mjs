@@ -157,7 +157,15 @@ try {
     }), 1, "Duplicate review cannot write duplicate audits");
     const candidateList = await call("/candidates", { headers: { cookie } });
     const entries = await candidateList.json();
-    assert.equal(entries.find(item => item.id === discovered.id).name, "TimidRobot");
+    const row = entries.find(item => item.id === discovered.id);
+    assert.equal(row.name, "TimidRobot");
+    assert.equal(row.qualification.stage, "QUALIFIED");
+    assert.equal(row.qualification.score, null);
+    assert.equal(row.outreach.canDraft, false);
+    assert.ok(row.outreach.blockers.includes("email_missing"));
+    assert.equal((await call("/candidates/" + discovered.id + "/draft", {
+      method: "POST", headers: protectedHeaders,
+    })).status, 409, "Reviewed profile alone must not unlock paid AI drafting");
   } finally {
     await reviewDb.$disconnect();
   }
@@ -406,7 +414,15 @@ try {
   assert.equal(candidate.status, 201, "Candidate write: " + await candidate.text());
   const list = await call("/candidates", { headers: { cookie } });
   assert.equal(list.status, 200);
-  assert.ok((await list.json()).some(item => item.name === "Sample Candidate"));
+  const listed = await list.json();
+  const manual = listed.find(item => item.name === "Sample Candidate");
+  assert.ok(manual);
+  assert.equal(manual.qualification.score, null);
+  assert.equal(manual.qualification.stage, "QUALIFIED");
+  assert.equal(manual.outreach.canDraft, false);
+  assert.equal((await call("/candidates/" + manual.id + "/draft", {
+    method: "POST", headers: protectedHeaders,
+  })).status, 409, "Legacy manual record must meet contact review gate");
   assert.equal((await call("/send", { method: "POST", headers: protectedHeaders })).status, 404);
   console.log("HTTP integration smoke passed: auth, CSRF, encrypted key storage, candidates, no sending");
 } finally {
