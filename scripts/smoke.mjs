@@ -165,6 +165,10 @@ try {
       body: JSON.stringify({ partnerName: "Test Partner", email: "partner@example.org" }) });
     assert.equal(invite.status, 201);
     const firstWorkspace = (await invite.json()).partnerId;
+    assert.equal((await call("/admin/partners")).status, 401, "Workspace listing is admin-only");
+    const workspaceList = await call("/admin/partners", { headers: { cookie } });
+    assert.equal(workspaceList.status, 200);
+    assert.ok((await workspaceList.json()).partners.some(p => p.id === firstWorkspace));
     const secondInvite = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
       body: JSON.stringify({ partnerName: "Second workspace", email: "second@example.org" }) });
     assert.equal(secondInvite.status, 201);
