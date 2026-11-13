@@ -18,7 +18,7 @@ import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCo
 import { googleDataConfig, createGoogleDataFlow, verifyGoogleDataFlow,
   exchangeGoogleDataCode } from "./google-data-auth.js";
 import { deliverPartnerInvitation, publicInvitationStatus,
-  invitationEmailConfig } from "./partner-invitations.js";
+  invitationEmailConfig, resetInvitationAttempt } from "./partner-invitations.js";
 
 const env = requireRuntimeConfig();
 const google = googleOAuthConfig(env);
@@ -295,12 +295,10 @@ app.post("/api/admin/partners/invitations/:id/resend", authenticated, requireOri
       return res.status(409).json({ error: "Invitation already sent. Confirm a new attempt explicitly." });
     }
     if (input.newAttempt) {
-      const reset = await prisma.partnerMembership.updateMany({
-        where: { id: member.id, inviteStatus: member.inviteStatus, acceptedAt: null, revokedAt: null },
-        data: { inviteAttempt: { increment: 1 }, inviteAttemptAt: null, inviteLeaseUntil: null,
-          inviteProviderId: null, inviteErrorCode: null, inviteStatus: "PENDING" },
-      });
-      if (!reset.count) return res.status(409).json({ error: "Invitation state changed; refresh and retry" });
+      // Compare the exact attempt and lease observed above. An expired lease
+      // may have been reclaimed by another request since the initial read.
+      const reset = await resetInvitationAttempt(prisma, member);
+      if (!reset) return res.status(409).json({ error: "Invitation state changed; refresh and retry" });
     }
     const delivery = await deliverPartnerInvitation(prisma, member.id);
     return res.json({ emailStatus: delivery.status });
