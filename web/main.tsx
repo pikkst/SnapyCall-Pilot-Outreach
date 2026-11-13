@@ -3,6 +3,9 @@ import { createRoot } from "react-dom/client";
 import "./style.css";
 
 type PartnerSession = { authenticated: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
+type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
+type ConnectionStatus = "loading" | "ready" | "unavailable";
+type ConnectionResponse = { connections: GoogleConnection[]; available: boolean };
 type Candidate = {
   id: string; name: string; email: string | null; category: string;
   region: string | null; onlineEnglish: boolean; status: string;
@@ -45,6 +48,9 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [partnerSession, setPartnerSession] = useState<PartnerSession | null>(null);
+  const [googleConnections, setGoogleConnections] = useState<GoogleConnection[]>([]);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("loading");
+  const [googleConfigured, setGoogleConfigured] = useState(false);
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
@@ -93,9 +99,25 @@ function App() {
       api<PartnerSession>("/partner/session")])
       .then(async ([session, partner]) => {
         if (session.authenticated) { setLoggedIn(true); await load(); }
-        else if (partner.authenticated) setPartnerSession(partner);
+        else if (partner.authenticated) {
+          setPartnerSession(partner);
+          await loadGoogleConnections();
+        }
       }).catch(() => setError("Unable to reach the authentication API"));
   }, []);
+
+  async function loadGoogleConnections() {
+    setConnectionStatus("loading");
+    try {
+      const data = await api<ConnectionResponse>("/partner/google/connections");
+      setGoogleConnections(data.connections);
+      setGoogleConfigured(data.available);
+      setConnectionStatus("ready");
+    } catch {
+      // Do not misrepresent an unavailable status endpoint as disconnected.
+      setConnectionStatus("unavailable");
+    }
+  }
 
   async function execute(fn: () => Promise<void>) {
     setBusy(true); setError(""); setNotice("");
@@ -123,6 +145,17 @@ function App() {
     await execute(async () => {
       await api("/partner/session", { method: "DELETE" });
       setPartnerSession(null);
+      setGoogleConnections([]);
+      setConnectionStatus("loading");
+      setGoogleConfigured(false);
+    });
+  }
+
+  async function disconnectGoogle(partnerId: string) {
+    await execute(async () => {
+      await api("/partner/google/connections/" + encodeURIComponent(partnerId), { method: "DELETE" });
+      await loadGoogleConnections();
+      setNotice("Google connection removed locally. You can also revoke the app in your Google Account.");
     });
   }
 
@@ -220,9 +253,33 @@ function App() {
       <section className="panel login" aria-label="Partner workspace">
         <span className="eyebrow">SNAPYCALL • PARTNER</span>
         <h1>Welcome{partnerSession.displayName ? ", " + partnerSession.displayName : ""}</h1>
-        <p className="muted">Your Google identity has been verified. Partner-specific candidate data and Google Forms connections are not yet enabled.</p>
+        <p className="muted">Your Google identity is verified. You can authorize read-only Google Forms and Sheets access per workspace; data synchronization is not yet available.</p>
         <h2>My workspaces</h2>
-        {(partnerSession.partners ?? []).map(p => <p key={p.id}><strong>{p.name}</strong> · {p.role}</p>)}
+        {connectionStatus === "unavailable" && <div role="alert">
+          <p>Google connection status is unavailable. No connection changes have been assumed.</p>
+          <button className="secondary" disabled={busy} onClick={() => void loadGoogleConnections()}>
+            Retry connection status
+          </button>
+        </div>}
+        {(partnerSession.partners ?? []).map(p => {
+          const connection = googleConnections.find(c => c.partnerId === p.id);
+          return <div key={p.id}>
+            <p><strong>{p.name}</strong> · {p.role}</p>
+            {connectionStatus === "loading" ? <p className="muted">Checking Google connection…</p>
+              : connectionStatus === "unavailable" ? <p className="muted">Connection status unknown</p>
+              : connection ? <>
+                <p className="muted">Google Forms & Sheets: authorized (read-only). Sync is not yet enabled.</p>
+                <button className="secondary" disabled={busy}
+                  onClick={() => disconnectGoogle(p.id)}>Disconnect Google</button>
+              </> : !googleConfigured ? <p className="muted">Google connection is not configured for this environment.</p>
+              : <>
+                <p className="muted">Google Forms & Sheets: not connected</p>
+                <a className="secondary" href={"/api/partner/google/connect/start?partnerId=" + encodeURIComponent(p.id)}>
+                  Connect Google Forms & Sheets
+                </a>
+              </>}
+          </div>;
+        })}
         {error && <div className="error" role="alert">{error}</div>}
         <button className="secondary" disabled={busy} onClick={logoutPartner}>Sign out</button>
       </section>

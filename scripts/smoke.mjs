@@ -17,8 +17,15 @@ const env = {
   ADMIN_PASSWORD_HASH: "",
   SESSION_SIGNING_KEY: randomBytes(32).toString("hex"),
   AI_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
+  GOOGLE_CLIENT_ID: "ci-test-client.apps.googleusercontent.com",
+  GOOGLE_CLIENT_SECRET: "ci-only-oauth-client-secret",
+  GOOGLE_REDIRECT_URI: "",
+  GOOGLE_DATA_REDIRECT_URI: "https://smoke.example.org/api/partner/google/connect/callback",
+  PILOT_GOOGLE_MOCK: "integration-only",
 };
-const server = spawn(process.execPath, ["server/index.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+const server = spawn(process.execPath,
+  ["--import", "./scripts/google-data-smoke-mock.mjs", "server/index.js"],
+  { env, stdio: ["ignore", "pipe", "pipe"] });
 let logs = "";
 for (const stream of [server.stdout, server.stderr]) {
   stream.on("data", chunk => { logs += chunk.toString(); });
@@ -205,6 +212,107 @@ try {
     assert.equal(firstRetry.status, 200);
     assert.equal((await call("/candidates", { headers: { cookie: partnerCookie } })).status, 401);
     assert.equal((await call("/ai-settings", { headers: { cookie: partnerCookie } })).status, 401);
+    assert.equal((await call("/partner/google/connections")).status, 401,
+      "Unauthenticated callers cannot list Google connections");
+    assert.equal((await call("/partner/google/connections", { headers: { cookie } })).status, 401,
+      "Admin session cannot impersonate a partner");
+    const googleList = await call("/partner/google/connections", { headers: { cookie: partnerCookie } });
+    assert.equal(googleList.status, 200);
+    assert.deepEqual(await googleList.json(), { connections: [], available: true });
+    assert.equal((await call("/partner/google/connect/start?partnerId=" + firstWorkspace)).status, 401);
+
+    // The mock is installed only in the disposable subprocess. The real
+    // HTTP callback, RS256 verifier, PKCE flow and Prisma persistence run.
+    async function beginGoogleConnection(workspaceId, partnerCookieValue) {
+      const start = await call("/partner/google/connect/start?partnerId=" + workspaceId, {
+        headers: { cookie: partnerCookieValue }, redirect: "manual",
+      });
+      assert.equal(start.status, 302);
+      const location = new URL(start.headers.get("location"));
+      assert.equal(location.origin, "https://accounts.google.com");
+      const flowCookie = start.headers.get("set-cookie")?.split(";")[0];
+      assert.ok(flowCookie?.startsWith("pilot_google_data_flow="));
+      return { flowCookie, state: location.searchParams.get("state"),
+        nonce: location.searchParams.get("nonce") };
+    }
+
+    async function completeGoogleConnection(flow, kind = "good") {
+      return call("/partner/google/connect/callback?state=" + flow.state +
+        "&code=" + flow.nonce + "%3A" + kind, {
+        headers: { cookie: flow.flowCookie }, redirect: "manual",
+      });
+    }
+
+    for (const kind of ["wrong-sub", "wrong-email"]) {
+      const flow = await beginGoogleConnection(firstWorkspace, partnerCookie);
+      const rejected = await completeGoogleConnection(flow, kind);
+      assert.equal(rejected.status, 403, "Mismatched Google identity must not connect");
+      assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
+    }
+
+    const grantedFlow = await beginGoogleConnection(firstWorkspace, partnerCookie);
+    const granted = await completeGoogleConnection(grantedFlow);
+    assert.equal(granted.status, 303, "Verified callback must persist connection");
+    const stored = await partnerDb.partnerGoogleConnection.findUnique({
+      where: { partnerId_userId: { partnerId: firstWorkspace, userId: member.id } },
+    });
+    assert.ok(stored);
+    assert.equal(stored.googleSub, "google-test-sub");
+    assert.notEqual(stored.encryptedRefreshToken, "fixture-refresh-token-secret-value");
+    const { decryptKey } = await import("../server/security.js");
+    assert.equal(decryptKey(stored.encryptedRefreshToken, env.AI_ENCRYPTION_KEY),
+      "fixture-refresh-token-secret-value");
+    const listed = await call("/partner/google/connections", { headers: { cookie: partnerCookie } });
+    assert.equal(listed.status, 200);
+    const listedBody = await listed.text();
+    assert.equal(listedBody.includes("fixture-refresh-token-secret-value"), false);
+    assert.equal(listedBody.includes(stored.encryptedRefreshToken), false);
+    assert.deepEqual(JSON.parse(listedBody).connections.map(c => c.partnerId), [firstWorkspace]);
+
+    // A separately invited user may access another workspace but not this
+    // user's grant, including via guessed partner IDs.
+    const outsiderInvite = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: secondWorkspace, email: "outsider@example.org" }) });
+    assert.equal(outsiderInvite.status, 201);
+    const outsider = await partnerDb.partnerUser.findUnique({
+      where: { emailNormalized: "outsider@example.org" },
+    });
+    await partnerDb.partnerUser.update({ where: { id: outsider.id },
+      data: { googleSub: "outsider-google-sub" } });
+    const outsiderCookie = "pilot_partner_session=" +
+      createPartnerSession(outsider.id, env.SESSION_SIGNING_KEY);
+    const outsiderList = await call("/partner/google/connections", {
+      headers: { cookie: outsiderCookie },
+    });
+    assert.deepEqual((await outsiderList.json()).connections, []);
+    assert.equal((await call("/partner/google/connect/start?partnerId=" + firstWorkspace,
+      { headers: { cookie: outsiderCookie }, redirect: "manual" })).status, 403);
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: outsiderCookie, origin },
+    })).status, 403);
+    assert.equal(await partnerDb.partnerGoogleConnection.count(), 1);
+
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: partnerCookie },
+    })).status, 403, "Disconnect requires CSRF origin");
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: partnerCookie, origin },
+    })).status, 200);
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: partnerCookie, origin },
+    })).status, 200, "Disconnect is idempotent");
+    assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
+
+    // Membership may be revoked while consent is underway; a valid signed
+    // Google response cannot recreate its authorization after revocation.
+    const revokedFlow = await beginGoogleConnection(firstWorkspace, partnerCookie);
+    await partnerDb.partnerMembership.update({
+      where: { partnerId_userId: { partnerId: firstWorkspace, userId: member.id } },
+      data: { revokedAt: new Date() },
+    });
+    assert.equal((await completeGoogleConnection(revokedFlow)).status, 403);
+    assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
+
     assert.equal((await call(inviteUrl, { method: "POST",
       headers: { origin, cookie: partnerCookie, "content-type": "application/json" },
       body: JSON.stringify({ partnerName: "Attack", email: "new@example.org" }) })).status, 401);

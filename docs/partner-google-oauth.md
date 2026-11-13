@@ -62,3 +62,38 @@ partner-only session, legacy API denial, immediate revocation.
 Live sign-in must be verified only after approved staging deployment with
 an authorized Google test account; CI uses fake credentials and never
 contacts Google.
+
+## Partner Google Forms/Sheets data consent (PR #14)
+
+This is a **separate** consent flow, not the sign-in permission from PR #13.
+The partner may connect their verified Google identity to one active workspace.
+Permissions requested: `openid email`,
+`forms.responses.readonly` and `spreadsheets.readonly` (full Google scope URLs).
+The authorization-code + PKCE flow requests `access_type=offline` and
+`prompt=consent`. A Google-issued refresh token is required.
+
+- Staging must configure `GOOGLE_DATA_REDIRECT_URI` as
+  `https://snapycall-pilot-outreach-staging-bax4.onrender.com/api/partner/google/connect/callback`
+  on the same Google OAuth web client as the existing identity callback.
+  The Google APIs and OAuth consent screen require their own configuration.
+- Until that variable exists, `/api/partner/google/connect/start` returns 503.
+  Legacy admin authentication and partner identity login remain unchanged.
+- The `PartnerGoogleConnection` record is scoped by `(partnerId, userId)`.
+  The refresh token is encrypted at rest with the existing 256-bit
+  `AI_ENCRYPTION_KEY`; it is never returned to the browser or logs.
+  Treat changing that key as a credential rotation/migration operation.
+- During callback, Google `sub` and verified email must match the invited
+  partner identity, and active workspace membership is rechecked.
+- `GET /api/partner/google/connections` returns only non-sensitive metadata
+  for the authenticated partner's currently active memberships.
+- `DELETE /api/partner/google/connections/:partnerId` removes the local stored
+  grant and requires the existing origin check. External Google permission
+  revocation may additionally be performed by the user in Google Account.
+- **No Google Forms responses or Sheets cells are fetched or synchronized**.
+  This change does not migrate or expose admin-scoped Candidate, Draft, or
+  AiSetting records. Data import, sync cursors, idempotency and consent-aware
+  domain contracts are separately gated.
+
+Before deployment: CTO review, exact HEAD CI, additive Prisma migration,
+Google OAuth test user, real consent callback smoke, negative cross-tenant
+test evidence and explicit staging authorization. No automatic deploy.

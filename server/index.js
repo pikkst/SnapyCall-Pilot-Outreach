@@ -15,9 +15,12 @@ import { aiConfigSchema, generateDraft } from "./ai.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
+import { googleDataConfig, createGoogleDataFlow, verifyGoogleDataFlow,
+  exchangeGoogleDataCode } from "./google-data-auth.js";
 
 const env = requireRuntimeConfig();
 const google = googleOAuthConfig(env);
+const googleData = googleDataConfig(env);
 const prisma = new PrismaClient({ log: ["error"] });
 const approvedDiscoveryFeeds = parseApprovedSources(process.env.DISCOVERY_FEED_URLS);
 const app = express();
@@ -103,6 +106,105 @@ async function partnerIdentity(req) {
   if (!user?.googleSub || !user.memberships.length) return null;
   return user;
 }
+// This is a separate consent from Google identity login. A strict partner
+// session is required to start; the signed browser-bound flow cookie is used
+// on Google's cross-site callback because SameSite=Strict session cookies
+// are intentionally unavailable during that redirect.
+const dataFlowPath = "/api/partner/google/connect";
+function clearDataFlow(res) {
+  res.clearCookie("pilot_google_data_flow", {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production",
+    path: dataFlowPath,
+  });
+}
+app.get("/api/partner/google/connections", safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  const ids = user.memberships.map(m => m.partnerId);
+  const connections = await prisma.partnerGoogleConnection.findMany({
+    where: { userId: user.id, partnerId: { in: ids } },
+    select: { partnerId: true, scope: true, updatedAt: true },
+  });
+  return res.json({ connections, available: Boolean(googleData) });
+}));
+app.get("/api/partner/google/connect/start", loginLimiter, safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!googleData) return res.status(503).json({ error: "Google data access not configured" });
+  const partnerId = req.query.partnerId;
+  if (typeof partnerId !== "string" || !user.memberships.some(m => m.partnerId === partnerId)) {
+    return res.status(403).json({ error: "Workspace membership required" });
+  }
+  const flow = createGoogleDataFlow(googleData, env.SESSION_SIGNING_KEY,
+    { userId: user.id, partnerId });
+  res.cookie("pilot_google_data_flow", flow.cookie, {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production",
+    path: dataFlowPath, maxAge: 10 * 60_000,
+  });
+  return res.redirect(302, flow.url);
+}));
+app.get("/api/partner/google/connect/callback", safe(async (req, res) => {
+  const cookie = req.cookies?.pilot_google_data_flow;
+  clearDataFlow(res);
+  if (!googleData || typeof req.query.code !== "string" ||
+      typeof req.query.state !== "string" || req.query.error) {
+    return res.status(400).send("Google data access was not completed");
+  }
+  const flow = verifyGoogleDataFlow(cookie, req.query.state, env.SESSION_SIGNING_KEY);
+  if (!flow) return res.status(403).send("Google data consent expired or invalid");
+  // Membership may have been revoked while the user was on Google consent.
+  const user = await prisma.partnerUser.findUnique({
+    where: { id: flow.userId },
+    include: { memberships: { where: { partnerId: flow.partnerId, revokedAt: null } } },
+  });
+  if (!user?.googleSub || !user.memberships.length) {
+    return res.status(403).send("Workspace access is no longer available");
+  }
+  let tokens, identity;
+  try {
+    tokens = await exchangeGoogleDataCode(req.query.code, flow, googleData);
+    identity = await verifyGoogleIdToken(tokens.id_token, googleData, flow.nonce);
+  } catch {
+    return res.status(403).send("Google did not grant the required permissions");
+  }
+  if (identity.googleSub !== user.googleSub || identity.emailNormalized !== user.emailNormalized) {
+    return res.status(403).send("Connect with the invited Google account");
+  }
+  const encrypted = encryptKey(tokens.refresh_token, env.AI_ENCRYPTION_KEY);
+  const saved = await prisma.$transaction(async tx => {
+    const active = await tx.partnerMembership.findUnique({
+      where: { partnerId_userId: { partnerId: flow.partnerId, userId: flow.userId } },
+    });
+    if (!active || active.revokedAt) return false;
+    await tx.partnerGoogleConnection.upsert({
+      where: { partnerId_userId: { partnerId: flow.partnerId, userId: flow.userId } },
+      create: { partnerId: flow.partnerId, userId: flow.userId, googleSub: identity.googleSub,
+        encryptedRefreshToken: encrypted, scope: tokens.scope },
+      update: { googleSub: identity.googleSub, encryptedRefreshToken: encrypted, scope: tokens.scope },
+    });
+    await tx.auditEvent.create({ data: { actorId: flow.userId,
+      action: "partner.google_data.connected", entityId: flow.partnerId } });
+    return true;
+  });
+  if (!saved) return res.status(403).send("Workspace access was revoked");
+  return res.redirect(303, "/");
+}));
+app.delete("/api/partner/google/connections/:partnerId", requireOrigin, safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!user.memberships.some(m => m.partnerId === req.params.partnerId)) {
+    return res.status(403).json({ error: "Workspace membership required" });
+  }
+  const removed = await prisma.$transaction(async tx => {
+    const result = await tx.partnerGoogleConnection.deleteMany({
+      where: { partnerId: req.params.partnerId, userId: user.id },
+    });
+    if (result.count) await tx.auditEvent.create({ data: { actorId: user.id,
+      action: "partner.google_data.disconnected", entityId: req.params.partnerId } });
+    return result.count;
+  });
+  return res.json({ disconnected: true, changed: removed > 0 });
+}));
 app.get("/api/partner/session", safe(async (req, res) => {
   const user = await partnerIdentity(req);
   if (!user) return res.json({ authenticated: false });
