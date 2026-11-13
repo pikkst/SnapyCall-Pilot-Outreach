@@ -71,7 +71,14 @@ test("Google ID token requires cryptographic signature, verified email and exact
   ]) {
     await assert.rejects(() => verifyGoogleIdToken(tokenFor(overrides), cfg, "expected-nonce", fetcher, now));
   }
-  const tampered = tokenFor().replace(/.$/, "A");
+  // Mutate an actual signature byte, not a base64url character whose
+  // replacement can leave the decoded signature unchanged.
+  const validToken = tokenFor();
+  const [signedHeader, signedPayload, encodedSignature] = validToken.split(".");
+  const corruptedSignature = Buffer.from(encodedSignature, "base64url");
+  corruptedSignature[0] ^= 0x01;
+  const tampered = [signedHeader, signedPayload, corruptedSignature.toString("base64url")].join(".");
+  assert.notEqual(tampered, validToken);
   await assert.rejects(() => verifyGoogleIdToken(tampered, cfg, "expected-nonce", fetcher, now));
 });
 
