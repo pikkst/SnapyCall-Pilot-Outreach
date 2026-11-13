@@ -30,6 +30,17 @@ function issueIdToken(nonce, kind) {
 
 globalThis.fetch = async (url, options) => {
   const target = String(url);
+  if (target === "https://api.resend.com/emails") {
+    const key = options?.headers?.["Idempotency-Key"];
+    const payload = JSON.parse(options.body);
+    if (!/^snapycall-invite-c[a-z0-9]+-\d+$/.test(key ?? "") ||
+        !payload.subject.includes("Invitation") ||
+        !Array.isArray(payload.to) || !payload.to.length ||
+        options.headers.authorization !== "Bearer " + process.env.RESEND_API_KEY) {
+      return Response.json({ error: "invalid_email_request" }, { status: 400 });
+    }
+    return Response.json({ id: "fixture-email-" + key });
+  }
   if (target === "https://www.googleapis.com/oauth2/v3/certs") {
     return Response.json({ keys: [jwk] });
   }
