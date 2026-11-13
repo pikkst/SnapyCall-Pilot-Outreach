@@ -125,7 +125,7 @@ app.get("/api/partner/google/connections", safe(async (req, res) => {
     where: { userId: user.id, partnerId: { in: ids } },
     select: { partnerId: true, scope: true, updatedAt: true },
   });
-  return res.json({ connections });
+  return res.json({ connections, available: Boolean(googleData) });
 }));
 app.get("/api/partner/google/connect/start", loginLimiter, safe(async (req, res) => {
   const user = await partnerIdentity(req);
