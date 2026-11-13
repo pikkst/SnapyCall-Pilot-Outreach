@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 
+type PartnerSession = { authenticated: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type Candidate = {
   id: string; name: string; email: string | null; category: string;
   region: string | null; onlineEnglish: boolean; status: string;
@@ -43,6 +44,9 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [partnerSession, setPartnerSession] = useState<PartnerSession | null>(null);
+  const [partnerName, setPartnerName] = useState("");
+  const [partnerEmail, setPartnerEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -81,10 +85,12 @@ function App() {
   }
 
   useEffect(() => {
-    api<{ authenticated: boolean }>("/session")
-      .then(async (session) => {
+    Promise.all([api<{ authenticated: boolean }>("/session"),
+      api<PartnerSession>("/partner/session")])
+      .then(async ([session, partner]) => {
         if (session.authenticated) { setLoggedIn(true); await load(); }
-      }).catch(() => setError("Unable to reach the admin API"));
+        else if (partner.authenticated) setPartnerSession(partner);
+      }).catch(() => setError("Unable to reach the authentication API"));
   }, []);
 
   async function execute(fn: () => Promise<void>) {
@@ -106,6 +112,24 @@ function App() {
     await execute(async () => {
       await api("/session", { method: "DELETE" });
       setLoggedIn(false); setCandidates([]); setDrafts([]); setApiKey("");
+    });
+  }
+
+  async function logoutPartner() {
+    await execute(async () => {
+      await api("/partner/session", { method: "DELETE" });
+      setPartnerSession(null);
+    });
+  }
+
+  async function invitePartner(event: React.FormEvent) {
+    event.preventDefault();
+    await execute(async () => {
+      await api("/admin/partners/invite", { method: "POST", body: JSON.stringify({
+        partnerName, email: partnerEmail,
+      }) });
+      setPartnerName(""); setPartnerEmail("");
+      setNotice("Partner access provisioned. No email was sent; share the sign-in URL securely.");
     });
   }
 
@@ -185,6 +209,20 @@ function App() {
     });
   }
 
+  if (partnerSession?.authenticated && !loggedIn) return (
+    <main className="login-shell">
+      <section className="panel login" aria-label="Partner workspace">
+        <span className="eyebrow">SNAPYCALL • PARTNER</span>
+        <h1>Welcome{partnerSession.displayName ? ", " + partnerSession.displayName : ""}</h1>
+        <p className="muted">Your Google identity has been verified. Partner-specific candidate data and Google Forms connections are not yet enabled.</p>
+        <h2>My workspaces</h2>
+        {(partnerSession.partners ?? []).map(p => <p key={p.id}><strong>{p.name}</strong> · {p.role}</p>)}
+        {error && <div className="error" role="alert">{error}</div>}
+        <button className="secondary" disabled={busy} onClick={logoutPartner}>Sign out</button>
+      </section>
+    </main>
+  );
+
   if (!loggedIn) return (
     <main className="login-shell">
       <form className="panel login" onSubmit={login}>
@@ -195,6 +233,7 @@ function App() {
         <label>Password<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
         {error && <div className="error" role="alert">{error}</div>}
         <button type="submit" disabled={busy}>Sign in</button>
+        <a className="secondary" href="/api/auth/google/start" style={{ textAlign: "center", padding: 12, borderRadius: 8 }}>Continue with Google (invited partners)</a>
       </form>
     </main>
   );
@@ -340,6 +379,18 @@ function App() {
           <button disabled={busy}>Save AI configuration</button>
         </form>
         <p className="hint">Model usage may incur provider charges. Never paste a key into chat or GitHub. Changing providers requires a new key.</p>
+        <section className="panel">
+          <h2>Invite a partner</h2>
+          <p className="muted">Provision a partner workspace for a verified Google account. This does not send an invitation email or share existing admin data.</p>
+          <form onSubmit={invitePartner}>
+            <label>Workspace name<input required maxLength={120} value={partnerName}
+              onChange={e => setPartnerName(e.target.value)} placeholder="Example: Gary / SnapyCall" /></label>
+            <label>Invited Google email<input required type="email" value={partnerEmail}
+              onChange={e => setPartnerEmail(e.target.value)} placeholder="partner@example.com" /></label>
+            <button type="submit" disabled={busy}>Provision partner access</button>
+          </form>
+        </section>
+
         {setting.keyConfigured && <button className="danger" disabled={busy} onClick={() => execute(async () => { await api("/ai-settings", { method: "DELETE" }); await load(); setNotice("Saved AI credential deleted."); })}>Delete stored key</button>}
       </section>}
     </section>
