@@ -164,6 +164,19 @@ try {
     const invite = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
       body: JSON.stringify({ partnerName: "Test Partner", email: "partner@example.org" }) });
     assert.equal(invite.status, 201);
+    const firstWorkspace = (await invite.json()).partnerId;
+    const secondInvite = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerName: "Second workspace", email: "second@example.org" }) });
+    assert.equal(secondInvite.status, 201);
+    const secondWorkspace = (await secondInvite.json()).partnerId;
+    const addMembership = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: secondWorkspace, email: "partner@example.org" }) });
+    assert.equal(addMembership.status, 201, "Existing Google identity can join another workspace");
+    const repeatMembership = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: secondWorkspace, email: "partner@example.org" }) });
+    assert.equal(repeatMembership.status, 200, "Membership retries must be idempotent");
+    assert.equal((await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: "cnonexistent123456789", email: "new@example.org" }) })).status, 404);
     assert.equal((await call(inviteUrl, { method: "POST", headers: protectedHeaders,
       body: JSON.stringify({ partnerName: "Other workspace", email: "partner@example.org" }) })).status, 409);
     const member = await partnerDb.partnerUser.findUnique({ where: { emailNormalized: "partner@example.org" } });
@@ -180,7 +193,12 @@ try {
     assert.equal(partnerResponse.status, 200);
     const partner = await partnerResponse.json();
     assert.equal(partner.authenticated, true);
-    assert.deepEqual(partner.partners.map(p => p.name), ["Test Partner"]);
+    assert.deepEqual(partner.partners.map(p => p.name).sort(), ["Second workspace", "Test Partner"]);
+    assert.equal(await partnerDb.partnerUser.count({ where: { emailNormalized: "partner@example.org" } }), 1);
+    assert.equal(await partnerDb.partnerMembership.count({ where: { userId: member.id } }), 2);
+    const firstRetry = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: firstWorkspace, email: "partner@example.org" }) });
+    assert.equal(firstRetry.status, 200);
     assert.equal((await call("/candidates", { headers: { cookie: partnerCookie } })).status, 401);
     assert.equal((await call("/ai-settings", { headers: { cookie: partnerCookie } })).status, 401);
     assert.equal((await call(inviteUrl, { method: "POST",
@@ -188,6 +206,9 @@ try {
       body: JSON.stringify({ partnerName: "Attack", email: "new@example.org" }) })).status, 401);
     await partnerDb.partnerMembership.updateMany({ where: { userId: member.id },
       data: { revokedAt: new Date() } });
+    assert.equal((await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: secondWorkspace, email: "partner@example.org" }) })).status, 409,
+      "A revoked membership must not reactivate through retry");
     const revoked = await call("/partner/session", { headers: { cookie: partnerCookie } });
     assert.deepEqual(await revoked.json(), { authenticated: false },
       "Membership revocation must take effect immediately");
