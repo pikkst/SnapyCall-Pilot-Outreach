@@ -17,10 +17,12 @@ import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCo
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
 import { googleDataConfig, createGoogleDataFlow, verifyGoogleDataFlow,
   exchangeGoogleDataCode } from "./google-data-auth.js";
+import { invitationMailerConfig, deliverPartnerInvitation, newInviteDeliveryKey } from "./partner-invite.js";
 
 const env = requireRuntimeConfig();
 const google = googleOAuthConfig(env);
 const googleData = googleDataConfig(env);
+const invitationMailer = invitationMailerConfig(env);
 const prisma = new PrismaClient({ log: ["error"] });
 const approvedDiscoveryFeeds = parseApprovedSources(process.env.DISCOVERY_FEED_URLS);
 const app = express();
@@ -246,17 +248,77 @@ app.post("/api/admin/partners/invite", ...[authenticated, requireOrigin], safe(a
     if (membership?.revokedAt) {
       return { status: 409, error: "Revoked membership requires explicit administrator reactivation" };
     }
-    if (membership) return { status: 200, partnerId: partner.id, invited: true, existing: true };
-    await tx.partnerMembership.create({ data: { userId: user.id, partnerId: partner.id } });
+    if (membership) {
+      // Older memberships predate the delivery outbox. Provision it once.
+      const current = await tx.partnerInviteDelivery.findUnique({ where: { membershipId: membership.id } });
+      if (current) return { status: 200, partnerId: partner.id, invited: true,
+        existing: true, deliveryId: current.id, emailStatus: current.status, email: emailNormalized };
+      const delivery = await tx.partnerInviteDelivery.create({ data: {
+        membershipId: membership.id, emailNormalized, deliveryKey: newInviteDeliveryKey(),
+      } });
+      return { status: 200, partnerId: partner.id, invited: true, existing: true,
+        deliveryId: delivery.id, emailStatus: delivery.status, email: emailNormalized };
+    }
+    const createdMembership = await tx.partnerMembership.create({ data: { userId: user.id, partnerId: partner.id } });
+    const delivery = await tx.partnerInviteDelivery.create({ data: {
+      membershipId: createdMembership.id, emailNormalized, deliveryKey: newInviteDeliveryKey(),
+    } });
     await tx.auditEvent.create({ data: { actorId: "admin",
       action: "partner.invited", entityId: partner.id } });
-    return { status: 201, partnerId: partner.id, invited: true };
+    return { status: 201, partnerId: partner.id, invited: true,
+      email: emailNormalized, deliveryId: delivery.id, emailStatus: delivery.status };
   }).catch(error => {
     if (error?.code === "P2002") return { status: 409, error: "Concurrent invitation conflict; retry with the workspace ID" };
     throw error;
   });
-  return res.status(result.status).json(result);
+  if (!result.deliveryId || result.status >= 400) return res.status(result.status).json(result);
+  // Sending never occurs within the transaction. Provisioning succeeds even
+  // if the provider is down; admin can inspect and safely retry delivery.
+  const delivery = result.emailStatus === "PENDING"
+    ? await deliverPartnerInvitation(prisma, result.deliveryId, invitationMailer)
+    : { emailStatus: result.emailStatus };
+  return res.status(result.status).json({
+    partnerId: result.partnerId, invited: true, existing: Boolean(result.existing),
+    email: result.email, emailStatus: delivery.emailStatus,
+    deliveryId: result.deliveryId,
+  });
 }));
+app.get("/api/admin/partners/invitations", authenticated, safe(async (_req, res) => {
+  const memberships = await prisma.partnerMembership.findMany({
+    orderBy: { createdAt: "desc" }, take: 300,
+    include: {
+      partner: { select: { id: true, name: true } },
+      user: { select: { emailNormalized: true, googleSub: true } },
+      inviteDelivery: { select: { id: true, status: true, attempts: true,
+        sentAt: true, errorCode: true } },
+    },
+  });
+  return res.json({ invitations: memberships.map(m => ({
+    membershipId: m.id, partnerId: m.partner.id, workspaceName: m.partner.name,
+    email: m.user.emailNormalized,
+    status: m.revokedAt ? "revoked" : m.user.googleSub ? "accepted" : "pending",
+    emailStatus: m.inviteDelivery?.status ?? "NOT_SENT",
+    deliveryId: m.inviteDelivery?.id ?? null,
+    attempts: m.inviteDelivery?.attempts ?? 0,
+    sentAt: m.inviteDelivery?.sentAt ?? null,
+    errorCode: m.inviteDelivery?.errorCode ?? null,
+  })) });
+}));
+app.post("/api/admin/partners/invitations/:deliveryId/retry",
+  authenticated, requireOrigin, safe(async (req, res) => {
+    const delivery = await prisma.partnerInviteDelivery.findUnique({
+      where: { id: req.params.deliveryId }, include: { membership: true },
+    });
+    if (!delivery) return res.status(404).json({ error: "Invitation delivery not found" });
+    if (delivery.membership.revokedAt) {
+      return res.status(409).json({ error: "Membership was revoked" });
+    }
+    if (delivery.status === "SENT" || delivery.status === "SENDING") {
+      return res.status(409).json({ error: "Delivery has already been submitted" });
+    }
+    const status = await deliverPartnerInvitation(prisma, delivery.id, invitationMailer);
+    return res.json({ emailStatus: status.emailStatus });
+  }));
 app.get("/api/admin/partners", authenticated, safe(async (_req, res) => {
   const partners = await prisma.partner.findMany({
     select: { id: true, name: true }, orderBy: { createdAt: "desc" }, take: 500,
