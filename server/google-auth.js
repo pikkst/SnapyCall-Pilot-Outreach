@@ -45,7 +45,7 @@ export function createGoogleFlow(config, key, now = Date.now()) {
   const nonce = randomBytes(32).toString("base64url");
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
-  const cookie = sign({ state, nonce, verifier, expires: now + FLOW_TTL_MS }, key);
+  const cookie = sign({ purpose: "google_flow", state, nonce, verifier, expires: now + FLOW_TTL_MS }, key);
   const uri = new URL(AUTH_URL);
   for (const [name, value] of Object.entries({
     client_id: config.clientId, redirect_uri: config.redirectUri,
@@ -58,7 +58,7 @@ export function createGoogleFlow(config, key, now = Date.now()) {
 
 export function verifyGoogleFlow(cookie, state, key, now = Date.now()) {
   const flow = unsign(cookie, key);
-  if (!flow || !Number.isSafeInteger(flow.expires) || flow.expires <= now ||
+  if (!flow || flow.purpose !== "google_flow" || !Number.isSafeInteger(flow.expires) || flow.expires <= now ||
       flow.expires > now + FLOW_TTL_MS || !safeEqual(flow.state, state) ||
       !/^[a-zA-Z0-9_-]{43}$/.test(flow.verifier ?? "") ||
       !/^[a-zA-Z0-9_-]{43}$/.test(flow.nonce ?? "")) return null;
