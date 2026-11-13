@@ -34,3 +34,17 @@ test("only exact normalized profile or email can suggest a duplicate", () => {
 test("homonymous names never create a suggestion", () => {
   assert.deepEqual(sameIdentityHints({ id: "1", name: "Same" }, [{ id: "2", name: "Same" }]), []);
 });
+
+test("legacy HTTP expert profiles never make duplicate lookup fail or produce false matches", () => {
+  const legacy = { id: "legacy", expertProfileUrl: "http://legacy.example.org/expert",
+    emailNormalized: "legacy@example.org" };
+  const others = [
+    { id: "same-profile", expertProfileUrl: "https://legacy.example.org/expert" },
+    { id: "same-email", emailNormalized: "LEGACY@example.org" },
+  ];
+  assert.deepEqual(sameIdentityHints(legacy, others), [
+    { id: "same-email", reasons: ["same_email_address"] },
+  ]);
+  assert.deepEqual(sameIdentityHints({ id: "legacy", expertProfileUrl:
+    "http://legacy.example.org/expert" }, others), []);
+});
