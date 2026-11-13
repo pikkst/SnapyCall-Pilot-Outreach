@@ -57,7 +57,7 @@ export function verifyGoogleDataFlow(cookie, state, signingKey, now = Date.now()
   if (!flow || flow.purpose !== "google_data" || !Number.isSafeInteger(flow.expires) ||
       flow.expires <= now || flow.expires > now + FLOW_TTL_MS ||
       typeof state !== "string" || !/^[\w-]{43}$/.test(state) ||
-      typeof flow.state !== "string" ||
+      !/^[\\w-]{43}$/.test(flow.state ?? "") ||
       !timingSafeEqual(Buffer.from(state), Buffer.from(flow.state)) ||
       !/^[\w-]{43}$/.test(flow.verifier ?? "") ||
       !/^[\w-]{43}$/.test(flow.nonce ?? "") ||
@@ -89,5 +89,6 @@ export async function exchangeGoogleDataCode(code, flow, config, fetcher = fetch
 export function requiredScopesGranted(granted) {
   if (typeof granted !== "string") return false;
   const scopes = new Set(granted.split(/\s+/).filter(Boolean));
-  return DATA_SCOPES.every(scope => scopes.has(scope));
+  return DATA_SCOPES.filter(scope => scope !== "email").every(scope => scopes.has(scope)) &&
+    (scopes.has("email") || scopes.has("https://www.googleapis.com/auth/userinfo.email"));
 }
