@@ -138,7 +138,7 @@ app.post("/api/admin/partners/invite", ...[authenticated, requireOrigin], safe(a
   });
   return res.status(result.status).json(result);
 }));
-app.get("/api/auth/google/start", (req, res) => {
+app.get("/api/auth/google/start", loginLimiter, (req, res) => {
   if (!google) return res.status(503).json({ error: "Google login not configured" });
   const flow = createGoogleFlow(google, env.SESSION_SIGNING_KEY);
   res.cookie("pilot_google_flow", flow.cookie, {
@@ -177,12 +177,18 @@ app.get("/api/auth/google/callback", safe(async (req, res) => {
   if (!user.googleSub) {
     // A previous successful binding cannot be silently replaced by a later
     // login or a concurrent attempt with a different Google account.
-    const bound = await prisma.partnerUser.updateMany({
-      where: { id: user.id, googleSub: null },
-      data: { googleSub: identity.googleSub, displayName: identity.displayName },
-    }).catch(() => ({ count: 0 }));
-    if (bound.count !== 1) return res.status(403).send("Google identity binding failed");
-    await audit("partner.google.bound", user.id);
+    const bound = await prisma.$transaction(async tx => {
+      const updated = await tx.partnerUser.updateMany({
+        where: { id: user.id, googleSub: null },
+        data: { googleSub: identity.googleSub, displayName: identity.displayName },
+      });
+      if (updated.count !== 1) return false;
+      await tx.auditEvent.create({ data: {
+        actorId: user.id, action: "partner.google.bound", entityId: user.id,
+      } });
+      return true;
+    }).catch(() => false);
+    if (!bound) return res.status(403).send("Google identity binding failed");
   }
   partnerCookie(res, createPartnerSession(user.id, env.SESSION_SIGNING_KEY), 8 * 60 * 60_000);
   return res.redirect(303, "/");
