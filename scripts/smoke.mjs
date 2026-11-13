@@ -19,8 +19,10 @@ const env = {
   AI_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
   GOOGLE_CLIENT_ID: "ci-test-client.apps.googleusercontent.com",
   GOOGLE_CLIENT_SECRET: "ci-only-oauth-client-secret",
-  GOOGLE_REDIRECT_URI: "",
+  GOOGLE_REDIRECT_URI: "https://smoke.example.org/api/auth/google/callback",
   GOOGLE_DATA_REDIRECT_URI: "https://smoke.example.org/api/partner/google/connect/callback",
+  RESEND_API_KEY: "ci-only-resend-token",
+  PARTNER_INVITE_FROM: "SnapyCall <invites@example.test>",
   PILOT_GOOGLE_MOCK: "integration-only",
 };
 const server = spawn(process.execPath,
@@ -171,7 +173,66 @@ try {
     const invite = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
       body: JSON.stringify({ partnerName: "Test Partner", email: "partner@example.org" }) });
     assert.equal(invite.status, 201);
-    const firstWorkspace = (await invite.json()).partnerId;
+    const inviteResult = await invite.json();
+    assert.equal(inviteResult.emailStatus, "SENT");
+    const firstWorkspace = inviteResult.partnerId;
+    const invitationList = await call("/admin/partners/invitations", { headers: { cookie } });
+    assert.equal(invitationList.status, 200);
+    const invitationState = await invitationList.json();
+    assert.equal(invitationState.emailConfigured, true);
+    assert.equal(invitationState.invitations[0].status, "SENT");
+    const firstMembership = await partnerDb.partnerMembership.findUnique({
+      where: { id: inviteResult.membershipId },
+    });
+    assert.match(firstMembership.inviteProviderId, /^fixture-email-snapycall-invite-/);
+    assert.equal(firstMembership.inviteAttempt, 0);
+    assert.equal((await call("/admin/partners/invitations", { headers: { cookie: "pilot_partner_session=invalid" } })).status, 401);
+    const noOriginResend = await call("/admin/partners/invitations/" + firstMembership.id + "/resend", {
+      method: "POST", headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ newAttempt: true }),
+    });
+    assert.equal(noOriginResend.status, 403);
+    const repeatSend = await call("/admin/partners/invitations/" + firstMembership.id + "/resend", {
+      method: "POST", headers: protectedHeaders, body: "{}",
+    });
+    assert.equal(repeatSend.status, 409, "Sent invite requires explicit new attempt");
+    // Exact PostgreSQL CAS regression: another request reclaims an expired
+    // SENDING lease after this request has read it. A stale newAttempt must
+    // not reset that active lease or allocate a different provider key.
+    const staleLease = new Date(Date.now() - 20_000);
+    const renewedLease = new Date(Date.now() + 120_000);
+    await partnerDb.partnerMembership.update({
+      where: { id: firstMembership.id },
+      data: { inviteStatus: "SENDING", inviteLeaseUntil: staleLease,
+        inviteAttemptAt: new Date(Date.now() - 40_000) },
+    });
+    const staleSnapshot = await partnerDb.partnerMembership.findUnique({
+      where: { id: firstMembership.id },
+    });
+    await partnerDb.partnerMembership.update({
+      where: { id: firstMembership.id },
+      data: { inviteLeaseUntil: renewedLease },
+    });
+    const { resetInvitationAttempt } = await import("../server/partner-invitations.js");
+    assert.equal(await resetInvitationAttempt(partnerDb, staleSnapshot), false,
+      "Concurrent lease renewal must fence stale resend reset");
+    const afterRace = await partnerDb.partnerMembership.findUnique({
+      where: { id: firstMembership.id },
+    });
+    assert.equal(afterRace.inviteAttempt, staleSnapshot.inviteAttempt);
+    assert.equal(afterRace.inviteLeaseUntil.getTime(), renewedLease.getTime());
+    await partnerDb.partnerMembership.update({
+      where: { id: firstMembership.id },
+      data: { inviteStatus: "SENT", inviteLeaseUntil: null, inviteAttemptAt: null },
+    });
+    const newAttempt = await call("/admin/partners/invitations/" + firstMembership.id + "/resend", {
+      method: "POST", headers: protectedHeaders, body: JSON.stringify({ newAttempt: true }),
+    });
+    assert.equal(newAttempt.status, 200);
+    assert.equal((await newAttempt.json()).emailStatus, "SENT");
+    const updatedMembership = await partnerDb.partnerMembership.findUnique({ where: { id: firstMembership.id } });
+    assert.equal(updatedMembership.inviteAttempt, 1);
+    assert.notEqual(updatedMembership.inviteProviderId, firstMembership.inviteProviderId);
     assert.equal((await call("/admin/partners")).status, 401, "Workspace listing is admin-only");
     const workspaceList = await call("/admin/partners", { headers: { cookie } });
     assert.equal(workspaceList.status, 200);

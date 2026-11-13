@@ -91,6 +91,15 @@ model PartnerMembership {
   userId String
   role String @default("PARTNER")
   revokedAt DateTime?
+  // Invitation delivery is separate from membership authorization.
+  inviteStatus String @default("PENDING")
+  inviteAttempt Int @default(0)
+  inviteAttemptAt DateTime?
+  inviteLeaseUntil DateTime?
+  inviteSentAt DateTime?
+  inviteProviderId String?
+  inviteErrorCode String?
+  acceptedAt DateTime?
   partner Partner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
   user PartnerUser @relation(fields: [userId], references: [id], onDelete: Restrict)
   createdAt DateTime @default(now())
