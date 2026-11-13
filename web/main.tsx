@@ -20,6 +20,8 @@ type Candidate = {
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
+type DuplicateHint = { id: string; reasons: string[] };
+type Evidence = { id: string; kind: string; sourceUrl: string; note: string | null; capturedAt: string };
 type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
 
 const categories = [
@@ -91,6 +93,13 @@ function App() {
   const [discovered, setDiscovered] = useState<FeedEntry[]>([]);
   const [discoveryCategory, setDiscoveryCategory] = useState("AI_AUTOMATION");
   const [reviewId, setReviewId] = useState<string | null>(null);
+  const [evidenceId, setEvidenceId] = useState<string | null>(null);
+  const [evidence, setEvidence] = useState<Evidence[]>([]);
+  const [duplicateHints, setDuplicateHints] = useState<DuplicateHint[]>([]);
+  const [duplicateScanIncomplete, setDuplicateScanIncomplete] = useState(false);
+  const [evidenceKind, setEvidenceKind] = useState("ARTICLE");
+  const [evidenceUrl, setEvidenceUrl] = useState("");
+  const [evidenceNote, setEvidenceNote] = useState("");
   const [reviewProfileUrl, setReviewProfileUrl] = useState("");
   const [reviewRegion, setReviewRegion] = useState("");
   const [reviewEnglish, setReviewEnglish] = useState(false);
@@ -245,6 +254,36 @@ function App() {
     });
   }
 
+  async function showEvidence(id: string) {
+    await execute(async () => {
+      const key = encodeURIComponent(id);
+      const [rows, matches] = await Promise.all([
+        api<Evidence[]>("/candidates/" + key + "/evidence"),
+        api<{ suggestions: DuplicateHint[]; incomplete: boolean }>("/candidates/" + key + "/possible-duplicates"),
+      ]);
+      setEvidenceId(id);
+      setEvidence(rows);
+      setDuplicateHints(matches.suggestions);
+      setDuplicateScanIncomplete(matches.incomplete);
+      setEvidenceUrl(""); setEvidenceNote("");
+    });
+  }
+
+  async function saveEvidence(event: React.FormEvent) {
+    event.preventDefault();
+    if (!evidenceId) return;
+    await execute(async () => {
+      const id = encodeURIComponent(evidenceId);
+      await api("/candidates/" + id + "/evidence", {
+        method: "POST",
+        body: JSON.stringify({ kind: evidenceKind, sourceUrl: evidenceUrl, ...(evidenceNote.trim() ? { note: evidenceNote.trim() } : {}) }),
+      });
+      setEvidence(await api<Evidence[]>("/candidates/" + id + "/evidence"));
+      setEvidenceUrl(""); setEvidenceNote("");
+      setNotice("Source evidence saved. This does not qualify the expert or allow email outreach.");
+    });
+  }
+
   function beginProfileReview(item: Candidate) {
     setReviewId(item.id);
     setReviewProfileUrl(item.expertProfileUrl ?? "");
@@ -392,11 +431,40 @@ function App() {
             <td><strong>{stageNames[c.qualification.stage] ?? c.qualification.stage}</strong>
               {c.outreach.blockers.length > 0 && <small>{c.outreach.blockers.map(r => reasonNames[r] ?? r).join(" · ")}</small>}</td>
             <td>
+              <button type="button" className="secondary" disabled={busy} onClick={() => showEvidence(c.id)}>Evidence</button>
               {c.discoveryKey && <button type="button" className="secondary" disabled={busy} onClick={() => beginProfileReview(c)}>Review profile</button>}
               <button type="button" disabled={busy || !c.outreach.canDraft || !setting.keyConfigured} onClick={() => makeDraft(c.id)}>Generate draft</button>
             </td></tr>)}
           {!candidates.length && <tr><td colSpan={5} className="empty">No candidates yet. Add one above to start.</td></tr>}
         </tbody></table></div>
+        {evidenceId && <section className="review-panel" aria-label="Candidate evidence">
+          <h3>Source evidence</h3>
+          <p className="muted">Keep articles and profiles as separate references. Adding a link does not automatically verify an identity, qualification or right to contact.</p>
+          {duplicateHints.length > 0 && <div className="review-panel">
+            <strong>Possible duplicate profiles — review only</strong>
+            <p className="muted">A matching URL or email is not proof that two entries represent the same person. No records have been combined.</p>
+            {duplicateHints.map(match => <p key={match.id}>
+              Candidate {candidates.find(c => c.id === match.id)?.name ?? match.id}
+              <small>{match.reasons.join(", ")}</small>
+            </p>)}
+          </div>}
+          {duplicateScanIncomplete && <p className="hint">Duplicate check is incomplete because the review set exceeds the pilot search limit.</p>}
+          {evidence.length ? <ul>{evidence.map(item => <li key={item.id}>
+            <strong>{item.kind}</strong> · <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">{item.sourceUrl}</a>
+            {item.note && <small>{item.note}</small>}
+          </li>)}</ul> : <p>No additional evidence recorded yet.</p>}
+          <form className="form-grid" onSubmit={saveEvidence}>
+            <label>Evidence type<select value={evidenceKind} onChange={e => setEvidenceKind(e.target.value)}>
+              {["ARTICLE", "PROFILE", "SERVICE", "OTHER"].map(kind => <option key={kind} value={kind}>{kind}</option>)}
+            </select></label>
+            <label className="wide">Source URL<input required type="url" value={evidenceUrl}
+              onChange={e => setEvidenceUrl(e.target.value)} placeholder="https://..." /></label>
+            <label className="wide">Review note (optional)<input value={evidenceNote}
+              onChange={e => setEvidenceNote(e.target.value)} maxLength={500} /></label>
+            <button type="submit" disabled={busy}>Save evidence</button>
+            <button type="button" className="secondary" onClick={() => setEvidenceId(null)}>Close</button>
+          </form>
+        </section>}
         {reviewId && <form className="form-grid review-panel" onSubmit={saveProfileReview}>
           <h3 className="wide">Verify an independently sourced expert profile</h3>
           <p className="wide muted">A blog byline is not evidence of an online consulting service. Check the linked profile yourself. Only attest English online sessions if the profile explicitly confirms them.</p>

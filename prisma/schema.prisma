@@ -27,6 +27,7 @@ model Candidate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   drafts OutreachDraft[]
+  evidence CandidateEvidence[]
   @@index([category, status])
 }
 model AiSetting {
@@ -65,6 +66,21 @@ model AdminCredential {
   email String
   passwordHash String
   createdAt DateTime @default(now())
+}
+
+model CandidateEvidence {
+  id String @id @default(cuid())
+  candidateId String
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Restrict)
+  kind String
+  sourceUrl String
+  normalizedUrl String
+  note String?
+  capturedAt DateTime @default(now())
+  capturedBy String @default("admin")
+  @@unique([candidateId, kind, normalizedUrl])
+  @@index([normalizedUrl])
+  @@index([candidateId, capturedAt])
 }
 
 model Partner {
