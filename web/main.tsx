@@ -4,6 +4,13 @@ import "./style.css";
 
 type PartnerSession = { authenticated: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
+type PartnerInvite = {
+  membershipId: string; partnerId: string; workspaceName: string; email: string;
+  status: "pending" | "accepted" | "revoked"; emailStatus: string;
+  deliveryId: string | null; attempts: number; sentAt: string | null;
+  errorCode: string | null;
+};
+type InviteReceipt = { workspace: string; email: string; emailStatus: string };
 type ConnectionStatus = "loading" | "ready" | "unavailable";
 type ConnectionResponse = { connections: GoogleConnection[]; available: boolean };
 type Candidate = {
@@ -55,6 +62,8 @@ function App() {
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
   const [partnerWorkspaces, setPartnerWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
+  const [partnerInvites, setPartnerInvites] = useState<PartnerInvite[]>([]);
+  const [inviteReceipt, setInviteReceipt] = useState<InviteReceipt | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -79,16 +88,18 @@ function App() {
   });
 
   async function load() {
-    const [c, d, s, workspaces] = await Promise.all([
+    const [c, d, s, workspaces, invitations] = await Promise.all([
       api<Candidate[]>("/candidates"),
       api<Draft[]>("/drafts"),
       api<AiSetting>("/ai-settings"),
       api<{ partners: Array<{ id: string; name: string }> }>("/admin/partners"),
+      api<{ invitations: PartnerInvite[] }>("/admin/partners/invitations"),
     ]);
     setCandidates(c);
     setDrafts(d);
     setSetting(s);
     setPartnerWorkspaces(workspaces.partners);
+    setPartnerInvites(invitations.invitations);
     const sources = await api<{ feeds: string[] }>("/discovery/sources");
     setFeeds(sources.feeds);
     setSelectedFeed((previous) => sources.feeds.includes(previous) ? previous : (sources.feeds[0] ?? ""));
@@ -162,13 +173,38 @@ function App() {
   async function invitePartner(event: React.FormEvent) {
     event.preventDefault();
     await execute(async () => {
-      await api("/admin/partners/invite", { method: "POST", body: JSON.stringify({
-        ...(partnerTarget === "new" ? { partnerName } : { partnerId: partnerTarget }),
-        email: partnerEmail,
-      }) });
+      const workspace = partnerTarget === "new" ? partnerName
+        : (partnerWorkspaces.find(p => p.id === partnerTarget)?.name ?? "Selected workspace");
+      const response = await api<{ emailStatus: string; email: string }>("/admin/partners/invite", {
+        method: "POST", body: JSON.stringify({
+          ...(partnerTarget === "new" ? { partnerName } : { partnerId: partnerTarget }),
+          email: partnerEmail,
+        }),
+      });
       setPartnerName(""); setPartnerEmail("");
-      await load();
-      setNotice("Partner access provisioned. No email was sent; share the sign-in URL securely.");
+      setInviteReceipt({ workspace, email: response.email, emailStatus: response.emailStatus });
+      setNotice(response.emailStatus === "SENT"
+        ? "Partner access created and invitation email accepted by provider."
+        : "Partner access created. Invitation email has NOT been sent. See delivery status below.");
+      try { await load(); } catch {
+        // Keep the successful invitation receipt even if refreshing the list fails.
+        setError("Invitation saved, but the invitation list could not be refreshed.");
+      }
+    });
+  }
+
+  async function retryPartnerInvite(deliveryId: string) {
+    await execute(async () => {
+      const response = await api<{ emailStatus: string }>(
+        "/admin/partners/invitations/" + encodeURIComponent(deliveryId) + "/retry",
+        { method: "POST" },
+      );
+      setNotice(response.emailStatus === "SENT"
+        ? "Invitation email accepted by provider."
+        : "Email not sent. Check the delivery status and sender configuration.");
+      try { await load(); } catch {
+        setError("Delivery action completed, but invitation status could not be refreshed.");
+      }
     });
   }
 
@@ -444,7 +480,7 @@ function App() {
         <p className="hint">Model usage may incur provider charges. Never paste a key into chat or GitHub. Changing providers requires a new key.</p>
         <section className="panel">
           <h2>Invite a partner</h2>
-          <p className="muted">Provision a partner workspace for a verified Google account. This does not send an invitation email or share existing admin data.</p>
+          <p className="muted">Create access for an invited Google account. An email is sent only when a verified sender and Resend are configured; otherwise the invitation is saved for later delivery. No admin data is shared.</p>
           <form onSubmit={invitePartner}>
             <label>Workspace
               <select value={partnerTarget} onChange={e => setPartnerTarget(e.target.value)}>
@@ -460,6 +496,28 @@ function App() {
               onChange={e => setPartnerEmail(e.target.value)} placeholder="partner@example.com" /></label>
             <button type="submit" disabled={busy}>Provision partner access</button>
           </form>
+          {inviteReceipt && <div className="success" role="status">
+            <strong>Invitation saved</strong>
+            <p>Workspace: {inviteReceipt.workspace}</p>
+            <p>Google account: {inviteReceipt.email}</p>
+            <p>Email delivery: {inviteReceipt.emailStatus === "SENT" ? "Accepted by provider"
+              : inviteReceipt.emailStatus === "NOT_CONFIGURED" ? "Not sent — email sender not configured"
+              : inviteReceipt.emailStatus === "FAILED" ? "Failed — retry available"
+              : inviteReceipt.emailStatus}</p>
+          </div>}
+          <h3>Partner invitations</h3>
+          {partnerInvites.length === 0 ? <p className="muted">No invitations created yet.</p>
+            : partnerInvites.map(invite => <article key={invite.membershipId}>
+              <p><strong>{invite.workspaceName}</strong> · {invite.email}</p>
+              <p className="muted">Access: {invite.status} · Email: {invite.emailStatus}
+                {invite.errorCode ? " (" + invite.errorCode + ")" : ""}</p>
+              {invite.status !== "revoked" && invite.deliveryId &&
+                ["PENDING", "FAILED"].includes(invite.emailStatus) &&
+                <button type="button" className="secondary" disabled={busy}
+                  onClick={() => void retryPartnerInvite(invite.deliveryId!)}>
+                  Send / retry invitation email
+                </button>}
+            </article>)}
         </section>
 
         {setting.keyConfigured && <button className="danger" disabled={busy} onClick={() => execute(async () => { await api("/ai-settings", { method: "DELETE" }); await load(); setNotice("Saved AI credential deleted."); })}>Delete stored key</button>}
