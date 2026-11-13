@@ -66,3 +66,32 @@ model AdminCredential {
   passwordHash String
   createdAt DateTime @default(now())
 }
+
+model Partner {
+  id String @id @default(cuid())
+  name String
+  memberships PartnerMembership[]
+  createdAt DateTime @default(now())
+}
+
+model PartnerUser {
+  id String @id @default(cuid())
+  emailNormalized String @unique
+  googleSub String? @unique
+  displayName String?
+  memberships PartnerMembership[]
+  createdAt DateTime @default(now())
+}
+
+model PartnerMembership {
+  id String @id @default(cuid())
+  partnerId String
+  userId String
+  role String @default("PARTNER")
+  revokedAt DateTime?
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  user PartnerUser @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+  @@unique([partnerId, userId])
+  @@index([userId, revokedAt])
+}
