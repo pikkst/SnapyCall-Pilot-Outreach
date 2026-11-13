@@ -2,6 +2,13 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 
+type PartnerSession = { authenticated: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
+type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
+type PartnerInvitation = { id: string; workspaceId: string; workspace: string;
+  email: string; status: string; sentAt: string | null; acceptedAt: string | null;
+  leaseUntil: string | null; errorCode: string | null; attempt: number };
+type ConnectionStatus = "loading" | "ready" | "unavailable";
+type ConnectionResponse = { connections: GoogleConnection[]; available: boolean };
 type Candidate = {
   id: string; name: string; email: string | null; category: string;
   region: string | null; onlineEnglish: boolean; status: string;
@@ -58,6 +65,17 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [partnerSession, setPartnerSession] = useState<PartnerSession | null>(null);
+  const [googleConnections, setGoogleConnections] = useState<GoogleConnection[]>([]);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("loading");
+  const [googleConfigured, setGoogleConfigured] = useState(false);
+  const [partnerName, setPartnerName] = useState("");
+  const [partnerEmail, setPartnerEmail] = useState("");
+  const [partnerTarget, setPartnerTarget] = useState("new");
+  const [partnerWorkspaces, setPartnerWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
+  const [partnerInvitations, setPartnerInvitations] = useState<PartnerInvitation[]>([]);
+  const [inviteEmailConfigured, setInviteEmailConfigured] = useState(false);
+  const [inviteReceipt, setInviteReceipt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -82,25 +100,48 @@ function App() {
   });
 
   async function load() {
-    const [c, d, s] = await Promise.all([
+    const [c, d, s, workspaces, invitations] = await Promise.all([
       api<Candidate[]>("/candidates"),
       api<Draft[]>("/drafts"),
       api<AiSetting>("/ai-settings"),
+      api<{ partners: Array<{ id: string; name: string }> }>("/admin/partners"),
+      api<{ invitations: PartnerInvitation[]; emailConfigured: boolean }>("/admin/partners/invitations"),
     ]);
     setCandidates(c);
     setDrafts(d);
     setSetting(s);
+    setPartnerWorkspaces(workspaces.partners);
+    setPartnerInvitations(invitations.invitations);
+    setInviteEmailConfigured(invitations.emailConfigured);
     const sources = await api<{ feeds: string[] }>("/discovery/sources");
     setFeeds(sources.feeds);
     setSelectedFeed((previous) => sources.feeds.includes(previous) ? previous : (sources.feeds[0] ?? ""));
   }
 
   useEffect(() => {
-    api<{ authenticated: boolean }>("/session")
-      .then(async (session) => {
+    Promise.all([api<{ authenticated: boolean }>("/session"),
+      api<PartnerSession>("/partner/session")])
+      .then(async ([session, partner]) => {
         if (session.authenticated) { setLoggedIn(true); await load(); }
-      }).catch(() => setError("Unable to reach the admin API"));
+        else if (partner.authenticated) {
+          setPartnerSession(partner);
+          await loadGoogleConnections();
+        }
+      }).catch(() => setError("Unable to reach the authentication API"));
   }, []);
+
+  async function loadGoogleConnections() {
+    setConnectionStatus("loading");
+    try {
+      const data = await api<ConnectionResponse>("/partner/google/connections");
+      setGoogleConnections(data.connections);
+      setGoogleConfigured(data.available);
+      setConnectionStatus("ready");
+    } catch {
+      // Do not misrepresent an unavailable status endpoint as disconnected.
+      setConnectionStatus("unavailable");
+    }
+  }
 
   async function execute(fn: () => Promise<void>) {
     setBusy(true); setError(""); setNotice("");
@@ -121,6 +162,57 @@ function App() {
     await execute(async () => {
       await api("/session", { method: "DELETE" });
       setLoggedIn(false); setCandidates([]); setDrafts([]); setApiKey("");
+    });
+  }
+
+  async function logoutPartner() {
+    await execute(async () => {
+      await api("/partner/session", { method: "DELETE" });
+      setPartnerSession(null);
+      setGoogleConnections([]);
+      setConnectionStatus("loading");
+      setGoogleConfigured(false);
+    });
+  }
+
+  async function disconnectGoogle(partnerId: string) {
+    await execute(async () => {
+      await api("/partner/google/connections/" + encodeURIComponent(partnerId), { method: "DELETE" });
+      await loadGoogleConnections();
+      setNotice("Google connection removed locally. You can also revoke the app in your Google Account.");
+    });
+  }
+
+  async function invitePartner(event: React.FormEvent) {
+    event.preventDefault();
+    await execute(async () => {
+      const receipt = await api<{ emailStatus?: string; existing?: boolean }>("/admin/partners/invite", {
+        method: "POST", body: JSON.stringify({
+          ...(partnerTarget === "new" ? { partnerName } : { partnerId: partnerTarget }),
+          email: partnerEmail,
+        }),
+      });
+      const emailSent = receipt.emailStatus === "SENT";
+      const status = receipt.existing ? "Already provisioned — no duplicate invitation sent."
+        : emailSent ? "Access provisioned and invitation accepted by email provider."
+        : "Access provisioned. Invitation email " +
+          (receipt.emailStatus === "UNCONFIGURED" ? "not sent: email provider not configured."
+            : "not confirmed (" + (receipt.emailStatus ?? "UNKNOWN") + ").");
+      setInviteReceipt(status);
+      setPartnerName(""); setPartnerEmail("");
+      await load();
+      setNotice(status);
+    });
+  }
+
+  async function resendPartnerInvite(id: string, newAttempt: boolean) {
+    if (newAttempt && !window.confirm("Send a new invitation email? This may duplicate a previous message.")) return;
+    await execute(async () => {
+      const result = await api<{ emailStatus: string }>("/admin/partners/invitations/" +
+        encodeURIComponent(id) + "/resend", { method: "POST",
+        body: JSON.stringify({ newAttempt }) });
+      await load();
+      setNotice("Invitation send status: " + result.emailStatus);
     });
   }
 
@@ -200,6 +292,44 @@ function App() {
     });
   }
 
+  if (partnerSession?.authenticated && !loggedIn) return (
+    <main className="login-shell">
+      <section className="panel login" aria-label="Partner workspace">
+        <span className="eyebrow">SNAPYCALL • PARTNER</span>
+        <h1>Welcome{partnerSession.displayName ? ", " + partnerSession.displayName : ""}</h1>
+        <p className="muted">Your Google identity is verified. You can authorize read-only Google Forms and Sheets access per workspace; data synchronization is not yet available.</p>
+        <h2>My workspaces</h2>
+        {connectionStatus === "unavailable" && <div role="alert">
+          <p>Google connection status is unavailable. No connection changes have been assumed.</p>
+          <button className="secondary" disabled={busy} onClick={() => void loadGoogleConnections()}>
+            Retry connection status
+          </button>
+        </div>}
+        {(partnerSession.partners ?? []).map(p => {
+          const connection = googleConnections.find(c => c.partnerId === p.id);
+          return <div key={p.id}>
+            <p><strong>{p.name}</strong> · {p.role}</p>
+            {connectionStatus === "loading" ? <p className="muted">Checking Google connection…</p>
+              : connectionStatus === "unavailable" ? <p className="muted">Connection status unknown</p>
+              : connection ? <>
+                <p className="muted">Google Forms & Sheets: authorized (read-only). Sync is not yet enabled.</p>
+                <button className="secondary" disabled={busy}
+                  onClick={() => disconnectGoogle(p.id)}>Disconnect Google</button>
+              </> : !googleConfigured ? <p className="muted">Google connection is not configured for this environment.</p>
+              : <>
+                <p className="muted">Google Forms & Sheets: not connected</p>
+                <a className="secondary" href={"/api/partner/google/connect/start?partnerId=" + encodeURIComponent(p.id)}>
+                  Connect Google Forms & Sheets
+                </a>
+              </>}
+          </div>;
+        })}
+        {error && <div className="error" role="alert">{error}</div>}
+        <button className="secondary" disabled={busy} onClick={logoutPartner}>Sign out</button>
+      </section>
+    </main>
+  );
+
   if (!loggedIn) return (
     <main className="login-shell">
       <form className="panel login" onSubmit={login}>
@@ -210,6 +340,7 @@ function App() {
         <label>Password<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
         {error && <div className="error" role="alert">{error}</div>}
         <button type="submit" disabled={busy}>Sign in</button>
+        <a className="secondary" href="/api/auth/google/start" style={{ textAlign: "center", padding: 12, borderRadius: 8 }}>Continue with Google (invited partners)</a>
       </form>
     </main>
   );
@@ -356,6 +487,49 @@ function App() {
           <button disabled={busy}>Save AI configuration</button>
         </form>
         <p className="hint">Model usage may incur provider charges. Never paste a key into chat or GitHub. Changing providers requires a new key.</p>
+        <section className="panel">
+          <h2>Invite a partner</h2>
+          <p className="muted">Provision a workspace for an invited Google identity. If email delivery is configured, an invitation is sent using the configured provider. No admin-scoped data is shared.</p>
+          {!inviteEmailConfigured && <p role="status" className="hint">Invitation email is not configured. Access will be provisioned, but no email will be sent until RESEND_API_KEY and PARTNER_INVITE_FROM are set.</p>}
+          {inviteReceipt && <p role="status" className="success">{inviteReceipt}</p>}
+          <form onSubmit={invitePartner}>
+            <label>Workspace
+              <select value={partnerTarget} onChange={e => setPartnerTarget(e.target.value)}>
+                <option value="new">Create a new workspace</option>
+                {partnerWorkspaces.map(workspace => (
+                  <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                ))}
+              </select>
+            </label>
+            {partnerTarget === "new" && <label>Workspace name<input required maxLength={120} value={partnerName}
+              onChange={e => setPartnerName(e.target.value)} placeholder="Example: Gary / SnapyCall" /></label>}
+            <label>Invited Google email<input required type="email" value={partnerEmail}
+              onChange={e => setPartnerEmail(e.target.value)} placeholder="partner@example.com" /></label>
+            <button type="submit" disabled={busy}>Provision partner access and invite</button>
+          </form>
+          <h3>Partner invitations</h3>
+          <div className="table-scroll"><table>
+            <thead><tr><th>Workspace</th><th>Google account</th><th>Invitation</th><th>Action</th></tr></thead>
+            <tbody>{partnerInvitations.map(invite => <tr key={invite.id}>
+              <td>{invite.workspace}</td>
+              <td>{invite.email}</td>
+              <td>{invite.status === "SENT" ? "Sent (provider accepted)" : invite.status}
+                {invite.errorCode ? " · " + invite.errorCode : ""}</td>
+              <td>{(["PENDING", "FAILED", "UNCONFIGURED", "MANUAL_REVIEW"].includes(invite.status) ||
+                (invite.status === "SENDING" && invite.leaseUntil &&
+                  Date.parse(invite.leaseUntil) <= Date.now())) ?
+                <button type="button" className="secondary" disabled={busy || !inviteEmailConfigured}
+                  onClick={() => resendPartnerInvite(invite.id, invite.status === "MANUAL_REVIEW")}>
+                  {invite.status === "MANUAL_REVIEW" ? "Send new attempt" : "Retry invitation"}
+                </button> : invite.status === "SENT" ?
+                <button type="button" className="secondary" disabled={busy || !inviteEmailConfigured}
+                  onClick={() => resendPartnerInvite(invite.id, true)}>Send again</button> :
+                <span>—</span>}</td>
+            </tr>)}</tbody>
+          </table></div>
+          {!partnerInvitations.length && <p className="muted">No invitations yet.</p>}
+        </section>
+
         {setting.keyConfigured && <button className="danger" disabled={busy} onClick={() => execute(async () => { await api("/ai-settings", { method: "DELETE" }); await load(); setNotice("Saved AI credential deleted."); })}>Delete stored key</button>}
       </section>}
     </section>

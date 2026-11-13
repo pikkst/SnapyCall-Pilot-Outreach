@@ -17,8 +17,17 @@ const env = {
   ADMIN_PASSWORD_HASH: "",
   SESSION_SIGNING_KEY: randomBytes(32).toString("hex"),
   AI_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
+  GOOGLE_CLIENT_ID: "ci-test-client.apps.googleusercontent.com",
+  GOOGLE_CLIENT_SECRET: "ci-only-oauth-client-secret",
+  GOOGLE_REDIRECT_URI: "https://smoke.example.org/api/auth/google/callback",
+  GOOGLE_DATA_REDIRECT_URI: "https://smoke.example.org/api/partner/google/connect/callback",
+  RESEND_API_KEY: "ci-only-resend-token",
+  PARTNER_INVITE_FROM: "SnapyCall <invites@example.test>",
+  PILOT_GOOGLE_MOCK: "integration-only",
 };
-const server = spawn(process.execPath, ["server/index.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+const server = spawn(process.execPath,
+  ["--import", "./scripts/google-data-smoke-mock.mjs", "server/index.js"],
+  { env, stdio: ["ignore", "pipe", "pipe"] });
 let logs = "";
 for (const stream of [server.stdout, server.stderr]) {
   stream.on("data", chunk => { logs += chunk.toString(); });
@@ -159,6 +168,233 @@ try {
     })).status, 409, "Reviewed profile alone must not unlock paid AI drafting");
   } finally {
     await reviewDb.$disconnect();
+  }
+
+  // An invited partner is an independent identity, never an admin alias.
+  const partnerDb = new (await import("@prisma/client")).PrismaClient();
+  try {
+    const inviteUrl = "/admin/partners/invite";
+    assert.equal((await call(inviteUrl, { method: "POST", headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ partnerName: "Test Partner", email: "partner@example.org" }) })).status, 401);
+    assert.equal((await call(inviteUrl, { method: "POST", headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ partnerName: "Test Partner", email: "partner@example.org" }) })).status, 403);
+    const invite = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerName: "Test Partner", email: "partner@example.org" }) });
+    assert.equal(invite.status, 201);
+    const inviteResult = await invite.json();
+    assert.equal(inviteResult.emailStatus, "SENT");
+    const firstWorkspace = inviteResult.partnerId;
+    const invitationList = await call("/admin/partners/invitations", { headers: { cookie } });
+    assert.equal(invitationList.status, 200);
+    const invitationState = await invitationList.json();
+    assert.equal(invitationState.emailConfigured, true);
+    assert.equal(invitationState.invitations[0].status, "SENT");
+    const firstMembership = await partnerDb.partnerMembership.findUnique({
+      where: { id: inviteResult.membershipId },
+    });
+    assert.match(firstMembership.inviteProviderId, /^fixture-email-snapycall-invite-/);
+    assert.equal(firstMembership.inviteAttempt, 0);
+    assert.equal((await call("/admin/partners/invitations", { headers: { cookie: "pilot_partner_session=invalid" } })).status, 401);
+    const noOriginResend = await call("/admin/partners/invitations/" + firstMembership.id + "/resend", {
+      method: "POST", headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ newAttempt: true }),
+    });
+    assert.equal(noOriginResend.status, 403);
+    const repeatSend = await call("/admin/partners/invitations/" + firstMembership.id + "/resend", {
+      method: "POST", headers: protectedHeaders, body: "{}",
+    });
+    assert.equal(repeatSend.status, 409, "Sent invite requires explicit new attempt");
+    // Exact PostgreSQL CAS regression: another request reclaims an expired
+    // SENDING lease after this request has read it. A stale newAttempt must
+    // not reset that active lease or allocate a different provider key.
+    const staleLease = new Date(Date.now() - 20_000);
+    const renewedLease = new Date(Date.now() + 120_000);
+    await partnerDb.partnerMembership.update({
+      where: { id: firstMembership.id },
+      data: { inviteStatus: "SENDING", inviteLeaseUntil: staleLease,
+        inviteAttemptAt: new Date(Date.now() - 40_000) },
+    });
+    const staleSnapshot = await partnerDb.partnerMembership.findUnique({
+      where: { id: firstMembership.id },
+    });
+    await partnerDb.partnerMembership.update({
+      where: { id: firstMembership.id },
+      data: { inviteLeaseUntil: renewedLease },
+    });
+    const { resetInvitationAttempt } = await import("../server/partner-invitations.js");
+    assert.equal(await resetInvitationAttempt(partnerDb, staleSnapshot), false,
+      "Concurrent lease renewal must fence stale resend reset");
+    const afterRace = await partnerDb.partnerMembership.findUnique({
+      where: { id: firstMembership.id },
+    });
+    assert.equal(afterRace.inviteAttempt, staleSnapshot.inviteAttempt);
+    assert.equal(afterRace.inviteLeaseUntil.getTime(), renewedLease.getTime());
+    await partnerDb.partnerMembership.update({
+      where: { id: firstMembership.id },
+      data: { inviteStatus: "SENT", inviteLeaseUntil: null, inviteAttemptAt: null },
+    });
+    const newAttempt = await call("/admin/partners/invitations/" + firstMembership.id + "/resend", {
+      method: "POST", headers: protectedHeaders, body: JSON.stringify({ newAttempt: true }),
+    });
+    assert.equal(newAttempt.status, 200);
+    assert.equal((await newAttempt.json()).emailStatus, "SENT");
+    const updatedMembership = await partnerDb.partnerMembership.findUnique({ where: { id: firstMembership.id } });
+    assert.equal(updatedMembership.inviteAttempt, 1);
+    assert.notEqual(updatedMembership.inviteProviderId, firstMembership.inviteProviderId);
+    assert.equal((await call("/admin/partners")).status, 401, "Workspace listing is admin-only");
+    const workspaceList = await call("/admin/partners", { headers: { cookie } });
+    assert.equal(workspaceList.status, 200);
+    assert.ok((await workspaceList.json()).partners.some(p => p.id === firstWorkspace));
+    const secondInvite = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerName: "Second workspace", email: "second@example.org" }) });
+    assert.equal(secondInvite.status, 201);
+    const secondWorkspace = (await secondInvite.json()).partnerId;
+    const addMembership = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: secondWorkspace, email: "partner@example.org" }) });
+    assert.equal(addMembership.status, 201, "Existing Google identity can join another workspace");
+    const repeatMembership = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: secondWorkspace, email: "partner@example.org" }) });
+    assert.equal(repeatMembership.status, 200, "Membership retries must be idempotent");
+    assert.equal((await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: "cnonexistent123456789", email: "new@example.org" }) })).status, 404);
+    assert.equal((await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerName: "Other workspace", email: "partner@example.org" }) })).status, 409);
+    const member = await partnerDb.partnerUser.findUnique({ where: { emailNormalized: "partner@example.org" } });
+    assert.ok(member);
+    assert.equal(member.googleSub, null, "Inviting alone cannot sign a Google account in");
+    // Unit tests validate real Google signatures and OAuth flow; in the HTTP
+    // test, simulate an already verified and bound identity in disposable DB.
+    await partnerDb.partnerUser.update({ where: { id: member.id },
+      data: { googleSub: "google-test-sub" } });
+    const { createPartnerSession } = await import("../server/google-auth.js");
+    const partnerCookie = "pilot_partner_session=" +
+      createPartnerSession(member.id, env.SESSION_SIGNING_KEY);
+    const partnerResponse = await call("/partner/session", { headers: { cookie: partnerCookie } });
+    assert.equal(partnerResponse.status, 200);
+    const partner = await partnerResponse.json();
+    assert.equal(partner.authenticated, true);
+    assert.deepEqual(partner.partners.map(p => p.name).sort(), ["Second workspace", "Test Partner"]);
+    assert.equal(await partnerDb.partnerUser.count({ where: { emailNormalized: "partner@example.org" } }), 1);
+    assert.equal(await partnerDb.partnerMembership.count({ where: { userId: member.id } }), 2);
+    const firstRetry = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: firstWorkspace, email: "partner@example.org" }) });
+    assert.equal(firstRetry.status, 200);
+    assert.equal((await call("/candidates", { headers: { cookie: partnerCookie } })).status, 401);
+    assert.equal((await call("/ai-settings", { headers: { cookie: partnerCookie } })).status, 401);
+    assert.equal((await call("/partner/google/connections")).status, 401,
+      "Unauthenticated callers cannot list Google connections");
+    assert.equal((await call("/partner/google/connections", { headers: { cookie } })).status, 401,
+      "Admin session cannot impersonate a partner");
+    const googleList = await call("/partner/google/connections", { headers: { cookie: partnerCookie } });
+    assert.equal(googleList.status, 200);
+    assert.deepEqual(await googleList.json(), { connections: [], available: true });
+    assert.equal((await call("/partner/google/connect/start?partnerId=" + firstWorkspace)).status, 401);
+
+    // The mock is installed only in the disposable subprocess. The real
+    // HTTP callback, RS256 verifier, PKCE flow and Prisma persistence run.
+    async function beginGoogleConnection(workspaceId, partnerCookieValue) {
+      const start = await call("/partner/google/connect/start?partnerId=" + workspaceId, {
+        headers: { cookie: partnerCookieValue }, redirect: "manual",
+      });
+      assert.equal(start.status, 302);
+      const location = new URL(start.headers.get("location"));
+      assert.equal(location.origin, "https://accounts.google.com");
+      const flowCookie = start.headers.get("set-cookie")?.split(";")[0];
+      assert.ok(flowCookie?.startsWith("pilot_google_data_flow="));
+      return { flowCookie, state: location.searchParams.get("state"),
+        nonce: location.searchParams.get("nonce") };
+    }
+
+    async function completeGoogleConnection(flow, kind = "good") {
+      return call("/partner/google/connect/callback?state=" + flow.state +
+        "&code=" + flow.nonce + "%3A" + kind, {
+        headers: { cookie: flow.flowCookie }, redirect: "manual",
+      });
+    }
+
+    for (const kind of ["wrong-sub", "wrong-email"]) {
+      const flow = await beginGoogleConnection(firstWorkspace, partnerCookie);
+      const rejected = await completeGoogleConnection(flow, kind);
+      assert.equal(rejected.status, 403, "Mismatched Google identity must not connect");
+      assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
+    }
+
+    const grantedFlow = await beginGoogleConnection(firstWorkspace, partnerCookie);
+    const granted = await completeGoogleConnection(grantedFlow);
+    assert.equal(granted.status, 303, "Verified callback must persist connection");
+    const stored = await partnerDb.partnerGoogleConnection.findUnique({
+      where: { partnerId_userId: { partnerId: firstWorkspace, userId: member.id } },
+    });
+    assert.ok(stored);
+    assert.equal(stored.googleSub, "google-test-sub");
+    assert.notEqual(stored.encryptedRefreshToken, "fixture-refresh-token-secret-value");
+    const { decryptKey } = await import("../server/security.js");
+    assert.equal(decryptKey(stored.encryptedRefreshToken, env.AI_ENCRYPTION_KEY),
+      "fixture-refresh-token-secret-value");
+    const listed = await call("/partner/google/connections", { headers: { cookie: partnerCookie } });
+    assert.equal(listed.status, 200);
+    const listedBody = await listed.text();
+    assert.equal(listedBody.includes("fixture-refresh-token-secret-value"), false);
+    assert.equal(listedBody.includes(stored.encryptedRefreshToken), false);
+    assert.deepEqual(JSON.parse(listedBody).connections.map(c => c.partnerId), [firstWorkspace]);
+
+    // A separately invited user may access another workspace but not this
+    // user's grant, including via guessed partner IDs.
+    const outsiderInvite = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: secondWorkspace, email: "outsider@example.org" }) });
+    assert.equal(outsiderInvite.status, 201);
+    const outsider = await partnerDb.partnerUser.findUnique({
+      where: { emailNormalized: "outsider@example.org" },
+    });
+    await partnerDb.partnerUser.update({ where: { id: outsider.id },
+      data: { googleSub: "outsider-google-sub" } });
+    const outsiderCookie = "pilot_partner_session=" +
+      createPartnerSession(outsider.id, env.SESSION_SIGNING_KEY);
+    const outsiderList = await call("/partner/google/connections", {
+      headers: { cookie: outsiderCookie },
+    });
+    assert.deepEqual((await outsiderList.json()).connections, []);
+    assert.equal((await call("/partner/google/connect/start?partnerId=" + firstWorkspace,
+      { headers: { cookie: outsiderCookie }, redirect: "manual" })).status, 403);
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: outsiderCookie, origin },
+    })).status, 403);
+    assert.equal(await partnerDb.partnerGoogleConnection.count(), 1);
+
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: partnerCookie },
+    })).status, 403, "Disconnect requires CSRF origin");
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: partnerCookie, origin },
+    })).status, 200);
+    assert.equal((await call("/partner/google/connections/" + firstWorkspace, {
+      method: "DELETE", headers: { cookie: partnerCookie, origin },
+    })).status, 200, "Disconnect is idempotent");
+    assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
+
+    // Membership may be revoked while consent is underway; a valid signed
+    // Google response cannot recreate its authorization after revocation.
+    const revokedFlow = await beginGoogleConnection(firstWorkspace, partnerCookie);
+    await partnerDb.partnerMembership.update({
+      where: { partnerId_userId: { partnerId: firstWorkspace, userId: member.id } },
+      data: { revokedAt: new Date() },
+    });
+    assert.equal((await completeGoogleConnection(revokedFlow)).status, 403);
+    assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
+
+    assert.equal((await call(inviteUrl, { method: "POST",
+      headers: { origin, cookie: partnerCookie, "content-type": "application/json" },
+      body: JSON.stringify({ partnerName: "Attack", email: "new@example.org" }) })).status, 401);
+    await partnerDb.partnerMembership.updateMany({ where: { userId: member.id },
+      data: { revokedAt: new Date() } });
+    assert.equal((await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerId: secondWorkspace, email: "partner@example.org" }) })).status, 409,
+      "A revoked membership must not reactivate through retry");
+    const revoked = await call("/partner/session", { headers: { cookie: partnerCookie } });
+    assert.deepEqual(await revoked.json(), { authenticated: false },
+      "Membership revocation must take effect immediately");
+  } finally {
+    await partnerDb.$disconnect();
   }
 
   const saving = await call("/ai-settings", { method: "PUT", headers: protectedHeaders,

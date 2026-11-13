@@ -13,8 +13,16 @@ import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
+import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
+  verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
+import { googleDataConfig, createGoogleDataFlow, verifyGoogleDataFlow,
+  exchangeGoogleDataCode } from "./google-data-auth.js";
+import { deliverPartnerInvitation, publicInvitationStatus,
+  invitationEmailConfig, resetInvitationAttempt } from "./partner-invitations.js";
 
 const env = requireRuntimeConfig();
+const google = googleOAuthConfig(env);
+const googleData = googleDataConfig(env);
 const prisma = new PrismaClient({ log: ["error"] });
 const approvedDiscoveryFeeds = parseApprovedSources(process.env.DISCOVERY_FEED_URLS);
 const app = express();
@@ -81,6 +89,287 @@ app.delete("/api/session", requireOrigin, (_req, res) => {
   res.json({ authenticated: false });
 });
 
+// Google login is invite-only. Existing admin credentials retain exclusive
+// access to legacy candidate/draft/settings routes until tenant scoping ships.
+function partnerCookie(res, value, maxAge) {
+  res.cookie("pilot_partner_session", value, {
+    httpOnly: true, sameSite: "strict", secure: process.env.NODE_ENV === "production",
+    path: "/", maxAge,
+  });
+}
+async function partnerIdentity(req) {
+  const userId = verifyPartnerSession(req.cookies?.pilot_partner_session, env.SESSION_SIGNING_KEY);
+  if (!userId) return null;
+  const user = await prisma.partnerUser.findUnique({
+    where: { id: userId },
+    include: { memberships: { where: { revokedAt: null },
+      include: { partner: { select: { id: true, name: true } } } } },
+  });
+  if (!user?.googleSub || !user.memberships.length) return null;
+  return user;
+}
+// This is a separate consent from Google identity login. A strict partner
+// session is required to start; the signed browser-bound flow cookie is used
+// on Google's cross-site callback because SameSite=Strict session cookies
+// are intentionally unavailable during that redirect.
+const dataFlowPath = "/api/partner/google/connect";
+function clearDataFlow(res) {
+  res.clearCookie("pilot_google_data_flow", {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production",
+    path: dataFlowPath,
+  });
+}
+app.get("/api/partner/google/connections", safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  const ids = user.memberships.map(m => m.partnerId);
+  const connections = await prisma.partnerGoogleConnection.findMany({
+    where: { userId: user.id, partnerId: { in: ids } },
+    select: { partnerId: true, scope: true, updatedAt: true },
+  });
+  return res.json({ connections, available: Boolean(googleData) });
+}));
+app.get("/api/partner/google/connect/start", loginLimiter, safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!googleData) return res.status(503).json({ error: "Google data access not configured" });
+  const partnerId = req.query.partnerId;
+  if (typeof partnerId !== "string" || !user.memberships.some(m => m.partnerId === partnerId)) {
+    return res.status(403).json({ error: "Workspace membership required" });
+  }
+  const flow = createGoogleDataFlow(googleData, env.SESSION_SIGNING_KEY,
+    { userId: user.id, partnerId });
+  res.cookie("pilot_google_data_flow", flow.cookie, {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production",
+    path: dataFlowPath, maxAge: 10 * 60_000,
+  });
+  return res.redirect(302, flow.url);
+}));
+app.get("/api/partner/google/connect/callback", safe(async (req, res) => {
+  const cookie = req.cookies?.pilot_google_data_flow;
+  clearDataFlow(res);
+  if (!googleData || typeof req.query.code !== "string" ||
+      typeof req.query.state !== "string" || req.query.error) {
+    return res.status(400).send("Google data access was not completed");
+  }
+  const flow = verifyGoogleDataFlow(cookie, req.query.state, env.SESSION_SIGNING_KEY);
+  if (!flow) return res.status(403).send("Google data consent expired or invalid");
+  // Membership may have been revoked while the user was on Google consent.
+  const user = await prisma.partnerUser.findUnique({
+    where: { id: flow.userId },
+    include: { memberships: { where: { partnerId: flow.partnerId, revokedAt: null } } },
+  });
+  if (!user?.googleSub || !user.memberships.length) {
+    return res.status(403).send("Workspace access is no longer available");
+  }
+  let tokens, identity;
+  try {
+    tokens = await exchangeGoogleDataCode(req.query.code, flow, googleData);
+    identity = await verifyGoogleIdToken(tokens.id_token, googleData, flow.nonce);
+  } catch {
+    return res.status(403).send("Google did not grant the required permissions");
+  }
+  if (identity.googleSub !== user.googleSub || identity.emailNormalized !== user.emailNormalized) {
+    return res.status(403).send("Connect with the invited Google account");
+  }
+  const encrypted = encryptKey(tokens.refresh_token, env.AI_ENCRYPTION_KEY);
+  const saved = await prisma.$transaction(async tx => {
+    const active = await tx.partnerMembership.findUnique({
+      where: { partnerId_userId: { partnerId: flow.partnerId, userId: flow.userId } },
+    });
+    if (!active || active.revokedAt) return false;
+    await tx.partnerGoogleConnection.upsert({
+      where: { partnerId_userId: { partnerId: flow.partnerId, userId: flow.userId } },
+      create: { partnerId: flow.partnerId, userId: flow.userId, googleSub: identity.googleSub,
+        encryptedRefreshToken: encrypted, scope: tokens.scope },
+      update: { googleSub: identity.googleSub, encryptedRefreshToken: encrypted, scope: tokens.scope },
+    });
+    await tx.auditEvent.create({ data: { actorId: flow.userId,
+      action: "partner.google_data.connected", entityId: flow.partnerId } });
+    return true;
+  });
+  if (!saved) return res.status(403).send("Workspace access was revoked");
+  return res.redirect(303, "/");
+}));
+app.delete("/api/partner/google/connections/:partnerId", requireOrigin, safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!user.memberships.some(m => m.partnerId === req.params.partnerId)) {
+    return res.status(403).json({ error: "Workspace membership required" });
+  }
+  const removed = await prisma.$transaction(async tx => {
+    const result = await tx.partnerGoogleConnection.deleteMany({
+      where: { partnerId: req.params.partnerId, userId: user.id },
+    });
+    if (result.count) await tx.auditEvent.create({ data: { actorId: user.id,
+      action: "partner.google_data.disconnected", entityId: req.params.partnerId } });
+    return result.count;
+  });
+  return res.json({ disconnected: true, changed: removed > 0 });
+}));
+app.get("/api/partner/session", safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.json({ authenticated: false });
+  return res.json({
+    authenticated: true, displayName: user.displayName,
+    partners: user.memberships.map(m => ({ id: m.partner.id, name: m.partner.name, role: m.role })),
+  });
+}));
+app.delete("/api/partner/session", requireOrigin, (_req, res) => {
+  partnerCookie(res, "", 0);
+  return res.json({ authenticated: false });
+});
+// Creating an invitation grants NO access until the exact Google account
+// proves its verified email and permanently binds the Google subject.
+app.post("/api/admin/partners/invite", ...[authenticated, requireOrigin], safe(async (req, res) => {
+  const input = z.object({
+    partnerName: z.string().trim().min(2).max(120).optional(),
+    partnerId: z.string().cuid().optional(),
+    email: z.string().email().max(254),
+  }).strict().refine(value => Boolean(value.partnerName) !== Boolean(value.partnerId), {
+    message: "Supply exactly one of partnerName or partnerId",
+  }).parse(req.body);
+  const emailNormalized = input.email.trim().toLowerCase();
+  const result = await prisma.$transaction(async tx => {
+    // An existing workspace is selected by its opaque ID, never by a
+    // non-unique display name. The admin session is required by this route.
+    let user = await tx.partnerUser.findUnique({ where: { emailNormalized } });
+    if (user && !input.partnerId) {
+      return { status: 409, error: "Existing identity requires a workspace ID" };
+    }
+    const partner = input.partnerId
+      ? await tx.partner.findUnique({ where: { id: input.partnerId } })
+      : await tx.partner.create({ data: { name: input.partnerName } });
+    if (!partner) return { status: 404, error: "Partner workspace not found" };
+    if (!user) user = await tx.partnerUser.create({ data: { emailNormalized } });
+    const membership = await tx.partnerMembership.findUnique({
+      where: { partnerId_userId: { partnerId: partner.id, userId: user.id } },
+    });
+    if (membership?.revokedAt) {
+      return { status: 409, error: "Revoked membership requires explicit administrator reactivation" };
+    }
+    if (membership) return { status: 200, partnerId: partner.id, membershipId: membership.id,
+      invited: true, existing: true };
+    const created = await tx.partnerMembership.create({
+      data: { userId: user.id, partnerId: partner.id },
+    });
+    await tx.auditEvent.create({ data: { actorId: "admin",
+      action: "partner.invited", entityId: partner.id } });
+    return { status: 201, partnerId: partner.id, membershipId: created.id, invited: true };
+  }).catch(error => {
+    if (error?.code === "P2002") return { status: 409, error: "Concurrent invitation conflict; retry with the workspace ID" };
+    throw error;
+  });
+  if (result.membershipId && result.status === 201) {
+    const delivery = await deliverPartnerInvitation(prisma, result.membershipId);
+    return res.status(201).json({ ...result, emailStatus: delivery.status });
+  }
+  return res.status(result.status).json(result);
+}));
+app.get("/api/admin/partners/invitations", authenticated, safe(async (_req, res) => {
+  const rows = await prisma.partnerMembership.findMany({
+    take: 500, orderBy: { createdAt: "desc" },
+    include: { partner: { select: { id: true, name: true } },
+      user: { select: { emailNormalized: true } } },
+  });
+  return res.json({ emailConfigured: Boolean(invitationEmailConfig()),
+    invitations: rows.map(m => ({
+      id: m.id, workspaceId: m.partnerId, workspace: m.partner.name,
+      email: m.user.emailNormalized, status: publicInvitationStatus(m),
+      sentAt: m.inviteSentAt, acceptedAt: m.acceptedAt,
+      leaseUntil: m.inviteLeaseUntil,
+      errorCode: m.inviteErrorCode, attempt: m.inviteAttempt,
+    })) });
+}));
+app.post("/api/admin/partners/invitations/:id/resend", authenticated, requireOrigin,
+  safe(async (req, res) => {
+    const input = z.object({ newAttempt: z.boolean().optional() }).strict().parse(req.body ?? {});
+    const member = await prisma.partnerMembership.findUnique({ where: { id: req.params.id } });
+    if (!member) return res.status(404).json({ error: "Invitation not found" });
+    if (member.revokedAt || member.acceptedAt) return res.status(409).json({ error: "Invitation no longer pending" });
+    if (member.inviteStatus === "SENDING" &&
+        (!member.inviteLeaseUntil || member.inviteLeaseUntil.getTime() > Date.now())) {
+      return res.status(409).json({ error: "Invitation send is in progress; verify delivery before retrying" });
+    }
+    if (member.inviteStatus === "SENT" && !input.newAttempt) {
+      return res.status(409).json({ error: "Invitation already sent. Confirm a new attempt explicitly." });
+    }
+    if (input.newAttempt) {
+      // Compare the exact attempt and lease observed above. An expired lease
+      // may have been reclaimed by another request since the initial read.
+      const reset = await resetInvitationAttempt(prisma, member);
+      if (!reset) return res.status(409).json({ error: "Invitation state changed; refresh and retry" });
+    }
+    const delivery = await deliverPartnerInvitation(prisma, member.id);
+    return res.json({ emailStatus: delivery.status });
+  }));
+app.get("/api/admin/partners", authenticated, safe(async (_req, res) => {
+  const partners = await prisma.partner.findMany({
+    select: { id: true, name: true }, orderBy: { createdAt: "desc" }, take: 500,
+  });
+  return res.json({ partners });
+}));
+app.get("/api/auth/google/start", loginLimiter, (req, res) => {
+  if (!google) return res.status(503).json({ error: "Google login not configured" });
+  const flow = createGoogleFlow(google, env.SESSION_SIGNING_KEY);
+  res.cookie("pilot_google_flow", flow.cookie, {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production",
+    path: "/api/auth/google", maxAge: 10 * 60_000,
+  });
+  return res.redirect(302, flow.url);
+});
+app.get("/api/auth/google/callback", safe(async (req, res) => {
+  // Always clear one-time state before evaluating the authorization response.
+  const cookie = req.cookies?.pilot_google_flow;
+  res.clearCookie("pilot_google_flow", {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production",
+    path: "/api/auth/google",
+  });
+  if (!google || typeof req.query.state !== "string" ||
+      typeof req.query.code !== "string" || req.query.error) {
+    return res.status(400).send("Google login could not be completed");
+  }
+  const flow = verifyGoogleFlow(cookie, req.query.state, env.SESSION_SIGNING_KEY);
+  if (!flow) return res.status(403).send("Google login expired or invalid");
+  let identity;
+  try {
+    const idToken = await exchangeGoogleCode(req.query.code, flow, google);
+    identity = await verifyGoogleIdToken(idToken, google, flow.nonce);
+  } catch {
+    return res.status(403).send("Google authentication failed");
+  }
+  const user = await prisma.partnerUser.findUnique({
+    where: { emailNormalized: identity.emailNormalized },
+    include: { memberships: { where: { revokedAt: null }, select: { id: true } } },
+  });
+  if (!user?.memberships.length || (user.googleSub && user.googleSub !== identity.googleSub)) {
+    return res.status(403).send("This Google account has not been invited");
+  }
+  if (!user.googleSub) {
+    // A previous successful binding cannot be silently replaced by a later
+    // login or a concurrent attempt with a different Google account.
+    const bound = await prisma.$transaction(async tx => {
+      const updated = await tx.partnerUser.updateMany({
+        where: { id: user.id, googleSub: null },
+        data: { googleSub: identity.googleSub, displayName: identity.displayName },
+      });
+      if (updated.count !== 1) return false;
+      await tx.auditEvent.create({ data: {
+        actorId: user.id, action: "partner.google.bound", entityId: user.id,
+      } });
+      return true;
+    }).catch(() => false);
+    if (!bound) return res.status(403).send("Google identity binding failed");
+  }
+  // An invitation is accepted only after the invited Google identity has
+  // successfully completed the real OIDC callback.
+  await prisma.partnerMembership.updateMany({
+    where: { userId: user.id, revokedAt: null, acceptedAt: null },
+    data: { acceptedAt: new Date() },
+  });
+  partnerCookie(res, createPartnerSession(user.id, env.SESSION_SIGNING_KEY), 8 * 60 * 60_000);
+  return res.redirect(303, "/");
+}));
 const write = [authenticated, requireOrigin];
 // Free discovery: explicit RSS/Atom sources, no paid people-search API.
 // Each scan is a bounded, admin-triggered read. Imports require separate review.
