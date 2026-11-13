@@ -57,7 +57,7 @@ export function verifyGoogleDataFlow(cookie, state, signingKey, now = Date.now()
   if (!flow || flow.purpose !== "google_data" || !Number.isSafeInteger(flow.expires) ||
       flow.expires <= now || flow.expires > now + FLOW_TTL_MS ||
       typeof state !== "string" || !/^[\w-]{43}$/.test(state) ||
-      !/^[\\w-]{43}$/.test(flow.state ?? "") ||
+      !/^[\w-]{43}$/.test(flow.state ?? "") ||
       !timingSafeEqual(Buffer.from(state), Buffer.from(flow.state)) ||
       !/^[\w-]{43}$/.test(flow.verifier ?? "") ||
       !/^[\w-]{43}$/.test(flow.nonce ?? "") ||
