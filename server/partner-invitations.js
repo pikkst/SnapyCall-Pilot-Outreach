@@ -125,3 +125,38 @@ export async function deliverPartnerInvitation(prisma, membershipId, env = proce
   });
   return { status: done.count ? outcome : "UNKNOWN" };
 }
+
+/**
+ * Atomically start a new provider attempt only if the row is unchanged.
+ * An expired SENDING lease is eligible, but a concurrently renewed lease
+ * cannot be overwritten. This preserves the one-key-per-attempt contract.
+ */
+export async function resetInvitationAttempt(prisma, member, now = new Date()) {
+  if (!member || member.acceptedAt || member.revokedAt) return false;
+  if (member.inviteStatus === "SENDING" &&
+      (!member.inviteLeaseUntil || member.inviteLeaseUntil.getTime() > now.getTime())) return false;
+  if (!["SENT", "FAILED", "PENDING", "UNCONFIGURED", "MANUAL_REVIEW", "SENDING"].includes(member.inviteStatus)) return false;
+  const where = {
+    id: member.id,
+    inviteStatus: member.inviteStatus,
+    inviteAttempt: member.inviteAttempt,
+    inviteAttemptAt: member.inviteAttemptAt,
+    inviteLeaseUntil: member.inviteLeaseUntil,
+    acceptedAt: null,
+    revokedAt: null,
+  };
+  if (member.inviteStatus === "SENDING") {
+    // The comparison above checks identity of the old lease; this additional
+    // condition also requires it to be expired at the update instant.
+    where.AND = [{ inviteLeaseUntil: { lte: now } }];
+  }
+  const result = await prisma.partnerMembership.updateMany({
+    where,
+    data: {
+      inviteAttempt: { increment: 1 }, inviteAttemptAt: null,
+      inviteLeaseUntil: null, inviteProviderId: null,
+      inviteErrorCode: null, inviteStatus: "PENDING",
+    },
+  });
+  return result.count === 1;
+}
