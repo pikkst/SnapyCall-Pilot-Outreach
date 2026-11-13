@@ -155,6 +155,12 @@ app.post("/api/admin/partners/invite", ...[authenticated, requireOrigin], safe(a
   });
   return res.status(result.status).json(result);
 }));
+app.get("/api/admin/partners", authenticated, safe(async (_req, res) => {
+  const partners = await prisma.partner.findMany({
+    select: { id: true, name: true }, orderBy: { createdAt: "desc" }, take: 500,
+  });
+  return res.json({ partners });
+}));
 app.get("/api/auth/google/start", loginLimiter, (req, res) => {
   if (!google) return res.status(503).json({ error: "Google login not configured" });
   const flow = createGoogleFlow(google, env.SESSION_SIGNING_KEY);
