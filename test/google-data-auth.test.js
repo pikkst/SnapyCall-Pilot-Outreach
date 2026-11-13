@@ -46,6 +46,8 @@ test("data OAuth requires explicit granted scopes and a refresh token", async ()
   const tokens = await exchangeGoogleDataCode("code", flow, config, fetcher);
   assert.equal(tokens.refresh_token, "refresh-token-only-for-testing");
   assert.equal(requiredScopesGranted("openid email"), false);
+  assert.equal(requiredScopesGranted(DATA_SCOPES.filter(s => s !== "email").join(" ") +
+    " https://www.googleapis.com/auth/userinfo.email"), true);
   await assert.rejects(() => exchangeGoogleDataCode("code", flow, config,
     async () => ({ ok: true, json: async () => ({ id_token: "mock", scope: DATA_SCOPES.join(" ") }) })));
   const secret = "a".repeat(64);
