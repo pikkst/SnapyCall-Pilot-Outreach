@@ -153,6 +153,48 @@ try {
     await reviewDb.$disconnect();
   }
 
+  // An invited partner is an independent identity, never an admin alias.
+  const partnerDb = new (await import("@prisma/client")).PrismaClient();
+  try {
+    const inviteUrl = "/admin/partners/invite";
+    assert.equal((await call(inviteUrl, { method: "POST", headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ partnerName: "Test Partner", email: "partner@example.org" }) })).status, 401);
+    assert.equal((await call(inviteUrl, { method: "POST", headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ partnerName: "Test Partner", email: "partner@example.org" }) })).status, 403);
+    const invite = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerName: "Test Partner", email: "partner@example.org" }) });
+    assert.equal(invite.status, 201);
+    assert.equal((await call(inviteUrl, { method: "POST", headers: protectedHeaders,
+      body: JSON.stringify({ partnerName: "Other workspace", email: "partner@example.org" }) })).status, 409);
+    const member = await partnerDb.partnerUser.findUnique({ where: { emailNormalized: "partner@example.org" } });
+    assert.ok(member);
+    assert.equal(member.googleSub, null, "Inviting alone cannot sign a Google account in");
+    // Unit tests validate real Google signatures and OAuth flow; in the HTTP
+    // test, simulate an already verified and bound identity in disposable DB.
+    await partnerDb.partnerUser.update({ where: { id: member.id },
+      data: { googleSub: "google-test-sub" } });
+    const { createPartnerSession } = await import("../server/google-auth.js");
+    const partnerCookie = "pilot_partner_session=" +
+      createPartnerSession(member.id, env.SESSION_SIGNING_KEY);
+    const partnerResponse = await call("/partner/session", { headers: { cookie: partnerCookie } });
+    assert.equal(partnerResponse.status, 200);
+    const partner = await partnerResponse.json();
+    assert.equal(partner.authenticated, true);
+    assert.deepEqual(partner.partners.map(p => p.name), ["Test Partner"]);
+    assert.equal((await call("/candidates", { headers: { cookie: partnerCookie } })).status, 401);
+    assert.equal((await call("/ai-settings", { headers: { cookie: partnerCookie } })).status, 401);
+    assert.equal((await call(inviteUrl, { method: "POST",
+      headers: { origin, cookie: partnerCookie, "content-type": "application/json" },
+      body: JSON.stringify({ partnerName: "Attack", email: "new@example.org" }) })).status, 401);
+    await partnerDb.partnerMembership.updateMany({ where: { userId: member.id },
+      data: { revokedAt: new Date() } });
+    const revoked = await call("/partner/session", { headers: { cookie: partnerCookie } });
+    assert.deepEqual(await revoked.json(), { authenticated: false },
+      "Membership revocation must take effect immediately");
+  } finally {
+    await partnerDb.$disconnect();
+  }
+
   const saving = await call("/ai-settings", { method: "PUT", headers: protectedHeaders,
     body: JSON.stringify({ provider: "gemini", model: "gemini-2.5-flash", apiKey: "test-only-provider-secret-value" }),
   });
