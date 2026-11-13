@@ -6,7 +6,7 @@ type PartnerSession = { authenticated: boolean; displayName?: string | null; par
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
 type PartnerInvitation = { id: string; workspaceId: string; workspace: string;
   email: string; status: string; sentAt: string | null; acceptedAt: string | null;
-  errorCode: string | null; attempt: number };
+  leaseUntil: string | null; errorCode: string | null; attempt: number };
 type ConnectionStatus = "loading" | "ready" | "unavailable";
 type ConnectionResponse = { connections: GoogleConnection[]; available: boolean };
 type Candidate = {
@@ -499,7 +499,9 @@ function App() {
               <td>{invite.email}</td>
               <td>{invite.status === "SENT" ? "Sent (provider accepted)" : invite.status}
                 {invite.errorCode ? " · " + invite.errorCode : ""}</td>
-              <td>{["PENDING", "FAILED", "UNCONFIGURED", "MANUAL_REVIEW"].includes(invite.status) ?
+              <td>{(["PENDING", "FAILED", "UNCONFIGURED", "MANUAL_REVIEW"].includes(invite.status) ||
+                (invite.status === "SENDING" && invite.leaseUntil &&
+                  Date.parse(invite.leaseUntil) <= Date.now())) ?
                 <button type="button" className="secondary" disabled={busy || !inviteEmailConfigured}
                   onClick={() => resendPartnerInvite(invite.id, invite.status === "MANUAL_REVIEW")}>
                   {invite.status === "MANUAL_REVIEW" ? "Send new attempt" : "Retry invitation"}
