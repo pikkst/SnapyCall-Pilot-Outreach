@@ -428,6 +428,18 @@ try {
     const suggestions = await call("/candidates/" + lead.id + "/possible-duplicates", { headers: { cookie } });
     assert.equal(suggestions.status, 200);
     assert.deepEqual((await suggestions.json()).suggestions, []);
+    // Historical candidate profiles may be HTTP under the existing contract.
+    // Identity hints must not reject an otherwise readable legacy record.
+    const legacyHttp = await evidenceDb.candidate.create({ data: {
+      name: "Legacy HTTP Profile", category: "COACHING",
+      sourceUrl: "https://example.org/articles/legacy",
+      expertProfileUrl: "http://legacy.example.org/expert",
+      onlineEnglish: false,
+    } });
+    const legacyHints = await call("/candidates/" + legacyHttp.id + "/possible-duplicates",
+      { headers: { cookie } });
+    assert.equal(legacyHints.status, 200, "Legacy HTTP profile must not yield 400");
+    assert.deepEqual((await legacyHints.json()).suggestions, []);
     const untouched = await evidenceDb.candidate.findUnique({ where: { id: lead.id } });
     assert.equal(untouched.profileReviewed, true);
     assert.equal(untouched.sourceUrl, "https://example.org/articles/automation");
