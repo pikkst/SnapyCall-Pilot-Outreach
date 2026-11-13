@@ -25,7 +25,14 @@ export function canonicalEvidenceUrl(value) {
 
 export function sameIdentityHints(candidate, others) {
   const source = candidate.expertProfileUrl;
-  const profile = source ? canonicalEvidenceUrl(source) : null;
+  // Historical Candidate.expertProfileUrl values may be HTTP: the existing
+  // candidate contract accepts them, but evidence URLs require HTTPS.
+  // An uncanonicalizable legacy profile is not a duplicate identity signal.
+  let profile = null;
+  if (source) {
+    try { profile = canonicalEvidenceUrl(source); }
+    catch { /* Keep the candidate readable; do not infer a profile match. */ }
+  }
   const email = typeof candidate.emailNormalized === "string" ? candidate.emailNormalized.toLowerCase() : null;
   return others.filter(other => other.id !== candidate.id).flatMap(other => {
     const reasons = [];
