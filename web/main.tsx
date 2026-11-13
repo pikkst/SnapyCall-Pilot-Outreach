@@ -47,6 +47,8 @@ function App() {
   const [partnerSession, setPartnerSession] = useState<PartnerSession | null>(null);
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
+  const [partnerTarget, setPartnerTarget] = useState("new");
+  const [partnerWorkspaces, setPartnerWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -71,14 +73,16 @@ function App() {
   });
 
   async function load() {
-    const [c, d, s] = await Promise.all([
+    const [c, d, s, workspaces] = await Promise.all([
       api<Candidate[]>("/candidates"),
       api<Draft[]>("/drafts"),
       api<AiSetting>("/ai-settings"),
+      api<{ partners: Array<{ id: string; name: string }> }>("/admin/partners"),
     ]);
     setCandidates(c);
     setDrafts(d);
     setSetting(s);
+    setPartnerWorkspaces(workspaces.partners);
     const sources = await api<{ feeds: string[] }>("/discovery/sources");
     setFeeds(sources.feeds);
     setSelectedFeed((previous) => sources.feeds.includes(previous) ? previous : (sources.feeds[0] ?? ""));
@@ -126,9 +130,11 @@ function App() {
     event.preventDefault();
     await execute(async () => {
       await api("/admin/partners/invite", { method: "POST", body: JSON.stringify({
-        partnerName, email: partnerEmail,
+        ...(partnerTarget === "new" ? { partnerName } : { partnerId: partnerTarget }),
+        email: partnerEmail,
       }) });
       setPartnerName(""); setPartnerEmail("");
+      await load();
       setNotice("Partner access provisioned. No email was sent; share the sign-in URL securely.");
     });
   }
@@ -383,8 +389,16 @@ function App() {
           <h2>Invite a partner</h2>
           <p className="muted">Provision a partner workspace for a verified Google account. This does not send an invitation email or share existing admin data.</p>
           <form onSubmit={invitePartner}>
-            <label>Workspace name<input required maxLength={120} value={partnerName}
-              onChange={e => setPartnerName(e.target.value)} placeholder="Example: Gary / SnapyCall" /></label>
+            <label>Workspace
+              <select value={partnerTarget} onChange={e => setPartnerTarget(e.target.value)}>
+                <option value="new">Create a new workspace</option>
+                {partnerWorkspaces.map(workspace => (
+                  <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                ))}
+              </select>
+            </label>
+            {partnerTarget === "new" && <label>Workspace name<input required maxLength={120} value={partnerName}
+              onChange={e => setPartnerName(e.target.value)} placeholder="Example: Gary / SnapyCall" /></label>}
             <label>Invited Google email<input required type="email" value={partnerEmail}
               onChange={e => setPartnerEmail(e.target.value)} placeholder="partner@example.com" /></label>
             <button type="submit" disabled={busy}>Provision partner access</button>
