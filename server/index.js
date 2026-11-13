@@ -129,14 +129,14 @@ app.post("/api/admin/partners/invite", ...[authenticated, requireOrigin], safe(a
   const result = await prisma.$transaction(async tx => {
     // An existing workspace is selected by its opaque ID, never by a
     // non-unique display name. The admin session is required by this route.
-    const partner = input.partnerId
-      ? await tx.partner.findUnique({ where: { id: input.partnerId } })
-      : await tx.partner.create({ data: { name: input.partnerName } });
-    if (!partner) return { status: 404, error: "Partner workspace not found" };
     let user = await tx.partnerUser.findUnique({ where: { emailNormalized } });
     if (user && !input.partnerId) {
       return { status: 409, error: "Existing identity requires a workspace ID" };
     }
+    const partner = input.partnerId
+      ? await tx.partner.findUnique({ where: { id: input.partnerId } })
+      : await tx.partner.create({ data: { name: input.partnerName } });
+    if (!partner) return { status: 404, error: "Partner workspace not found" };
     if (!user) user = await tx.partnerUser.create({ data: { emailNormalized } });
     const membership = await tx.partnerMembership.findUnique({
       where: { partnerId_userId: { partnerId: partner.id, userId: user.id } },
