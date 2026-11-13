@@ -4,6 +4,9 @@ import "./style.css";
 
 type PartnerSession = { authenticated: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
+type PartnerInvitation = { id: string; workspaceId: string; workspace: string;
+  email: string; status: string; sentAt: string | null; acceptedAt: string | null;
+  errorCode: string | null; attempt: number };
 type ConnectionStatus = "loading" | "ready" | "unavailable";
 type ConnectionResponse = { connections: GoogleConnection[]; available: boolean };
 type Candidate = {
@@ -55,6 +58,9 @@ function App() {
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
   const [partnerWorkspaces, setPartnerWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
+  const [partnerInvitations, setPartnerInvitations] = useState<PartnerInvitation[]>([]);
+  const [inviteEmailConfigured, setInviteEmailConfigured] = useState(false);
+  const [inviteReceipt, setInviteReceipt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -79,16 +85,19 @@ function App() {
   });
 
   async function load() {
-    const [c, d, s, workspaces] = await Promise.all([
+    const [c, d, s, workspaces, invitations] = await Promise.all([
       api<Candidate[]>("/candidates"),
       api<Draft[]>("/drafts"),
       api<AiSetting>("/ai-settings"),
       api<{ partners: Array<{ id: string; name: string }> }>("/admin/partners"),
+      api<{ invitations: PartnerInvitation[]; emailConfigured: boolean }>("/admin/partners/invitations"),
     ]);
     setCandidates(c);
     setDrafts(d);
     setSetting(s);
     setPartnerWorkspaces(workspaces.partners);
+    setPartnerInvitations(invitations.invitations);
+    setInviteEmailConfigured(invitations.emailConfigured);
     const sources = await api<{ feeds: string[] }>("/discovery/sources");
     setFeeds(sources.feeds);
     setSelectedFeed((previous) => sources.feeds.includes(previous) ? previous : (sources.feeds[0] ?? ""));
@@ -162,13 +171,33 @@ function App() {
   async function invitePartner(event: React.FormEvent) {
     event.preventDefault();
     await execute(async () => {
-      await api("/admin/partners/invite", { method: "POST", body: JSON.stringify({
-        ...(partnerTarget === "new" ? { partnerName } : { partnerId: partnerTarget }),
-        email: partnerEmail,
-      }) });
+      const receipt = await api<{ emailStatus?: string; existing?: boolean }>("/admin/partners/invite", {
+        method: "POST", body: JSON.stringify({
+          ...(partnerTarget === "new" ? { partnerName } : { partnerId: partnerTarget }),
+          email: partnerEmail,
+        }),
+      });
+      const emailSent = receipt.emailStatus === "SENT";
+      const status = receipt.existing ? "Already provisioned — no duplicate invitation sent."
+        : emailSent ? "Access provisioned and invitation accepted by email provider."
+        : "Access provisioned. Invitation email " +
+          (receipt.emailStatus === "UNCONFIGURED" ? "not sent: email provider not configured."
+            : "not confirmed (" + (receipt.emailStatus ?? "UNKNOWN") + ").");
+      setInviteReceipt(status);
       setPartnerName(""); setPartnerEmail("");
       await load();
-      setNotice("Partner access provisioned. No email was sent; share the sign-in URL securely.");
+      setNotice(status);
+    });
+  }
+
+  async function resendPartnerInvite(id: string, newAttempt: boolean) {
+    if (newAttempt && !window.confirm("Send a new invitation email? This may duplicate a previous message.")) return;
+    await execute(async () => {
+      const result = await api<{ emailStatus: string }>("/admin/partners/invitations/" +
+        encodeURIComponent(id) + "/resend", { method: "POST",
+        body: JSON.stringify({ newAttempt }) });
+      await load();
+      setNotice("Invitation send status: " + result.emailStatus);
     });
   }
 
@@ -444,7 +473,9 @@ function App() {
         <p className="hint">Model usage may incur provider charges. Never paste a key into chat or GitHub. Changing providers requires a new key.</p>
         <section className="panel">
           <h2>Invite a partner</h2>
-          <p className="muted">Provision a partner workspace for a verified Google account. This does not send an invitation email or share existing admin data.</p>
+          <p className="muted">Provision a workspace for an invited Google identity. If email delivery is configured, an invitation is sent using the configured provider. No admin-scoped data is shared.</p>
+          {!inviteEmailConfigured && <p role="status" className="hint">Invitation email is not configured. Access will be provisioned, but no email will be sent until RESEND_API_KEY and PARTNER_INVITE_FROM are set.</p>}
+          {inviteReceipt && <p role="status" className="success">{inviteReceipt}</p>}
           <form onSubmit={invitePartner}>
             <label>Workspace
               <select value={partnerTarget} onChange={e => setPartnerTarget(e.target.value)}>
@@ -458,8 +489,27 @@ function App() {
               onChange={e => setPartnerName(e.target.value)} placeholder="Example: Gary / SnapyCall" /></label>}
             <label>Invited Google email<input required type="email" value={partnerEmail}
               onChange={e => setPartnerEmail(e.target.value)} placeholder="partner@example.com" /></label>
-            <button type="submit" disabled={busy}>Provision partner access</button>
+            <button type="submit" disabled={busy}>Provision partner access and invite</button>
           </form>
+          <h3>Partner invitations</h3>
+          <div className="table-scroll"><table>
+            <thead><tr><th>Workspace</th><th>Google account</th><th>Invitation</th><th>Action</th></tr></thead>
+            <tbody>{partnerInvitations.map(invite => <tr key={invite.id}>
+              <td>{invite.workspace}</td>
+              <td>{invite.email}</td>
+              <td>{invite.status === "SENT" ? "Sent (provider accepted)" : invite.status}
+                {invite.errorCode ? " · " + invite.errorCode : ""}</td>
+              <td>{["PENDING", "FAILED", "UNCONFIGURED", "MANUAL_REVIEW"].includes(invite.status) ?
+                <button type="button" className="secondary" disabled={busy || !inviteEmailConfigured}
+                  onClick={() => resendPartnerInvite(invite.id, invite.status === "MANUAL_REVIEW")}>
+                  {invite.status === "MANUAL_REVIEW" ? "Send new attempt" : "Retry invitation"}
+                </button> : invite.status === "SENT" ?
+                <button type="button" className="secondary" disabled={busy || !inviteEmailConfigured}
+                  onClick={() => resendPartnerInvite(invite.id, true)}>Send again</button> :
+                <span>—</span>}</td>
+            </tr>)}</tbody>
+          </table></div>
+          {!partnerInvitations.length && <p className="muted">No invitations yet.</p>}
         </section>
 
         {setting.keyConfigured && <button className="danger" disabled={busy} onClick={() => execute(async () => { await api("/ai-settings", { method: "DELETE" }); await load(); setNotice("Saved AI credential deleted."); })}>Delete stored key</button>}
