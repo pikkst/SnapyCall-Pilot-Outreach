@@ -17,6 +17,8 @@ import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCo
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
 import { googleDataConfig, createGoogleDataFlow, verifyGoogleDataFlow,
   exchangeGoogleDataCode } from "./google-data-auth.js";
+import { deliverPartnerInvitation, publicInvitationStatus,
+  invitationEmailConfig } from "./partner-invitations.js";
 
 const env = requireRuntimeConfig();
 const google = googleOAuthConfig(env);
@@ -246,17 +248,59 @@ app.post("/api/admin/partners/invite", ...[authenticated, requireOrigin], safe(a
     if (membership?.revokedAt) {
       return { status: 409, error: "Revoked membership requires explicit administrator reactivation" };
     }
-    if (membership) return { status: 200, partnerId: partner.id, invited: true, existing: true };
-    await tx.partnerMembership.create({ data: { userId: user.id, partnerId: partner.id } });
+    if (membership) return { status: 200, partnerId: partner.id, membershipId: membership.id,
+      invited: true, existing: true };
+    const created = await tx.partnerMembership.create({
+      data: { userId: user.id, partnerId: partner.id },
+    });
     await tx.auditEvent.create({ data: { actorId: "admin",
       action: "partner.invited", entityId: partner.id } });
-    return { status: 201, partnerId: partner.id, invited: true };
+    return { status: 201, partnerId: partner.id, membershipId: created.id, invited: true };
   }).catch(error => {
     if (error?.code === "P2002") return { status: 409, error: "Concurrent invitation conflict; retry with the workspace ID" };
     throw error;
   });
+  if (result.membershipId && result.status === 201) {
+    const delivery = await deliverPartnerInvitation(prisma, result.membershipId);
+    return res.status(201).json({ ...result, emailStatus: delivery.status });
+  }
   return res.status(result.status).json(result);
 }));
+app.get("/api/admin/partners/invitations", authenticated, safe(async (_req, res) => {
+  const rows = await prisma.partnerMembership.findMany({
+    take: 500, orderBy: { createdAt: "desc" },
+    include: { partner: { select: { id: true, name: true } },
+      user: { select: { emailNormalized: true } } },
+  });
+  return res.json({ emailConfigured: Boolean(invitationEmailConfig()),
+    invitations: rows.map(m => ({
+      id: m.id, workspaceId: m.partnerId, workspace: m.partner.name,
+      email: m.user.emailNormalized, status: publicInvitationStatus(m),
+      sentAt: m.inviteSentAt, acceptedAt: m.acceptedAt,
+      errorCode: m.inviteErrorCode, attempt: m.inviteAttempt,
+    })) });
+}));
+app.post("/api/admin/partners/invitations/:id/resend", authenticated, requireOrigin,
+  safe(async (req, res) => {
+    const input = z.object({ newAttempt: z.boolean().optional() }).strict().parse(req.body ?? {});
+    const member = await prisma.partnerMembership.findUnique({ where: { id: req.params.id } });
+    if (!member) return res.status(404).json({ error: "Invitation not found" });
+    if (member.revokedAt || member.acceptedAt) return res.status(409).json({ error: "Invitation no longer pending" });
+    if (member.inviteStatus === "SENDING") return res.status(409).json({ error: "Invitation send is in progress; verify delivery before retrying" });
+    if (member.inviteStatus === "SENT" && !input.newAttempt) {
+      return res.status(409).json({ error: "Invitation already sent. Confirm a new attempt explicitly." });
+    }
+    if (input.newAttempt) {
+      const reset = await prisma.partnerMembership.updateMany({
+        where: { id: member.id, inviteStatus: member.inviteStatus, acceptedAt: null, revokedAt: null },
+        data: { inviteAttempt: { increment: 1 }, inviteAttemptAt: null, inviteLeaseUntil: null,
+          inviteProviderId: null, inviteErrorCode: null, inviteStatus: "PENDING" },
+      });
+      if (!reset.count) return res.status(409).json({ error: "Invitation state changed; refresh and retry" });
+    }
+    const delivery = await deliverPartnerInvitation(prisma, member.id);
+    return res.json({ emailStatus: delivery.status });
+  }));
 app.get("/api/admin/partners", authenticated, safe(async (_req, res) => {
   const partners = await prisma.partner.findMany({
     select: { id: true, name: true }, orderBy: { createdAt: "desc" }, take: 500,
@@ -315,6 +359,12 @@ app.get("/api/auth/google/callback", safe(async (req, res) => {
     }).catch(() => false);
     if (!bound) return res.status(403).send("Google identity binding failed");
   }
+  // An invitation is accepted only after the invited Google identity has
+  // successfully completed the real OIDC callback.
+  await prisma.partnerMembership.updateMany({
+    where: { userId: user.id, revokedAt: null, acceptedAt: null },
+    data: { acceptedAt: new Date() },
+  });
   partnerCookie(res, createPartnerSession(user.id, env.SESSION_SIGNING_KEY), 8 * 60 * 60_000);
   return res.redirect(303, "/");
 }));
