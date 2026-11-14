@@ -72,3 +72,25 @@ are independent of the app's ledger.
 5. Separate small real-provider staging smoke approved with a bounded test
    budget. **Do not** enable `AI_WEB_RESEARCH_ENABLED` or automatic sending
    as part of this investigation.
+
+## Billing evidence boundary (2026-11-15 follow-up)
+
+A provider search response may contain plausible token and search-request
+counts without representing **all** billable units. In particular, Claude
+cache write/read premiums, OpenAI search context input, and Gemini grounded
+prompts or thinking tokens can have different charging semantics.
+
+`calculateVerifiedSpendCents` now requires exact matching provider,
+tariff-unit and version identifiers, with a **complete provider billing
+evidence contract** before a partial refund is possible. The existing
+OpenAI, Gemini and Anthropic adapters cannot currently certify that contract,
+so all their successful and failed calls would conservatively retain the
+full reserved worst-case amount. This protects the budget but is not
+accurate financial reporting and is not a release-ready invoice cap.
+
+The new test-only complete evidence fixture is synthetic and must not be
+used to assert that any real provider is verified. Only a versioned,
+reviewed adapter that extracts all required units from authenticated
+provider metadata may set `billingEvidence.complete=true`.
+Never set that marker merely because the tool returned a citation,
+a request count or an output token count.
