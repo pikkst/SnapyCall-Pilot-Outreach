@@ -20,6 +20,7 @@ import {
   validateResearchPreferences, RESEARCH_DAILY_USER_WORKSPACE_LIMIT,
   reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded,
 } from "./research-quota.js";
+import { validateMonthlyBudgetCents } from "./research-budget.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
@@ -579,6 +580,48 @@ app.get("/api/discovery/sources", authenticated, (_req, res) => {
 const researchLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders: "draft-7", legacyHeaders: false });
 // Preferences can be set only by the Google partner who owns the BYOK key.
 // An admin's separate AI setting never grants tenant research authorization.
+// Personal BYOK budget is denominated in USD, the providers' billing
+// currency. It is NOT yet wired to provider calls: missing price bounds must
+// keep AI web research disabled instead of silently promising enforcement.
+app.get("/api/research-budget", aiOwnerAuthenticated, safe(async (req, res) => {
+  const identity = await partnerIdentity(req);
+  if (!identity || identity.id !== req.aiOwnerId) {
+    return res.status(403).json({ error: "Google partner session required" });
+  }
+  const budget = await prisma.researchOwnerBudget.findUnique({
+    where: { ownerId: identity.id },
+    select: { monthlyLimitCents: true },
+  });
+  return res.json({ monthlyLimitCents: budget?.monthlyLimitCents ?? null,
+    currency: "USD", enforcedForPaidSearch: false });
+}));
+app.put("/api/research-budget", aiOwnerAuthenticated, requireOrigin, safe(async (req, res) => {
+  const identity = await partnerIdentity(req);
+  if (!identity || identity.id !== req.aiOwnerId) {
+    return res.status(403).json({ error: "Google partner session required" });
+  }
+  const input = z.object({ monthlyLimitCents: z.number().int().min(100).max(100_000) })
+    .strict().parse(req.body);
+  validateMonthlyBudgetCents(input.monthlyLimitCents);
+  const key = await prisma.aiSetting.findUnique({
+    where: { ownerId: identity.id }, select: { id: true },
+  });
+  if (!key) return res.status(409).json({ error: "Configure your personal API key first" });
+  await prisma.$transaction(async tx => {
+    // This row is the spending lock shared with every reservation. Upserts and
+    // their PostgreSQL row lock serialize limit changes against all workspaces.
+    await tx.researchOwnerBudget.upsert({
+      where: { ownerId: identity.id },
+      create: { ownerId: identity.id, monthlyLimitCents: input.monthlyLimitCents },
+      update: { monthlyLimitCents: input.monthlyLimitCents },
+    });
+    await tx.auditEvent.create({ data: {
+      actorId: identity.id, action: "ai.research-budget.updated",
+      entityId: identity.id, metadata: { currency: "USD", ...input },
+    } });
+  });
+  return res.json({ ...input, currency: "USD", enforcedForPaidSearch: false });
+}));
 app.get("/api/research-limits", aiOwnerAuthenticated, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
   if (!identity || identity.id !== req.aiOwnerId) {
