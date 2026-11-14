@@ -34,6 +34,8 @@ type ResearchPreview = {
 };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
 type ResearchLimits = { dailyLimit: number; maxCandidates: number; maxConcurrent: number };
+type ResearchBudget = { monthlyLimitCents: number | null; currency: "USD";
+  enforcedForPaidSearch: boolean };
 type DuplicateHint = { id: string; reasons: string[] };
 type Evidence = { id: string; kind: string; sourceUrl: string; note: string | null; capturedAt: string };
 type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
@@ -101,6 +103,10 @@ function App() {
   const [researchLimits, setResearchLimits] = useState<ResearchLimits>({ dailyLimit: 2, maxCandidates: 10, maxConcurrent: 1 });
   const [researchLimitsStatus, setResearchLimitsStatus] =
     useState<"loading" | "ready" | "error">("loading");
+  const [researchBudget, setResearchBudget] = useState<ResearchBudget>({
+    monthlyLimitCents: null, currency: "USD", enforcedForPaidSearch: false,
+  });
+  const [budgetStatus, setBudgetStatus] = useState<"loading" | "ready" | "error">("loading");
   const [personalAiStatus, setPersonalAiStatus] = useState<"loading" | "ready" | "error">("loading");
 
   const workspaceRequest = useRef(0);
@@ -190,6 +196,7 @@ function App() {
           await loadGmailStatus();
           await loadPersonalAiSettings();
           await loadResearchLimits();
+          await loadResearchBudget();
         }
       }).catch(() => setError("Unable to reach the authentication API"));
   }, []);
@@ -305,6 +312,28 @@ function App() {
       setResearchStatus("error");
       setResearchError(error instanceof Error ? error.message : "Research unavailable");
     }
+  }
+
+  async function loadResearchBudget() {
+    setBudgetStatus("loading");
+    try {
+      const budget = await api<ResearchBudget>("/research-budget");
+      setResearchBudget(budget);
+      setBudgetStatus("ready");
+    } catch { setBudgetStatus("error"); }
+  }
+
+  async function saveResearchBudget(event: React.FormEvent) {
+    event.preventDefault();
+    if (researchBudget.monthlyLimitCents === null) return;
+    await execute(async () => {
+      const budget = await api<ResearchBudget>("/research-budget", {
+        method: "PUT",
+        body: JSON.stringify({ monthlyLimitCents: researchBudget.monthlyLimitCents }),
+      });
+      setResearchBudget(budget);
+      setNotice("Monthly budget preference saved. Paid AI search is still disabled.");
+    });
   }
 
   async function loadResearchLimits() {
@@ -441,6 +470,8 @@ function App() {
       setPersonalAiStatus("loading");
       setResearchLimits({ dailyLimit: 2, maxCandidates: 10, maxConcurrent: 1 });
       setResearchLimitsStatus("loading");
+      setResearchBudget({ monthlyLimitCents: null, currency: "USD", enforcedForPaidSearch: false });
+      setBudgetStatus("loading");
 
       ++partnerEvidenceRequest.current;
       ++partnerReviewRequest.current;
@@ -977,6 +1008,32 @@ function App() {
               <button type="submit" disabled={busy || !personalAi.keyConfigured}>
                 Save my research limits
               </button>
+            </form>}
+        </section>
+        <section aria-label="Personal AI monthly budget" className="review-panel">
+          <h2>Monthly research budget</h2>
+          <p className="muted">Optional USD limit for your personal API key across
+            every workspace. This preference is stored but not yet applied to
+            billable provider requests. Paid research remains disabled pending
+            accurate provider pricing and spend reconciliation.</p>
+          {budgetStatus === "loading" ? <p className="muted">Loading budget…</p>
+            : budgetStatus === "error" ?
+              <button type="button" className="secondary"
+                onClick={() => void loadResearchBudget()}>Retry loading budget</button>
+            : <form onSubmit={saveResearchBudget}>
+              <label>Budget in USD per UTC month (1–1000)
+                <input type="number" min={1} max={1000} step={1} required
+                  value={researchBudget.monthlyLimitCents === null ? "" :
+                    researchBudget.monthlyLimitCents / 100}
+                  onChange={e => setResearchBudget({ ...researchBudget,
+                    monthlyLimitCents: e.target.value === "" ? null :
+                      Math.round(Number(e.target.value) * 100) })}/>
+              </label>
+              <p className="muted">Provider invoices can differ from estimated usage.
+                No guaranteed billing cap is offered until provider-side
+                spending controls and our reservation contract are verified.</p>
+              <button type="submit" disabled={busy || !personalAi.keyConfigured ||
+                researchBudget.monthlyLimitCents === null}>Save budget preference</button>
             </form>}
         </section>
 
