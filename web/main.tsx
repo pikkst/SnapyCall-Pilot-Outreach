@@ -98,6 +98,15 @@ function App() {
   const [personalAiStatus, setPersonalAiStatus] = useState<"loading" | "ready" | "error">("loading");
 
   const workspaceRequest = useRef(0);
+  const partnerEvidenceRequest = useRef(0);
+  const [partnerEvidenceId, setPartnerEvidenceId] = useState<string | null>(null);
+  const [partnerEvidenceRows, setPartnerEvidenceRows] = useState<Evidence[]>([]);
+  const [partnerEvidenceState, setPartnerEvidenceState] =
+    useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [partnerEvidenceUrl, setPartnerEvidenceUrl] = useState("");
+  const [partnerEvidenceKind, setPartnerEvidenceKind] = useState("PROFILE");
+  const [partnerEvidenceNote, setPartnerEvidenceNote] = useState("");
+  const [partnerEvidenceSaving, setPartnerEvidenceSaving] = useState(false);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [workspaceCandidates, setWorkspaceCandidates] = useState<Candidate[]>([]);
   const [workspaceDrafts, setWorkspaceDrafts] = useState<Draft[]>([]);
@@ -179,6 +188,12 @@ function App() {
   async function viewWorkspace(workspaceId: string) {
     // An earlier response must never render under a newly selected workspace.
     const generation = ++workspaceRequest.current;
+    ++partnerEvidenceRequest.current;
+    setPartnerEvidenceId(null);
+    setPartnerEvidenceRows([]);
+    setPartnerEvidenceState("idle");
+    setPartnerEvidenceUrl("");
+    setPartnerEvidenceNote("");
     setActiveWorkspaceId(workspaceId);
     setResearchResult(null);
     setResearchStatus("idle");
@@ -201,6 +216,60 @@ function App() {
       setWorkspaceCandidates([]);
       setWorkspaceDrafts([]);
       setWorkspaceDataStatus("error");
+    }
+  }
+
+  async function openPartnerEvidence(workspaceId: string, candidateId: string) {
+    if (workspaceId !== activeWorkspaceId) return;
+    const currentWorkspace = workspaceRequest.current;
+    const request = ++partnerEvidenceRequest.current;
+    setPartnerEvidenceId(candidateId);
+    setPartnerEvidenceRows([]);
+    setPartnerEvidenceUrl("");
+    setPartnerEvidenceNote("");
+    setPartnerEvidenceState("loading");
+    try {
+      const items = await api<Evidence[]>("/candidates/" + encodeURIComponent(candidateId) +
+        "/evidence?workspaceId=" + encodeURIComponent(workspaceId));
+      if (currentWorkspace !== workspaceRequest.current ||
+          request !== partnerEvidenceRequest.current) return;
+      setPartnerEvidenceRows(items);
+      setPartnerEvidenceState("ready");
+    } catch {
+      if (currentWorkspace !== workspaceRequest.current ||
+          request !== partnerEvidenceRequest.current) return;
+      setPartnerEvidenceState("error");
+    }
+  }
+
+  async function savePartnerEvidence(workspaceId: string, event: React.FormEvent) {
+    event.preventDefault();
+    const candidateId = partnerEvidenceId;
+    if (!candidateId || activeWorkspaceId !== workspaceId || partnerEvidenceSaving) return;
+    const currentWorkspace = workspaceRequest.current;
+    const request = partnerEvidenceRequest.current;
+    setPartnerEvidenceSaving(true);
+    setError("");
+    try {
+      const url = "/candidates/" + encodeURIComponent(candidateId) +
+        "/evidence?workspaceId=" + encodeURIComponent(workspaceId);
+      await api(url, { method: "POST", body: JSON.stringify({
+        kind: partnerEvidenceKind, sourceUrl: partnerEvidenceUrl,
+        ...(partnerEvidenceNote.trim() ? { note: partnerEvidenceNote.trim() } : {}),
+      }) });
+      const items = await api<Evidence[]>(url);
+      if (currentWorkspace !== workspaceRequest.current ||
+          request !== partnerEvidenceRequest.current) return;
+      setPartnerEvidenceRows(items);
+      setPartnerEvidenceUrl("");
+      setPartnerEvidenceNote("");
+      setNotice("Source evidence saved for manual review. No outreach was authorized.");
+    } catch (err) {
+      if (currentWorkspace !== workspaceRequest.current ||
+          request !== partnerEvidenceRequest.current) return;
+      setError(err instanceof Error ? err.message : "Evidence could not be saved");
+    } finally {
+      setPartnerEvidenceSaving(false);
     }
   }
 
@@ -336,6 +405,10 @@ function App() {
       setPersonalAi({ provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
       setPersonalAiStatus("loading");
 
+      ++partnerEvidenceRequest.current;
+      setPartnerEvidenceId(null);
+      setPartnerEvidenceRows([]);
+      setPartnerEvidenceState("idle");
       setActiveWorkspaceId(null);
       setWorkspaceCandidates([]);
       setWorkspaceDrafts([]);
@@ -606,16 +679,58 @@ function App() {
                   {partnerTab === "candidates" && <>
                     <h3>Candidate pipeline</h3>
                     <div className="table-scroll"><table><thead><tr>
-                      <th>Candidate</th><th>Category</th><th>Region</th><th>Next action</th>
+                      <th>Candidate</th><th>Category</th><th>Region</th><th>Next action</th><th>Review</th>
                     </tr></thead><tbody>
                       {workspaceCandidates.map(c => <tr key={c.id}>
                         <td><strong>{c.name}</strong><small>{c.email ?? "No email"}</small></td>
                         <td>{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td>
                         <td>{c.region ?? "Unconfirmed"}</td>
                         <td>{stageNames[c.qualification.stage] ?? c.qualification.stage}</td>
+                        <td><button type="button" className="secondary" disabled={busy}
+                          onClick={() => void openPartnerEvidence(p.id, c.id)}>Evidence</button></td>
                       </tr>)}
-                      {!workspaceCandidates.length && <tr><td colSpan={4} className="empty">No candidates in this workspace.</td></tr>}
+                      {!workspaceCandidates.length && <tr><td colSpan={5} className="empty">No candidates in this workspace.</td></tr>}
                     </tbody></table></div>
+                    {partnerEvidenceId && <section className="review-panel" aria-label="Partner source evidence">
+                      <h3>Candidate source evidence</h3>
+                      <p className="muted">Review original source links. Evidence does not establish contact consent or authorize sending.</p>
+                      {partnerEvidenceState === "loading" && <p>Loading source evidence…</p>}
+                      {partnerEvidenceState === "error" && <div role="alert">
+                        Could not load source evidence.
+                        <button type="button" className="secondary" onClick={() =>
+                          void openPartnerEvidence(p.id, partnerEvidenceId)}>Retry</button>
+                      </div>}
+                      {partnerEvidenceState === "ready" && <>
+                        {partnerEvidenceRows.length === 0 && <p className="muted">No evidence recorded for this candidate.</p>}
+                        <ul>{partnerEvidenceRows.map(item => <li key={item.id}>
+                          <strong>{item.kind}</strong> · <a href={item.sourceUrl}
+                            target="_blank" rel="noopener noreferrer">Source link</a>
+                          {item.note && <small>{item.note}</small>}
+                        </li>)}</ul>
+                        <form className="form-grid" onSubmit={event => void savePartnerEvidence(p.id, event)}>
+                          <label>Evidence type<select value={partnerEvidenceKind} onChange={event =>
+                            setPartnerEvidenceKind(event.target.value)}>
+                            {["ARTICLE", "PROFILE", "SERVICE", "OTHER"].map(kind =>
+                              <option key={kind} value={kind}>{kind}</option>)}
+                          </select></label>
+                          <label className="wide">Source URL<input type="url" required maxLength={2048}
+                            value={partnerEvidenceUrl} onChange={event =>
+                              setPartnerEvidenceUrl(event.target.value)}/></label>
+                          <label className="wide">Review note (optional)<input maxLength={500}
+                            value={partnerEvidenceNote} onChange={event =>
+                              setPartnerEvidenceNote(event.target.value)}/></label>
+                          <button type="submit" disabled={partnerEvidenceSaving}>
+                            {partnerEvidenceSaving ? "Saving…" : "Save source evidence"}
+                          </button>
+                        </form>
+                      </>}
+                      <button type="button" className="secondary" onClick={() => {
+                        ++partnerEvidenceRequest.current;
+                        setPartnerEvidenceId(null);
+                        setPartnerEvidenceRows([]);
+                        setPartnerEvidenceState("idle");
+                      }}>Close</button>
+                    </section>}
                   </>}
                   {partnerTab === "drafts" && <>
                     <h3>Outreach drafts</h3>
