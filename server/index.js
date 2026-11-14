@@ -371,6 +371,21 @@ app.get("/api/auth/google/callback", safe(async (req, res) => {
   partnerCookie(res, createPartnerSession(user.id, env.SESSION_SIGNING_KEY), 8 * 60 * 60_000);
   return res.redirect(303, "/");
 }));
+// A user's AI credential belongs to their authenticated identity, not a
+// shared workspace. Admin legacy credentials remain in their own record.
+// Dual admin+partner cookies are ambiguous: fail closed rather than silently
+// using the privileged admin key for the Google-authenticated user.
+const aiOwnerAuthenticated = safe(async (req, res, next) => {
+  const admin = verifySession(req.cookies?.pilot_session, env.SESSION_SIGNING_KEY);
+  const partner = await partnerIdentity(req);
+  if (admin && partner) return res.status(409).json({
+    error: "Two active identities. Sign out of one account before changing AI settings",
+  });
+  if (!admin && !partner) return res.status(401).json({ error: "Unauthorized" });
+  req.aiOwnerId = admin ? "admin" : partner.id;
+  return next();
+});
+const aiWrite = [aiOwnerAuthenticated, requireOrigin];
 const write = [authenticated, requireOrigin];
 // Free discovery: explicit RSS/Atom sources, no paid people-search API.
 // Each scan is a bounded, admin-triggered read. Imports require separate review.
@@ -580,16 +595,16 @@ app.post("/api/candidates", ...write, safe(async (req, res) => {
   res.status(201).json({ id: row.id });
 }));
 
-app.get("/api/ai-settings", authenticated, safe(async (_req, res) => {
-  const setting = await prisma.aiSetting.findUnique({ where: { ownerId: "admin" } });
+app.get("/api/ai-settings", aiOwnerAuthenticated, safe(async (req, res) => {
+  const setting = await prisma.aiSetting.findUnique({ where: { ownerId: req.aiOwnerId } });
   res.json(setting ? {
     provider: setting.provider, model: setting.model,
     keyConfigured: true, fingerprint: setting.keyFingerprint,
   } : { provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
 }));
-app.put("/api/ai-settings", ...write, safe(async (req, res) => {
+app.put("/api/ai-settings", ...aiWrite, safe(async (req, res) => {
   const input = aiConfigSchema.parse(req.body);
-  const existing = await prisma.aiSetting.findUnique({ where: { ownerId: "admin" } });
+  const existing = await prisma.aiSetting.findUnique({ where: { ownerId: req.aiOwnerId } });
   if (!input.apiKey && !existing) return res.status(400).json({ error: "API key required" });
   if (!input.apiKey && existing.provider !== input.provider) {
     return res.status(400).json({ error: "New provider requires an API key" });
@@ -600,25 +615,25 @@ app.put("/api/ai-settings", ...write, safe(async (req, res) => {
   const fingerprint = input.apiKey ? keyFingerprint(input.apiKey) : existing.keyFingerprint;
   await prisma.$transaction(async (tx) => {
     await tx.aiSetting.upsert({
-      where: { ownerId: "admin" },
+      where: { ownerId: req.aiOwnerId },
       create: {
-        ownerId: "admin", provider: input.provider, model: input.model,
+        ownerId: req.aiOwnerId, provider: input.provider, model: input.model,
         encryptedApiKey, keyFingerprint: fingerprint,
       },
       update: { provider: input.provider, model: input.model, encryptedApiKey, keyFingerprint: fingerprint },
     });
     await tx.auditEvent.create({ data: {
-      actorId: "admin", action: "ai.settings.updated", entityId: "admin",
+      actorId: req.aiOwnerId, action: "ai.settings.updated", entityId: req.aiOwnerId,
       metadata: { provider: input.provider, model: input.model },
     } });
   });
   res.json({ saved: true, keyConfigured: true, fingerprint });
 }));
-app.delete("/api/ai-settings", ...write, safe(async (_req, res) => {
+app.delete("/api/ai-settings", ...aiWrite, safe(async (req, res) => {
   await prisma.$transaction(async (tx) => {
-    await tx.aiSetting.deleteMany({ where: { ownerId: "admin" } });
+    await tx.aiSetting.deleteMany({ where: { ownerId: req.aiOwnerId } });
     await tx.auditEvent.create({ data: {
-      actorId: "admin", action: "ai.settings.deleted", entityId: "admin",
+      actorId: req.aiOwnerId, action: "ai.settings.deleted", entityId: req.aiOwnerId,
     } });
   });
   res.json({ removed: true });
