@@ -45,6 +45,7 @@ export function calculateVerifiedSpendCents(policy, usage) {
       usage.billingEvidence?.complete !== true ||
       usage.billingEvidence?.provider !== policy.provider ||
       usage.billingEvidence?.contractVersion !== policy.billingContractVersion ||
+      usage.billingEvidence?.billingUnit !== policy.pricing?.billingUnit ||
       !["openai", "anthropic", "gemini"].includes(policy.provider) ||
       typeof policy.billingContractVersion !== "string" ||
       policy.billingContractVersion.length < 1) return null;
