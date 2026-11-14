@@ -350,6 +350,65 @@ try {
     assert.deepEqual(await (await call("/drafts?workspaceId=" + firstWorkspace, {
       headers: { cookie: partnerCookie },
     })).json(), []);
+    // Gary's manual seed workflow: no website crawl, no inferred contact,
+    // tenant-scoped identity, CSRF and stable replay with a canonical URL.
+    const seedUrl = "/candidates?workspaceId=" + firstWorkspace;
+    const manualBody = JSON.stringify({
+      manualSeed: true, name: "Alex Public Expert", category: "COACHING",
+      sourceUrl: "https://directory.example.org/experts/alex?utm_source=test",
+    });
+    const manualHeaders = { cookie: partnerCookie, origin,
+      "content-type": "application/json" };
+    assert.equal((await call(seedUrl, { method: "POST",
+      headers: { cookie: partnerCookie, "content-type": "application/json" },
+      body: manualBody })).status, 403, "Manual source entry must honor Origin");
+    assert.equal((await call("/candidates", { method: "POST",
+      headers: protectedHeaders, body: manualBody })).status, 403,
+      "Legacy admin is not a Google partner");
+    assert.equal((await call("/candidates?workspaceId=" + secondWorkspace, {
+      method: "POST", headers: { cookie: partnerCookie, origin,
+        "content-type": "application/json" },
+      body: JSON.stringify({ ...JSON.parse(manualBody), contactReviewed: true }),
+    })).status, 400, "User must not assert outreach authorization in a seed");
+    const manualFirst = await call(seedUrl, {
+      method: "POST", headers: manualHeaders, body: manualBody,
+    });
+    assert.equal(manualFirst.status, 201);
+    const manualFirstBody = await manualFirst.json();
+    assert.equal(manualFirstBody.created, true);
+    assert.equal(manualFirstBody.reviewRequired, true);
+    assert.equal(manualFirstBody.contactAuthorized, false);
+    const manualReplay = await call(seedUrl, {
+      method: "POST", headers: manualHeaders,
+      body: JSON.stringify({ ...JSON.parse(manualBody),
+        sourceUrl: "https://directory.example.org/experts/alex",
+      }),
+    });
+    assert.equal(manualReplay.status, 200, "Canonical replay cannot duplicate a seed");
+    assert.equal((await manualReplay.json()).id, manualFirstBody.id);
+    const seedRecord = await partnerDb.candidate.findUnique({
+      where: { id: manualFirstBody.id },
+    });
+    assert.equal(seedRecord.workspaceId, firstWorkspace);
+    assert.equal(seedRecord.status, "REVIEW_PENDING");
+    assert.equal(seedRecord.email, null);
+    assert.equal(seedRecord.legalBasis, null);
+    assert.equal(seedRecord.profileReviewed, false);
+    assert.equal(seedRecord.contactReviewed, false);
+    assert.equal(seedRecord.onlineEnglish, false);
+    assert.equal((await partnerDb.auditEvent.count({
+      where: { entityId: manualFirstBody.id, action: "discovery.manual-seed.created" },
+    })), 1, "Replay never writes duplicate audits");
+    const otherTenantSeed = await call(
+      "/candidates?workspaceId=" + secondWorkspace, {
+        method: "POST", headers: manualHeaders, body: manualBody,
+      });
+    assert.equal(otherTenantSeed.status, 201,
+      "The same public professional may be researched in a separate workspace");
+    assert.notEqual((await otherTenantSeed.json()).id, manualFirstBody.id);
+    assert.equal((await call("/candidates?workspaceId=" + firstWorkspace, {
+      method: "POST", headers: protectedHeaders, body: manualBody,
+    })).status, 403, "Admin cannot impersonate a partner workspace");
     // Candidate identifiers are tenant-scoped; legacy admin still has
     // unique identifiers within the NULL workspace segment.
     const identityFields = {
