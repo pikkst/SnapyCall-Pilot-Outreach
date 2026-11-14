@@ -26,6 +26,8 @@ const env = {
   RESEND_API_KEY: "ci-only-resend-token",
   PARTNER_INVITE_FROM: "SnapyCall <invites@example.test>",
   PILOT_GOOGLE_MOCK: "integration-only",
+  // Mirror Render's one-hop trusted reverse proxy for HTTP client identity.
+  TRUST_PROXY: "1",
 };
 const server = spawn(process.execPath,
   ["--import", "./scripts/google-data-smoke-mock.mjs", "server/index.js"],
@@ -35,8 +37,14 @@ for (const stream of [server.stdout, server.stderr]) {
   stream.on("data", chunk => { logs += chunk.toString(); });
 }
 
+// The smoke covers independent operator, partner and follow-up clients in
+// a single fast process. Give each phase its own forwarded client IP; do not
+// disable or increase the production API rate limiter to make tests pass.
+let smokeClientIp = "198.51.100.10";
 async function call(path, init = {}) {
-  return fetch(origin + "/api" + path, init);
+  const headers = new Headers(init.headers ?? {});
+  headers.set("x-forwarded-for", smokeClientIp);
+  return fetch(origin + "/api" + path, { ...init, headers });
 }
 let cookie;
 try {
@@ -373,6 +381,8 @@ try {
     await partnerDb.candidate.deleteMany({
       where: { id: { in: [scopedOne.id, scopedTwo.id, legacyFirst.id] } },
     });
+    // Start the independent partner-write test phase as a second client.
+    smokeClientIp = "198.51.100.11";
     // Candidate create uses the exact same existing endpoint for admin and
     // Google users. Every partner write must select an active workspace.
     const manualCandidate = {
@@ -652,6 +662,8 @@ try {
     })).status, 200, "Disconnect is idempotent");
     assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
 
+    // Continue from a third simulated proxy client for revocation and review.
+    smokeClientIp = "198.51.100.12";
     // Concurrent membership revocation cannot commit between authorization
     // and an authorized candidate write. The row lock must be held until the
     // candidate transaction commits, not just until the membership SELECT.
@@ -698,10 +710,47 @@ try {
     // Membership may be revoked while consent is underway; a valid signed
     // Google response cannot recreate its authorization after revocation.
     const revokedFlow = await beginGoogleConnection(firstWorkspace, partnerCookie);
-    await partnerDb.partnerMembership.update({
-      where: { partnerId_userId: { partnerId: firstWorkspace, userId: member.id } },
-      data: { revokedAt: new Date() },
+    // A prior Forms/Sheets refresh grant must be erased when workspace access
+    // is revoked; the Google account's unrelated Gmail consent stays separate.
+    const { encryptKey } = await import("../server/security.js");
+    await partnerDb.partnerGoogleConnection.create({ data: {
+      partnerId: firstWorkspace, userId: member.id, googleSub: "google-test-sub",
+      encryptedRefreshToken: encryptKey("ci-only-refresh-token", env.AI_ENCRYPTION_KEY),
+      scope: "https://www.googleapis.com/auth/spreadsheets.readonly",
+    } });
+    const revokeUrl = "/admin/partners/memberships/" + firstMembership.id;
+    assert.equal((await call(revokeUrl, { method: "DELETE",
+      headers: { origin, cookie: partnerCookie } })).status, 401,
+      "Google partner may never revoke workspace membership");
+    assert.equal((await call(revokeUrl, { method: "DELETE",
+      headers: { cookie } })).status, 403, "Admin revoke requires same-origin CSRF");
+    assert.equal((await call("/admin/partners/memberships/invalid", {
+      method: "DELETE", headers: protectedHeaders })).status, 400);
+    assert.equal((await call("/admin/partners/memberships/" + "c" + "x".repeat(24), {
+      method: "DELETE", headers: protectedHeaders })).status, 404);
+    const firstRevoke = await call(revokeUrl, {
+      method: "DELETE", headers: protectedHeaders,
     });
+    assert.equal(firstRevoke.status, 200);
+    assert.deepEqual(await firstRevoke.json(), {
+      revoked: true, workspaceId: firstWorkspace, changed: true,
+    });
+    const secondRevoke = await call(revokeUrl, {
+      method: "DELETE", headers: protectedHeaders,
+    });
+    assert.equal(secondRevoke.status, 200);
+    assert.deepEqual(await secondRevoke.json(), {
+      revoked: true, workspaceId: firstWorkspace, changed: false,
+    });
+    assert.equal(await partnerDb.partnerMembership.count({
+      where: { id: firstMembership.id, revokedAt: { not: null } },
+    }), 1, "Revocation preserves the membership row and audit history");
+    assert.equal(await partnerDb.auditEvent.count({
+      where: { action: "partner.membership.revoked", entityId: firstMembership.id },
+    }), 1, "Idempotent revocation emits exactly one audit event");
+    assert.equal(await partnerDb.partnerGoogleConnection.count({
+      where: { partnerId: firstWorkspace, userId: member.id },
+    }), 0, "Revocation must delete workspace-scoped Google refresh credentials");
     assert.equal((await completeGoogleConnection(revokedFlow)).status, 403);
     assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
 
