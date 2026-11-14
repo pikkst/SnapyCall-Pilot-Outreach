@@ -411,7 +411,7 @@ try {
     });
     assert.equal(isolationAudit.length, 3);
     const partnerAudit = isolationAudit.find(a => a.entityId === createdFirstId);
-    assert.equal(partnerAudit.actorId, member.userId);
+    assert.equal(partnerAudit.actorId, member.id);
     assert.equal(partnerAudit.metadata.workspaceId, firstWorkspace);
     await partnerDb.candidate.deleteMany({
       where: { id: { in: [createdFirstId, createdSecondId, adminCreatedId] } },
