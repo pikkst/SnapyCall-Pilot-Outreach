@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { requireResearchPriceEnvelope, ResearchPricingUnavailable } from "../server/research-price-policy.js";
+import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
+  calculateBoundedWorstCaseCents } from "../server/research-price-policy.js";
 
 test("research pricing preflight blocks every provider until a verified monetary policy is released", () => {
   const configurations = [
@@ -100,4 +101,24 @@ test("unapproved or differently metered provider pricing cannot produce a refund
   assert.equal(calculateVerifiedSpendCents({ ...reviewedFixture,
     pricing: { ...reviewedFixture.pricing, searchCentsPerThousand: 0 },
   }, usage), null, "Missing web-tool cost cannot be treated as free");
+});
+
+test("worst-case quote covers all bounded input, output and search tool units", () => {
+  assert.equal(calculateBoundedWorstCaseCents(reviewedFixture.pricing,
+    reviewedFixture.usageLimits), 5);
+  const bad = [
+    { ...reviewedFixture.pricing, billingUnit: "grounded_prompts" },
+    { ...reviewedFixture.pricing, searchCentsPerThousand: 0 },
+    { ...reviewedFixture.pricing, inputCentsPerMillion: null },
+  ];
+  for (const rates of bad) {
+    assert.equal(calculateBoundedWorstCaseCents(rates,
+      reviewedFixture.usageLimits), null);
+  }
+  for (const limits of [
+    { ...reviewedFixture.usageLimits, maxInputTokens: null },
+    { ...reviewedFixture.usageLimits, maxSearchRequests: 0 },
+    { ...reviewedFixture.usageLimits, maxOutputTokens: -1 },
+  ]) assert.equal(calculateBoundedWorstCaseCents(reviewedFixture.pricing,
+    limits), null);
 });
