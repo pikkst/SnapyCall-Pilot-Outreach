@@ -758,14 +758,14 @@ function App() {
             <button type="submit" disabled={busy}>Provision partner access and invite</button>
           </form>
           <h3>Partner invitations</h3>
-          <div className="table-scroll"><table>
+          <div className="table-scroll invitation-table"><table>
             <thead><tr><th>Workspace</th><th>Google account</th><th>Invitation</th><th>Action</th></tr></thead>
             <tbody>{partnerInvitations.map(invite => <tr key={invite.id}>
-              <td>{invite.workspace}</td>
-              <td>{invite.email}</td>
-              <td>{invite.status === "SENT" ? "Sent (provider accepted)" : invite.status}
+              <td data-label="Workspace">{invite.workspace}</td>
+              <td data-label="Google account">{invite.email}</td>
+              <td data-label="Invitation">{invite.status === "SENT" ? "Sent (provider accepted)" : invite.status}
                 {invite.errorCode ? " · " + invite.errorCode : ""}</td>
-              <td>{(["PENDING", "FAILED", "UNCONFIGURED", "MANUAL_REVIEW"].includes(invite.status) ||
+              <td data-label="Action">{(["PENDING", "FAILED", "UNCONFIGURED", "MANUAL_REVIEW"].includes(invite.status) ||
                 (invite.status === "SENDING" && invite.leaseUntil &&
                   Date.parse(invite.leaseUntil) <= Date.now())) ?
                 <button type="button" className="secondary" disabled={busy || !inviteEmailConfigured}
