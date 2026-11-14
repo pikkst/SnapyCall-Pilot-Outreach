@@ -78,3 +78,76 @@ pricing expiry and authorized real-provider smoke with explicit small budgets.
 
 No automated source scraping, contact import, external email or paid API
 requests are part of this foundation.
+
+## Stage 2 implementation handoff — release blocking
+
+The latest merged staging release is `46bfd03d73bcfcdad8a7f9a5afe7874618a1e1f8`.
+The existing `POST /api/discovery/ai-research` currently reserves a workspace
+lease and daily attempt, **not** an owner currency amount. This means the
+`ResearchOwnerBudget`, `ResearchSpendMonth` and `ResearchSpendReservation`
+tables are a foundation only, regardless of a USD preference shown in the UI.
+Do not enable `AI_WEB_RESEARCH_ENABLED` based on the existence of these tables.
+
+### Required, smallest integration
+
+1. Introduce a server-only, dated and versioned capability/price definition
+   for each provider, exact model and web-search tool combination. A provider
+   wildcard, model name regex or client-supplied quote is **not** a price
+   guarantee. Pricing must be checked against the current official provider
+   documentation and approved before enabling an entry; expired or incomplete
+   entries must fail closed. All three providers must be independently audited.
+2. Bound every billable resource *before* reserving: prompt/input size,
+   response tokens, maximum tool calls, provider-specific search/grounding
+   units, request retries and any provider-imposed minimum charges. If the
+   provider offers no enforceable upper bound for one call, keep that provider
+   unavailable. Version the calculated envelope alongside its reservation
+   audit evidence; do not depend on mutable live pricing for historical audits.
+3. Within the **existing** research route and a single PostgreSQL transaction,
+   authenticate partner identity, lock active membership, acquire quota and
+   lease, then reserve the owner-wide worst-case USD cents using
+   `reserveOwnerSpend` before any provider call. A missing budget, unsupported
+   model, insufficient funds, or reservation error must make zero paid calls.
+   A concurrency or budget rejection must not consume a daily attempt.
+4. After the call, settle with `settleOwnerSpend` using only authenticated
+   provider usage/grounding evidence and the correct versioned tariff. On
+   timeout, network ambiguity, malformed/missing usage or crash, never
+   release uncertain costs as zero. Track interrupted reservations for manual
+   reconciliation, without automatic expiration of potentially billed amounts.
+   Record audit and request correlation IDs without persisting credentials.
+5. Preserve the user's original UTC reservation month across rollovers.
+   Handle parallel workspaces, API-key replacement, membership revocation
+   during a request, price changes, replay and concurrent owner-limit edits.
+   The existing lease cleanup must remain idempotent even if cost settlement
+   fails; failures must be visible to operations.
+6. Show the user application-governed **estimated** spend, reserved amount,
+   known settled amount and explicit warning that the provider's external
+   invoice is not strictly capped by this app. Never label a preference an
+   enforceable provider billing limit.
+
+### Evidence required for activation
+
+- Deterministic price-fixture tests for each *exact* supported model/tool:
+  normal result, missing tokens, missing tool-count, truncated/incomplete
+  response, provider error, timeout and unknown billed usage.
+- Disposable PostgreSQL clean-start and upgrade tests: owner budget shared
+  across workspaces, parallel reserve/settle, rejected budget without provider
+  call or daily-attempt charge, idempotency conflict, lower-after-spend, UTC
+  month rollover and crash/retry handling.
+- Auth/Origin and membership-revocation races; no admin-session access to
+  partner-scoped BYOK and no credential/PII leakage to logs or UI.
+- Exact-HEAD CI, explicit CTO-reviewed official price evidence, then a
+  separately approved small real-provider staging smoke for each enabled
+  provider. Provider-side spending safeguards should also be configured.
+
+### Admin and partner UI contract
+
+The existing route explicitly rejects legacy admin sessions after checking
+the feature flag. Do **not** bypass this with admin credentials or silently
+reuse a partner's BYOK key. Admin web research needs an explicit authenticated
+owner/workspace authorization model and should reuse the same research
+orchestration and evidence contract, not a duplicate endpoint. The partner
+view may show the unavailable feature, but should not present a runnable paid
+search when its backend release gate is OFF.
+
+No automatic candidate import, Gmail outreach sending, or expansion of
+restricted-directory scraping is part of #44.
