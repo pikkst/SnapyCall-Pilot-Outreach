@@ -51,13 +51,16 @@ export function calculateVerifiedSpendCents(policy, usage) {
   ];
   if (fields.some(([count, bound]) =>
     !Number.isSafeInteger(count) || count < 0 ||
-    !Number.isSafeInteger(bound) || bound < 0 || count > bound)) return null;
+    !Number.isSafeInteger(bound) || bound < 0 || count > bound) ||
+    usage.searchRequests < 1) return null;
   const rates = [
     pricing.inputCentsPerMillion,
     pricing.outputCentsPerMillion,
     pricing.searchCentsPerThousand,
   ];
-  if (rates.some(rate => !Number.isSafeInteger(rate) || rate < 0)) return null;
+  // Search is a paid tool in this tariff shape. Zero or missing rates
+  // could silently refund real provider charges, so reject the policy.
+  if (rates.some(rate => !Number.isSafeInteger(rate) || rate <= 0)) return null;
   const numerator =
     BigInt(usage.inputTokens) * BigInt(rates[0]) +
     BigInt(usage.outputTokens) * BigInt(rates[1]) +
