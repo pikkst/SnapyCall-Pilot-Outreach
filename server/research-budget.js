@@ -118,3 +118,43 @@ export async function settleOwnerSpend(tx, {
   });
   return { id: reservationId, status: "SETTLED", chargedCents };
 }
+
+
+// Read-only, owner-scoped application ledger snapshot. This reports internal
+// estimates/reservations, NOT provider invoices or guaranteed external caps.
+export async function readOwnerBudgetSnapshot(db, ownerId, now = new Date()) {
+  if (typeof ownerId !== "string" || !/^c[a-z0-9]{10,40}$/.test(ownerId)) {
+    throw new TypeError("Authenticated owner required");
+  }
+  const monthUtc = utcBudgetMonth(now);
+  const [budget, month, pendingReservations] = await Promise.all([
+    db.researchOwnerBudget.findUnique({
+      where: { ownerId }, select: { monthlyLimitCents: true },
+    }),
+    db.researchSpendMonth.findUnique({
+      where: { ownerId_monthUtc: { ownerId, monthUtc } },
+      select: { reservedCents: true, settledCents: true },
+    }),
+    db.researchSpendReservation.count({
+      where: { ownerId, monthUtc, status: "RESERVED" },
+    }),
+  ]);
+  const reservedCents = month?.reservedCents ?? 0;
+  const settledCents = month?.settledCents ?? 0;
+  const monthlyLimitCents = budget?.monthlyLimitCents ?? null;
+  if (![reservedCents, settledCents, pendingReservations].every(
+    value => Number.isSafeInteger(value) && value >= 0)) {
+    throw new TypeError("Invalid persisted spend ledger totals");
+  }
+  return {
+    monthlyLimitCents, currency: "USD", enforcedForPaidSearch: false,
+    ledger: {
+      monthUtc: monthUtc.toISOString().slice(0, 10),
+      reservedCents, settledCents, pendingReservations,
+      availableCents: monthlyLimitCents === null ? null :
+        Math.max(0, monthlyLimitCents - reservedCents - settledCents),
+      // Values represent app-side budget accounting, never provider invoices.
+      billingSource: "application-estimate",
+    },
+  };
+}
