@@ -21,7 +21,7 @@ function publicCitationUrl(value) {
     if (url.protocol !== "https:" || url.username || url.password ||
         !url.hostname.includes(".") || url.hostname === "localhost" ||
         url.hostname.endsWith(".local") || url.hostname.endsWith(".internal") ||
-        /^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(url.hostname) ||
+        /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname) ||
         url.hostname.includes(":")) return null;
     url.hash = "";
     return url.href;
