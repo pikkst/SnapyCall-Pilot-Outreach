@@ -23,7 +23,7 @@ import {
   reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded,
 } from "./research-quota.js";
 import { validateMonthlyBudgetCents, reserveOwnerSpend, settleOwnerSpend,
-  ResearchBudgetExceeded } from "./research-budget.js";
+  ResearchBudgetExceeded, readOwnerBudgetSnapshot } from "./research-budget.js";
 import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
   calculateVerifiedSpendCents } from "./research-price-policy.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
@@ -593,12 +593,7 @@ app.get("/api/research-budget", aiOwnerAuthenticated, safe(async (req, res) => {
   if (!identity || identity.id !== req.aiOwnerId) {
     return res.status(403).json({ error: "Google partner session required" });
   }
-  const budget = await prisma.researchOwnerBudget.findUnique({
-    where: { ownerId: identity.id },
-    select: { monthlyLimitCents: true },
-  });
-  return res.json({ monthlyLimitCents: budget?.monthlyLimitCents ?? null,
-    currency: "USD", enforcedForPaidSearch: false });
+  return res.json(await readOwnerBudgetSnapshot(prisma, identity.id));
 }));
 app.put("/api/research-budget", aiOwnerAuthenticated, requireOrigin, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
@@ -625,7 +620,7 @@ app.put("/api/research-budget", aiOwnerAuthenticated, requireOrigin, safe(async 
       entityId: identity.id, metadata: { currency: "USD", ...input },
     } });
   });
-  return res.json({ ...input, currency: "USD", enforcedForPaidSearch: false });
+  return res.json(await readOwnerBudgetSnapshot(prisma, identity.id));
 }));
 app.get("/api/research-limits", aiOwnerAuthenticated, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
