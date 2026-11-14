@@ -28,6 +28,17 @@ suggests) remain outside the automatic discovery allowlist without separately
 verified terms/permission. Do not turn a manual lead into an automated scraper
 or treat the displayed name as independently verified.
 
+After a candidate is saved, the workspace candidate list offers two explicitly
+user-initiated actions:
+- **Search independently** opens a new browser tab at a public search engine,
+  using a name/category query with `-site:<original-domain>`. The app never
+  fetches the directory page and never triggers a provider call.
+- **Prepare AI criteria** prefills the existing discovery form with the same
+  query. This does NOT submit research automatically, spend API credits or
+  persist any new evidence. Source exclusion is query-text guidance, NOT a
+  provider-enforced domain policy; the feature flag must remain off until
+  enforceable source policy and provider cost controls are approved.
+
 Contact enrichment and AI web search remain separate, gated workflows; only
 independently permitted sources may be consulted. This manual intake never
 authorizes unsolicited commercial mail. Reviewed evidence, contact channel,
