@@ -375,16 +375,20 @@ app.get("/api/auth/google/callback", safe(async (req, res) => {
 // shared workspace. Admin legacy credentials remain in their own record.
 // Dual admin+partner cookies are ambiguous: fail closed rather than silently
 // using the privileged admin key for the Google-authenticated user.
-const aiOwnerAuthenticated = safe(async (req, res, next) => {
-  const admin = verifySession(req.cookies?.pilot_session, env.SESSION_SIGNING_KEY);
-  const partner = await partnerIdentity(req);
-  if (admin && partner) return res.status(409).json({
-    error: "Two active identities. Sign out of one account before changing AI settings",
-  });
-  if (!admin && !partner) return res.status(401).json({ error: "Unauthorized" });
-  req.aiOwnerId = admin ? "admin" : partner.id;
-  return next();
-});
+async function aiOwnerAuthenticated(req, res, next) {
+  try {
+    const admin = verifySession(req.cookies?.pilot_session, env.SESSION_SIGNING_KEY);
+    const partner = await partnerIdentity(req);
+    if (admin && partner) return res.status(409).json({
+      error: "Two active identities. Sign out of one account before changing AI settings",
+    });
+    if (!admin && !partner) return res.status(401).json({ error: "Unauthorized" });
+    req.aiOwnerId = admin ? "admin" : partner.id;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
 const aiWrite = [aiOwnerAuthenticated, requireOrigin];
 const write = [authenticated, requireOrigin];
 // Free discovery: explicit RSS/Atom sources, no paid people-search API.
