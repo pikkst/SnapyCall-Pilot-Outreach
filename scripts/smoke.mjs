@@ -322,6 +322,38 @@ try {
       method: "POST", headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
       body: researchBody,
     })).status, 503, "Paid research is disabled until rollout explicitly enabled");
+    // Real PostgreSQL concurrency/rollback proof for provider-independent
+    // research quotas; no paid AI call or feature activation.
+    const { reserveResearchAttempt, ResearchQuotaExceeded } =
+      await import("../server/research-quota.js");
+    const quotaClock = new Date("2026-11-14T12:00:00.000Z");
+    const quotaDay = new Date("2026-11-14T00:00:00.000Z");
+    const quotaCalls = await Promise.allSettled(Array.from({ length: 4 }, () =>
+      partnerDb.$transaction(tx => reserveResearchAttempt(tx, {
+        workspaceId: firstWorkspace, userId: member.id, now: quotaClock,
+      }))));
+    assert.equal(quotaCalls.filter(x => x.status === "fulfilled").length, 2,
+      "Only two concurrent daily personal searches may reserve a charge");
+    assert.equal(quotaCalls.filter(x => x.status === "rejected" &&
+      x.reason instanceof ResearchQuotaExceeded).length, 2,
+      "Additional concurrent requests must fail with a quota rejection");
+    assert.equal((await partnerDb.researchDailyQuota.findUnique({
+      where: { scopeKey_dayUtc: {
+        scopeKey: "workspace:" + firstWorkspace, dayUtc: quotaDay,
+      } },
+    })).attempts, 2, "Rejected personal attempts must roll back workspace reservation");
+    assert.equal((await partnerDb.researchDailyQuota.findUnique({
+      where: { scopeKey_dayUtc: {
+        scopeKey: "workspace-user:" + firstWorkspace + ":" + member.id,
+        dayUtc: quotaDay,
+      } },
+    })).attempts, 2);
+    const secondQuota = await partnerDb.$transaction(tx =>
+      reserveResearchAttempt(tx, {
+        workspaceId: secondWorkspace, userId: member.id, now: quotaClock,
+      }));
+    assert.equal(secondQuota.remaining.userWorkspace, 1,
+      "A separate authorized workspace has its own daily budget");
     const privateLeadA = await partnerDb.candidate.create({ data: {
       workspaceId: firstWorkspace, name: "Private partner A", category: "COACHING",
       sourceUrl: "https://example.org/tenant-a",
