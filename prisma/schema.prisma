@@ -165,3 +165,31 @@ model PartnerGmailConnection {
   updatedAt DateTime @updatedAt
   user PartnerUser @relation(fields: [userId], references: [id], onDelete: Restrict)
 }
+
+model ResearchDailyQuota {
+  // Durable conservative reservations; requests that fail still count.
+  scopeKey String
+  dayUtc DateTime @db.Date
+  attempts Int @default(0)
+  @@id([scopeKey, dayUtc])
+}
+
+model ResearchUserLimits {
+  // The personal BYOK limit applies independently within each member workspace.
+  ownerId String @id
+  dailyLimit Int @default(2)
+  maxCandidates Int @default(10)
+  maxConcurrent Int @default(1)
+  updatedAt DateTime @updatedAt
+}
+
+model ResearchRunLease {
+  id String @id @default(cuid())
+  workspaceId String
+  userId String
+  expiresAt DateTime
+  releasedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([workspaceId, expiresAt])
+  @@index([workspaceId, userId, expiresAt])
+}

@@ -21,7 +21,9 @@ type Candidate = {
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
 type ResearchPreview = {
-  workspaceId: string; candidates: Array<{
+  workspaceId: string; provider: "anthropic" | "openai" | "gemini"; model: string;
+  quota: { dayUtc: string; remaining: { userWorkspace: number; workspace: number } };
+  candidates: Array<{
     name: string; category: string; sourceUrl: string; rationale: string;
     email: null; contactReviewed: false; status: "REVIEW_PENDING";
   }>;
@@ -31,6 +33,7 @@ type ResearchPreview = {
   imported: false; reviewRequired: true; sendingEnabled: false;
 };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
+type ResearchLimits = { dailyLimit: number; maxCandidates: number; maxConcurrent: number };
 type DuplicateHint = { id: string; reasons: string[] };
 type Evidence = { id: string; kind: string; sourceUrl: string; note: string | null; capturedAt: string };
 type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
@@ -95,6 +98,9 @@ function App() {
     provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false,
   });
   const [personalApiKey, setPersonalApiKey] = useState("");
+  const [researchLimits, setResearchLimits] = useState<ResearchLimits>({ dailyLimit: 2, maxCandidates: 10, maxConcurrent: 1 });
+  const [researchLimitsStatus, setResearchLimitsStatus] =
+    useState<"loading" | "ready" | "error">("loading");
   const [personalAiStatus, setPersonalAiStatus] = useState<"loading" | "ready" | "error">("loading");
 
   const workspaceRequest = useRef(0);
@@ -183,6 +189,7 @@ function App() {
           await loadGoogleConnections();
           await loadGmailStatus();
           await loadPersonalAiSettings();
+          await loadResearchLimits();
         }
       }).catch(() => setError("Unable to reach the authentication API"));
   }, []);
@@ -288,7 +295,7 @@ function App() {
     try {
       const result = await api<ResearchPreview>("/discovery/ai-research?workspaceId=" +
         encodeURIComponent(workspaceId), {
-        method: "POST", body: JSON.stringify({ query: researchQuery.trim(), limit: 10 }),
+        method: "POST", body: JSON.stringify({ query: researchQuery.trim(), limit: researchLimits.maxCandidates }),
       });
       if (workspaceRequest.current !== generation || result.workspaceId !== workspaceId) return;
       setResearchResult(result);
@@ -298,6 +305,29 @@ function App() {
       setResearchStatus("error");
       setResearchError(error instanceof Error ? error.message : "Research unavailable");
     }
+  }
+
+  async function loadResearchLimits() {
+    setResearchLimitsStatus("loading");
+    try {
+      const data = await api<ResearchLimits>("/research-limits");
+      setResearchLimits(data);
+      setResearchLimitsStatus("ready");
+    } catch {
+      setResearchLimitsStatus("error");
+    }
+  }
+
+  async function saveResearchLimits(event: React.FormEvent) {
+    event.preventDefault();
+    await execute(async () => {
+      const data = await api<ResearchLimits>("/research-limits", {
+        method: "PUT", body: JSON.stringify(researchLimits),
+      });
+      setResearchLimits(data);
+      setResearchLimitsStatus("ready");
+      setNotice("Personal research limits saved. No AI search was started.");
+    });
   }
 
   async function loadPersonalAiSettings() {
@@ -409,6 +439,8 @@ function App() {
       setPersonalApiKey("");
       setPersonalAi({ provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
       setPersonalAiStatus("loading");
+      setResearchLimits({ dailyLimit: 2, maxCandidates: 10, maxConcurrent: 1 });
+      setResearchLimitsStatus("loading");
 
       ++partnerEvidenceRequest.current;
       ++partnerReviewRequest.current;
@@ -669,24 +701,34 @@ function App() {
               <section aria-label={"Workspace " + p.name}>
                 {partnerTab === "discovery" && <section aria-label="AI web research preview" className="review-panel">
                   <h3>Find experts with AI web search</h3>
-                  <p className="muted">Optional paid Claude search (up to 3 web searches). Results are unverified,
-                    not saved or authorized for outreach. No emails will be sent.</p>
+                  <p className="muted">Optional paid search using your selected
+                    { " " + personalAi.provider + " " + personalAi.model } model, with up to
+                    3 provider web searches per request. Research is review-only;
+                    no candidates are imported or contacted. Daily attempts are limited,
+                    including failed searches; provider charges may still apply.</p>
                   <form onSubmit={event => void runResearch(p.id, event)}>
                     <label>Research criteria
                       <input value={researchQuery} maxLength={350} minLength={12} required
                         onChange={event => setResearchQuery(event.target.value)}/>
                     </label>
                     <button type="submit" disabled={researchStatus === "loading" ||
-                      personalAi.provider !== "anthropic" || !personalAi.keyConfigured}>
+                      !personalAi.keyConfigured || personalAiStatus !== "ready" ||
+                      researchLimitsStatus !== "ready"}>
                       {researchStatus === "loading" ? "Researching…" : "Search public web"}
                     </button>
                   </form>
-                  {(personalAi.provider !== "anthropic" || !personalAi.keyConfigured) &&
-                    <p className="muted">Configure your personal Claude API key under My AI provider first.</p>}
+                  {!personalAi.keyConfigured &&
+                    <p className="muted">Configure a personal Gemini, OpenAI or Claude API key
+                      under My AI provider first.</p>}
+                  {researchLimitsStatus !== "ready" && <p className="muted">
+                    Personal research limits are unavailable; search is disabled until loaded.</p>}
                   {researchStatus === "error" && <p role="alert">{researchError}</p>}
                   {researchResult && <>
-                    <p className="muted">{researchResult.candidates.length} candidates for manual review.
+                    <p className="muted">{researchResult.candidates.length} candidates for manual review
+                      from {researchResult.provider} ({researchResult.model}).
                       Web requests: {researchResult.usage.searchRequests ?? "unknown"}.
+                      Remaining requests today: {researchResult.quota.remaining.userWorkspace}
+                      personal / {researchResult.quota.remaining.workspace} workspace.
                       No candidates were imported.</p>
                     {researchResult.warnings.map(message => <p key={message} className="muted">{message}</p>)}
                     <ul>{researchResult.candidates.map(item =>
@@ -897,6 +939,44 @@ function App() {
               <button type="submit" disabled={busy}>Save my AI settings</button>
               {personalAi.keyConfigured && <button type="button" className="secondary" disabled={busy}
                 onClick={() => void deletePersonalAiSettings()}>Remove my AI key</button>}
+            </form>}
+        </section>
+        <section aria-label="Personal AI research limits" className="review-panel">
+          <h2>My research limits</h2>
+          <p className="muted">Your limits apply to your personal API key in each
+            authorized workspace. Limits count attempts, including failed provider calls.
+            This is not a monetary cap and does not guarantee a maximum provider bill.
+            Paid web search is still disabled until a separate release approval.</p>
+          {researchLimitsStatus === "loading" ? <p>Loading research limits…</p>
+            : researchLimitsStatus === "error" ?
+              <button type="button" className="secondary"
+                onClick={() => void loadResearchLimits()}>Retry loading limits</button>
+            : <form onSubmit={saveResearchLimits}>
+              <label>Daily search attempts (1–100)
+                <input type="number" required min={1} max={100} step={1}
+                  value={researchLimits.dailyLimit}
+                  onChange={e => setResearchLimits({ ...researchLimits,
+                    dailyLimit: Number(e.target.value) })}/>
+              </label>
+              <label>Maximum candidates per search (1–20)
+                <input type="number" required min={1} max={20} step={1}
+                  value={researchLimits.maxCandidates}
+                  onChange={e => setResearchLimits({ ...researchLimits,
+                    maxCandidates: Number(e.target.value) })}/>
+              </label>
+              <label>Maximum simultaneous research runs (1–3)
+                <input type="number" required min={1} max={3} step={1}
+                  value={researchLimits.maxConcurrent}
+                  onChange={e => setResearchLimits({ ...researchLimits,
+                    maxConcurrent: Number(e.target.value) })}/>
+              </label>
+              <p className="muted">Server safety ceilings: 100 attempts per
+                workspace/day and five concurrent workspace searches. Active-run
+                slots recover automatically after process failures.
+                Monthly currency budgets are not yet enforced.</p>
+              <button type="submit" disabled={busy || !personalAi.keyConfigured}>
+                Save my research limits
+              </button>
             </form>}
         </section>
 

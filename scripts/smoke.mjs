@@ -322,6 +322,92 @@ try {
       method: "POST", headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
       body: researchBody,
     })).status, 503, "Paid research is disabled until rollout explicitly enabled");
+    // Real PostgreSQL concurrency/rollback proof for provider-independent
+    // research quotas; no paid AI call or feature activation.
+    const { reserveResearchAttempt, ResearchQuotaExceeded } =
+      await import("../server/research-quota.js");
+    const quotaClock = new Date("2026-11-14T12:00:00.000Z");
+    const quotaDay = new Date("2026-11-14T00:00:00.000Z");
+    const quotaCalls = await Promise.allSettled(Array.from({ length: 4 }, () =>
+      partnerDb.$transaction(tx => reserveResearchAttempt(tx, {
+        workspaceId: firstWorkspace, userId: member.id, now: quotaClock,
+      }))));
+    assert.equal(quotaCalls.filter(x => x.status === "fulfilled").length, 2,
+      "Only two concurrent daily personal searches may reserve a charge");
+    assert.equal(quotaCalls.filter(x => x.status === "rejected" &&
+      x.reason instanceof ResearchQuotaExceeded).length, 2,
+      "Additional concurrent requests must fail with a quota rejection");
+    assert.equal((await partnerDb.researchDailyQuota.findUnique({
+      where: { scopeKey_dayUtc: {
+        scopeKey: "workspace:" + firstWorkspace, dayUtc: quotaDay,
+      } },
+    })).attempts, 2, "Rejected personal attempts must roll back workspace reservation");
+    assert.equal((await partnerDb.researchDailyQuota.findUnique({
+      where: { scopeKey_dayUtc: {
+        scopeKey: "workspace-user:" + firstWorkspace + ":" + member.id,
+        dayUtc: quotaDay,
+      } },
+    })).attempts, 2);
+    const secondQuota = await partnerDb.$transaction(tx =>
+      reserveResearchAttempt(tx, {
+        workspaceId: secondWorkspace, userId: member.id, now: quotaClock,
+      }));
+    assert.equal(secondQuota.remaining.userWorkspace, 1,
+      "A separate authorized workspace has its own daily budget");
+    // Lease claims are serialized through a workspace row lock, even across
+    // separate clients. Failed claims never consume a daily attempt.
+    const { reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded } =
+      await import("../server/research-quota.js");
+    const leaseCalls = await Promise.allSettled(Array.from({ length: 3 }, () =>
+      partnerDb.$transaction(async tx => {
+        const id = await reserveResearchLease(tx, {
+          workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
+        });
+        await reserveResearchAttempt(tx, {
+          workspaceId: firstWorkspace, userId: member.id, now: new Date("2026-11-15T12:00:00Z"),
+        });
+        return id;
+      })));
+    const successfulLeases = leaseCalls.filter(x => x.status === "fulfilled");
+    assert.equal(successfulLeases.length, 1,
+      "Only one in-flight request may enter when user's concurrency setting is one");
+    assert.equal(leaseCalls.filter(x => x.status === "rejected" &&
+      x.reason instanceof ResearchConcurrencyExceeded).length, 2);
+    assert.equal((await partnerDb.researchDailyQuota.findUnique({
+      where: { scopeKey_dayUtc: {
+        scopeKey: "workspace-user:" + firstWorkspace + ":" + member.id,
+        dayUtc: new Date("2026-11-15T00:00:00Z"),
+      } },
+    })).attempts, 1, "Rejected concurrency claims cannot charge daily quota");
+    const leaseId = successfulLeases[0].value;
+    assert.equal((await releaseResearchLease(partnerDb, leaseId, firstWorkspace, member.id)).count, 1);
+    assert.equal((await releaseResearchLease(partnerDb, leaseId, firstWorkspace, member.id)).count, 0,
+      "Release must be idempotent and owner-scoped");
+    const reopenedLease = await partnerDb.$transaction(tx => reserveResearchLease(tx, {
+      workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
+    }));
+    assert.equal((await releaseResearchLease(partnerDb, reopenedLease, firstWorkspace, member.id)).count, 1);
+    // Expired leases release after crashes based on DB time, not worker-local state.
+    const expiredLease = await partnerDb.$transaction(tx => reserveResearchLease(tx, {
+      workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
+    }));
+    await partnerDb.researchRunLease.update({
+      where: { id: expiredLease }, data: { expiresAt: new Date("2000-01-01T00:00:00Z") },
+    });
+    const afterCrash = await partnerDb.$transaction(tx => reserveResearchLease(tx, {
+      workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
+    }));
+    assert.equal((await releaseResearchLease(partnerDb, afterCrash, firstWorkspace, member.id)).count, 1);
+    const otherUserIds = Array.from({ length: 5 }, (_, i) => "c" + String(i + 1).repeat(24));
+    const workspaceClaims = await Promise.all(otherUserIds.map(userId =>
+      partnerDb.$transaction(tx => reserveResearchLease(tx, {
+        workspaceId: secondWorkspace, userId, maxConcurrent: 3,
+      }))));
+    await assert.rejects(() => partnerDb.$transaction(tx => reserveResearchLease(tx, {
+      workspaceId: secondWorkspace, userId: member.id, maxConcurrent: 3,
+    })), ResearchConcurrencyExceeded, "Workspace aggregate limit blocks a sixth parallel search");
+    await Promise.all(workspaceClaims.map((id, i) =>
+      releaseResearchLease(partnerDb, id, secondWorkspace, otherUserIds[i])));
     const privateLeadA = await partnerDb.candidate.create({ data: {
       workspaceId: firstWorkspace, name: "Private partner A", category: "COACHING",
       sourceUrl: "https://example.org/tenant-a",
@@ -587,6 +673,61 @@ try {
       headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
       body: keyPayload });
     assert.equal(savedOwn.status, 200);
+    // User-owned limits require the same verified partner BYOK identity;
+    // mutation without Origin, an admin cookie, or valid bounds must fail.
+    const defaultLimits = await call("/research-limits", { headers: { cookie: partnerCookie } });
+    assert.equal(defaultLimits.status, 200);
+    assert.deepEqual(await defaultLimits.json(), { dailyLimit: 2, maxCandidates: 10, maxConcurrent: 1 });
+    const limitsBody = JSON.stringify({ dailyLimit: 4, maxCandidates: 5, maxConcurrent: 2 });
+    assert.equal((await call("/research-limits", { method: "PUT",
+      headers: { cookie: partnerCookie, "content-type": "application/json" },
+      body: limitsBody })).status, 403, "Personal limit writes require Origin");
+    assert.equal((await call("/research-limits", { method: "PUT",
+      headers: protectedHeaders, body: limitsBody })).status, 403,
+      "Legacy admin cannot set partner's research budget");
+    assert.equal((await call("/research-limits", { method: "PUT",
+      headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ dailyLimit: 101, maxCandidates: 5, maxConcurrent: 2 }),
+    })).status, 400, "A user cannot exceed the backend safety ceiling");
+    const storedLimits = await call("/research-limits", { method: "PUT",
+      headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: limitsBody });
+    assert.equal(storedLimits.status, 200);
+    assert.deepEqual(await storedLimits.json(), { dailyLimit: 4, maxCandidates: 5, maxConcurrent: 2 });
+    assert.deepEqual(await (await call("/research-limits", {
+      headers: { cookie: partnerCookie },
+    })).json(), { dailyLimit: 4, maxCandidates: 5, maxConcurrent: 2 });
+    assert.equal((await partnerDb.researchUserLimits.findUnique({
+      where: { ownerId: member.id },
+    })).dailyLimit, 4);
+    // A preference update is serialized with the existing atomic quota tx.
+    const { lockedResearchPreferences } = await import("../server/research-quota.js");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await partnerDb.$transaction(async tx => {
+        const preferences = await lockedResearchPreferences(tx, member.id);
+        assert.equal(preferences.dailyLimit, 4);
+        assert.equal(preferences.maxCandidates, 5);
+        assert.equal(preferences.maxConcurrent, 2);
+        await reserveResearchAttempt(tx, { workspaceId: secondWorkspace,
+          userId: member.id, now: quotaClock, dailyLimit: preferences.dailyLimit });
+      });
+    }
+    await assert.rejects(() => partnerDb.$transaction(async tx => {
+      const prefs = await lockedResearchPreferences(tx, member.id);
+      await reserveResearchAttempt(tx, {
+        workspaceId: secondWorkspace, userId: member.id,
+        now: quotaClock, dailyLimit: prefs.dailyLimit,
+      });
+    }), ResearchQuotaExceeded);
+    await partnerDb.researchUserLimits.update({ where: { ownerId: member.id },
+      data: { dailyLimit: 1 } });
+    await assert.rejects(() => partnerDb.$transaction(async tx => {
+      const prefs = await lockedResearchPreferences(tx, member.id);
+      await reserveResearchAttempt(tx, {
+        workspaceId: secondWorkspace, userId: member.id,
+        now: quotaClock, dailyLimit: prefs.dailyLimit,
+      });
+    }), ResearchQuotaExceeded, "Reducing a limit must not reset consumed quota");
     const ownMetadata = await call("/ai-settings", { headers: { cookie: partnerCookie } });
     const metadataText = await ownMetadata.text();
     assert.equal(JSON.parse(metadataText).keyConfigured, true);
