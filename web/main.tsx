@@ -311,6 +311,19 @@ function App() {
     });
   }
 
+  async function switchToPartnerSignIn() {
+    // End the privileged admin session before starting a separate OAuth flow.
+    await execute(async () => {
+      await api("/session", { method: "DELETE" });
+      setLoggedIn(false);
+      setCandidates([]);
+      setDrafts([]);
+      setApiKey("");
+      setPassword("");
+      window.location.assign("/api/auth/google/start");
+    });
+  }
+
   async function logoutPartner() {
     await execute(async () => {
       await api("/partner/session", { method: "DELETE" });
@@ -629,7 +642,9 @@ function App() {
             </form>}
         </section>
         {error && <div className="error" role="alert">{error}</div>}
-        <button className="secondary" disabled={busy} onClick={logoutPartner}>Sign out</button>
+        <p className="muted">Administrator tools require a separate admin sign-in. Switching accounts signs out of this partner session first.</p>
+        <button type="button" className="secondary" disabled={busy} onClick={logoutPartner}>Use administrator sign-in</button>
+        <button type="button" className="secondary" disabled={busy} onClick={logoutPartner}>Sign out</button>
       </section>
     </main>
   );
@@ -659,7 +674,13 @@ function App() {
             {item === "settings" ? "AI configuration" : item === "drafts" ? "Outreach drafts" : item === "discovery" ? "Free discovery" : "Candidates"}
           </button>)}
       </nav>
-      <div className="sidebar-bottom"><span className="state">● Draft-only mode</span><button className="ghost" onClick={logout}>Sign out</button></div>
+      <div className="sidebar-bottom">
+        <span className="state">● Draft-only mode · Administrator session</span>
+        <button type="button" className="ghost" disabled={busy} onClick={() => void switchToPartnerSignIn()}>
+          Switch to Google partner sign-in
+        </button>
+        <button type="button" className="ghost" disabled={busy} onClick={logout}>Sign out</button>
+      </div>
     </aside>
     <section className="content">
       <header><div><span className="eyebrow">PILOT EXPERT ACQUISITION</span><h1>{tab === "candidates" ? "Expert candidates" : tab === "drafts" ? "Outreach drafts" : tab === "discovery" ? "Free lead discovery" : "Your AI provider"}</h1></div><span className="pill">No automatic sending</span></header>
