@@ -14,6 +14,7 @@ import { canonicalEvidenceUrl, EVIDENCE_KINDS, sameIdentityHints } from "../src/
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput } from "./ai-research.js";
+import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { assertWebResearchModel } from "./research-provider-adapters.js";
 import {
   reserveResearchAttempt, ResearchQuotaExceeded, lockedResearchPreferences,
@@ -969,7 +970,12 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
       Object.hasOwn(req.body, "workspaceId")) {
     return res.status(400).json({ error: "Candidate ownership cannot be set in request body" });
   }
-  const candidate = normalizeCandidate(req.body);
+  const manualSeed = req.body.manualSeed === true;
+  if (manualSeed && req.candidateScope === null) {
+    return res.status(403).json({ error: "Manual lead seed requires a partner workspace" });
+  }
+  const seed = manualSeed ? normalizeManualLeadSeed(req.body) : null;
+  const candidate = manualSeed ? normalizeCandidate(seed) : normalizeCandidate(req.body);
   const actorId = req.candidateScope === null ? "admin" :
     verifyPartnerSession(req.cookies?.pilot_partner_session, env.SESSION_SIGNING_KEY);
   const row = await prisma.$transaction(async (tx) => {
@@ -981,6 +987,21 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
       });
       if (!active) return null;
     }
+    if (manualSeed) {
+      // Serialize manual seed submissions within one workspace to make a
+      // repeated click/retry idempotent even across different app instances.
+      await tx.$queryRaw`
+        SELECT "id" FROM "Partner" WHERE "id" = ${req.candidateScope} FOR UPDATE`;
+      const found = await tx.candidate.findFirst({
+        where: {
+          workspaceId: req.candidateScope,
+          sourceUrl: candidate.sourceUrl,
+          name: { equals: candidate.name, mode: "insensitive" },
+        },
+        select: { id: true },
+      });
+      if (found) return { id: found.id, created: false };
+    }
     const created = await tx.candidate.create({
       data: {
         workspaceId: req.candidateScope,
@@ -989,20 +1010,23 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
         region: candidate.region, onlineEnglish: candidate.onlineEnglish,
         sourceUrl: candidate.sourceUrl, legalBasis: candidate.legalBasis,
         contactReviewed: candidate.contactReviewed, suppressed: candidate.suppressed,
+        ...(manualSeed ? { status: "REVIEW_PENDING" } : {}),
       },
     });
     await tx.auditEvent.create({ data: {
-      actorId, action: "candidate.created", entityId: created.id,
+      actorId, action: manualSeed ? "candidate.manual-seed.created" : "candidate.created",
+      entityId: created.id,
       metadata: { sourceUrl: created.sourceUrl, workspaceId: req.candidateScope },
     } });
-    return created;
+    return manualSeed ? { id: created.id, created: true } : created;
   }).catch(error => {
     if (error?.code === "P2002") return "DUPLICATE";
     throw error;
   });
   if (row === null) return res.status(403).json({ error: "Workspace membership revoked" });
   if (row === "DUPLICATE") return res.status(409).json({ error: "Candidate already exists in workspace" });
-  return res.status(201).json({ id: row.id });
+  return res.status(manualSeed && !row.created ? 200 : 201).json(
+    manualSeed ? { id: row.id, created: row.created } : { id: row.id });
 }));
 
 app.get("/api/ai-settings", aiOwnerAuthenticated, safe(async (req, res) => {
