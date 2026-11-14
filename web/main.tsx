@@ -250,60 +250,6 @@ function App() {
       ++workspaceRequest.current;
       setPartnerSession(null);
       setPersonalApiKey("");
-      await loadPersonalAiSettings();
-      setNotice("Your AI key was saved to your account (encrypted). No AI request was made.");
-    });
-  }
-
-  async function deletePersonalAiSettings() {
-    await execute(async () => {
-      await api("/ai-settings", { method: "DELETE" });
-      setPersonalApiKey("");
-      await loadPersonalAiSettings();
-      setNotice("Your personal AI key was removed.");
-    });
-  }
-
-  async function loadGoogleConnections() {
-    setConnectionStatus("loading");
-    try {
-      const data = await api<ConnectionResponse>("/partner/google/connections");
-      setGoogleConnections(data.connections);
-      setGoogleConfigured(data.available);
-      setConnectionStatus("ready");
-    } catch {
-      // Do not misrepresent an unavailable status endpoint as disconnected.
-      setConnectionStatus("unavailable");
-    }
-  }
-
-  async function execute(fn: () => Promise<void>) {
-    setBusy(true); setError(""); setNotice("");
-    try { await fn(); } catch (err) {
-      setError(err instanceof Error ? err.message : "An unexpected error occurred");
-    } finally { setBusy(false); }
-  }
-
-  async function login(event: React.FormEvent) {
-    event.preventDefault();
-    await execute(async () => {
-      await api("/session", { method: "POST", body: JSON.stringify({ email, password }) });
-      setPassword(""); setLoggedIn(true); await load();
-    });
-  }
-
-  async function logout() {
-    await execute(async () => {
-      await api("/session", { method: "DELETE" });
-      setLoggedIn(false); setCandidates([]); setDrafts([]); setApiKey("");
-    });
-  }
-
-  async function logoutPartner() {
-    await execute(async () => {
-      await api("/partner/session", { method: "DELETE" });
-      setPartnerSession(null);
-      setPersonalApiKey("");
       setPersonalAi({ provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
       setPersonalAiStatus("loading");
 
