@@ -15,7 +15,10 @@ import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSessi
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput } from "./ai-research.js";
 import { assertWebResearchModel } from "./research-provider-adapters.js";
-import { reserveResearchAttempt, ResearchQuotaExceeded } from "./research-quota.js";
+import {
+  reserveResearchAttempt, ResearchQuotaExceeded, lockedResearchPreferences,
+  validateResearchPreferences, RESEARCH_DAILY_USER_WORKSPACE_LIMIT,
+} from "./research-quota.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
@@ -573,6 +576,47 @@ app.get("/api/discovery/sources", authenticated, (_req, res) => {
 // Paid research preview is opt-in, authenticated and read-only. It never
 // modifies candidate, evidence or draft state and cannot send outreach.
 const researchLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders: "draft-7", legacyHeaders: false });
+// Preferences can be set only by the Google partner who owns the BYOK key.
+// An admin's separate AI setting never grants tenant research authorization.
+app.get("/api/research-limits", aiOwnerAuthenticated, safe(async (req, res) => {
+  const identity = await partnerIdentity(req);
+  if (!identity || identity.id !== req.aiOwnerId) {
+    return res.status(403).json({ error: "Google partner session required" });
+  }
+  const stored = await prisma.researchUserLimits.findUnique({
+    where: { ownerId: identity.id },
+    select: { dailyLimit: true, maxCandidates: true },
+  });
+  return res.json(stored ?? { dailyLimit: RESEARCH_DAILY_USER_WORKSPACE_LIMIT, maxCandidates: 10 });
+}));
+app.put("/api/research-limits", aiOwnerAuthenticated, requireOrigin, safe(async (req, res) => {
+  const identity = await partnerIdentity(req);
+  if (!identity || identity.id !== req.aiOwnerId) {
+    return res.status(403).json({ error: "Google partner session required" });
+  }
+  const input = z.object({
+    dailyLimit: z.number().int().min(1).max(100),
+    maxCandidates: z.number().int().min(1).max(20),
+  }).strict().parse(req.body);
+  validateResearchPreferences(input);
+  const hasKey = await prisma.aiSetting.findUnique({ where: { ownerId: identity.id },
+    select: { id: true } });
+  if (!hasKey) return res.status(409).json({ error: "Configure a personal API key first" });
+  const saved = await prisma.$transaction(async tx => {
+    const limits = await tx.researchUserLimits.upsert({
+      where: { ownerId: identity.id },
+      create: { ownerId: identity.id, ...input },
+      update: input,
+      select: { dailyLimit: true, maxCandidates: true },
+    });
+    await tx.auditEvent.create({ data: {
+      actorId: identity.id, action: "ai.research-limits.updated",
+      entityId: identity.id, metadata: { ...limits },
+    } });
+    return limits;
+  });
+  return res.json(saved);
+}));
 app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
   // Explicit staged activation; no accidental spend or data disclosure at deploy.
   if (env.AI_WEB_RESEARCH_ENABLED !== "true") return res.status(503).json({
@@ -601,9 +645,14 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
         workspaceId: req.candidateScope, userId: identity.id,
       });
       if (!membership) return null;
-      return reserveResearchAttempt(tx, {
+      const preferences = await lockedResearchPreferences(tx, identity.id);
+      // Reject oversized requests before reserving a paid search.
+      if (input.limit > preferences.maxCandidates) return { limitExceeded: true };
+      const quota = await reserveResearchAttempt(tx, {
         workspaceId: req.candidateScope, userId: identity.id,
+        dailyLimit: preferences.dailyLimit,
       });
+      return { ...quota, preferences };
     });
   } catch (error) {
     if (error instanceof ResearchQuotaExceeded) {
@@ -613,6 +662,10 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
     throw error;
   }
   if (!quota) return res.status(403).json({ error: "Workspace membership revoked" });
+  if (quota.limitExceeded) return res.status(400).json({
+    error: "Requested candidate count exceeds your configured limit",
+    code: "RESEARCH_RESULT_LIMIT_EXCEEDED",
+  });
   // Membership can be revoked after the quota transaction commits. Recheck
   // immediately before making a chargeable external provider request.
   if (!await requireWorkspaceMembership(prisma, {
