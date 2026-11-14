@@ -46,7 +46,7 @@ test("synthetic server tariff reconciles authenticated usage with upward cent ro
   }), 3);
   assert.equal(calculateVerifiedSpendCents(reviewedFixture, {
     inputTokens: 0, outputTokens: 0, searchRequests: 0,
-  }), 0);
+  }), null, "A claimed zero searches cannot refund a billable web-search call");
 });
 
 test("missing or unbounded usage preserves the entire monetary reservation", () => {
@@ -77,4 +77,7 @@ test("unapproved or differently metered provider pricing cannot produce a refund
   assert.equal(calculateVerifiedSpendCents({ ...reviewedFixture,
     usageLimits: { ...reviewedFixture.usageLimits, maxSearchRequests: null },
   }, usage), null);
+  assert.equal(calculateVerifiedSpendCents({ ...reviewedFixture,
+    pricing: { ...reviewedFixture.pricing, searchCentsPerThousand: 0 },
+  }, usage), null, "Missing web-tool cost cannot be treated as free");
 });
