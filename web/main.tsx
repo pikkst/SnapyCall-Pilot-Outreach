@@ -33,7 +33,7 @@ type ResearchPreview = {
   imported: false; reviewRequired: true; sendingEnabled: false;
 };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
-type ResearchLimits = { dailyLimit: number; maxCandidates: number };
+type ResearchLimits = { dailyLimit: number; maxCandidates: number; maxConcurrent: number };
 type DuplicateHint = { id: string; reasons: string[] };
 type Evidence = { id: string; kind: string; sourceUrl: string; note: string | null; capturedAt: string };
 type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
@@ -98,7 +98,7 @@ function App() {
     provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false,
   });
   const [personalApiKey, setPersonalApiKey] = useState("");
-  const [researchLimits, setResearchLimits] = useState<ResearchLimits>({ dailyLimit: 2, maxCandidates: 10 });
+  const [researchLimits, setResearchLimits] = useState<ResearchLimits>({ dailyLimit: 2, maxCandidates: 10, maxConcurrent: 1 });
   const [researchLimitsStatus, setResearchLimitsStatus] =
     useState<"loading" | "ready" | "error">("loading");
   const [personalAiStatus, setPersonalAiStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -439,7 +439,7 @@ function App() {
       setPersonalApiKey("");
       setPersonalAi({ provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
       setPersonalAiStatus("loading");
-      setResearchLimits({ dailyLimit: 2, maxCandidates: 10 });
+      setResearchLimits({ dailyLimit: 2, maxCandidates: 10, maxConcurrent: 1 });
       setResearchLimitsStatus("loading");
 
       ++partnerEvidenceRequest.current;
@@ -964,9 +964,16 @@ function App() {
                   onChange={e => setResearchLimits({ ...researchLimits,
                     maxCandidates: Number(e.target.value) })}/>
               </label>
-              <p className="muted">The server also enforces its own workspace safety
-                ceiling of 100 attempts per day. Financial budgets and concurrency
-                controls are not yet configurable.</p>
+              <label>Maximum simultaneous research runs (1–3)
+                <input type="number" required min={1} max={3} step={1}
+                  value={researchLimits.maxConcurrent}
+                  onChange={e => setResearchLimits({ ...researchLimits,
+                    maxConcurrent: Number(e.target.value) })}/>
+              </label>
+              <p className="muted">Server safety ceilings: 100 attempts per
+                workspace/day and five concurrent workspace searches. Active-run
+                slots recover automatically after process failures.
+                Monthly currency budgets are not yet enforced.</p>
               <button type="submit" disabled={busy || !personalAi.keyConfigured}>
                 Save my research limits
               </button>
