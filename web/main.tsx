@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
+import { manualIndependentResearch } from "../src/manual-research.js";
 
 type PartnerSession = { authenticated: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
@@ -308,6 +309,34 @@ function App() {
       setError(err instanceof Error ? err.message : "Manual lead could not be saved");
     } finally {
       setSeedSaving(false);
+    }
+  }
+
+  function prepareIndependentResearch(item: Candidate) {
+    try {
+      const research = manualIndependentResearch(item.name, item.category, item.sourceUrl);
+      // No AI call, no source fetch and no provider charge on this action.
+      setResearchQuery(research.criteria);
+      setResearchResult(null);
+      setResearchError("");
+      setResearchStatus("idle");
+      setPartnerTab("discovery");
+      setNotice("Independent research criteria prepared. The original source domain " +
+        research.excludedHostname + " is excluded from the query text, not technically blocked " +
+        "by the AI provider. Do not launch automated research until source-policy controls " +
+        "and spending limits have been approved.");
+    } catch {
+      setError("A public HTTPS profile reference is needed before preparing research.");
+    }
+  }
+
+  function openIndependentManualSearch(item: Candidate) {
+    try {
+      const research = manualIndependentResearch(item.name, item.category, item.sourceUrl);
+      // Browser navigation only, initiated by a human; the app does no scraping.
+      window.open(research.searchUrl, "_blank", "noopener,noreferrer");
+    } catch {
+      setError("A public HTTPS profile reference is needed before searching independently.");
     }
   }
 
@@ -707,7 +736,9 @@ function App() {
                     <p className="muted">Enter an expert name and the public page you reviewed.
                       This does not scan or fetch the source website, check permissions,
                       extract emails, qualify an expert or send any messages.
-                      Restricted directories must be researched manually or with permission.</p>
+                      Restricted directories must be researched manually or with permission.
+                      After saving, open an independent browser search or prepare a draft
+                      research query without triggering an automated provider call.</p>
                     <form onSubmit={event => void saveManualSeed(p.id, event)}>
                       <label>Expert name
                         <input required minLength={2} maxLength={160} value={seedName}
@@ -790,6 +821,10 @@ function App() {
                         <td>
                           <button type="button" className="secondary" disabled={busy}
                             onClick={() => void openPartnerEvidence(p.id, c.id)}>Evidence</button>
+                          <button type="button" className="secondary" disabled={busy}
+                            onClick={() => openIndependentManualSearch(c)}>Search independently</button>
+                          <button type="button" className="secondary" disabled={busy}
+                            onClick={() => prepareIndependentResearch(c)}>Prepare AI criteria</button>
                           {c.discoveryKey && <button type="button" className="secondary"
                             disabled={busy || partnerReviewSaving} onClick={() => beginProfileReview(c)}>
                             Review profile
