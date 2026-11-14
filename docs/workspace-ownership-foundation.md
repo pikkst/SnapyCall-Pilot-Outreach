@@ -15,7 +15,7 @@ may send unsolicited email or change Google document sharing permissions.
 ## What this PR does and does not do
 
 - Add nullable foreign-key workspace ownership to Candidate, CandidateEvidence,
-  OutreachDraft and AiSetting, plus lookup indexes.
+  OutreachDraft, plus lookup indexes. AI API keys remain per-identity via `AiSetting.ownerId`.
 - Preserve all existing admin-only rows as `workspaceId = NULL`. No auto assignment,
   backfill, tenant data access, email sending, or change to deployed auth routes.
 - Add a pure, reusable, fail-closed workspace membership check. Membership requires
@@ -30,8 +30,8 @@ global Candidate, AI keys and drafts to Google-authenticated users prematurely.
 
 1. Scope every existing candidate read, write, profile review, evidence, duplicate
    suggestion, RSS import, AI draft and audit operation by workspace.
-2. Scope AI settings and model API keys by workspace; never return an admin key to a
-   partner, including via error paths.
+2. Scope AI settings by authenticated user (`AiSetting.ownerId = PartnerUser.id`),
+   not workspace; never return an admin key to a partner, including via error paths.
 3. Scope CandidateEvidence and OutreachDraft to the same workspace as their Candidate
    in a transaction; prevent cross-workspace FK references.
 4. Change global Candidate.emailNormalized and discoveryKey uniqueness to workspace-
