@@ -179,5 +179,17 @@ model ResearchUserLimits {
   ownerId String @id
   dailyLimit Int @default(2)
   maxCandidates Int @default(10)
+  maxConcurrent Int @default(1)
   updatedAt DateTime @updatedAt
+}
+
+model ResearchRunLease {
+  id String @id @default(cuid())
+  workspaceId String
+  userId String
+  expiresAt DateTime
+  releasedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([workspaceId, expiresAt])
+  @@index([workspaceId, userId, expiresAt])
 }
