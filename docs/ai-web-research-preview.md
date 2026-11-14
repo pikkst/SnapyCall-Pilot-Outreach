@@ -1,47 +1,76 @@
-# AI web research preview — initial review-only contract
+# AI web research preview — deployed implementation and activation gates
 
-Depends on PR #24, which introduces `anthropic` in the existing BYOK provider
-adapter. This iteration uses Anthropic's native Messages API
-`web_search_20250305` with `max_uses: 3`; it does **not** create a second
-LLM account, separate API key store, or candidate import pipeline.
+## Current deployed staging contract
 
-## Activation
-`AI_WEB_RESEARCH_ENABLED` must be exactly `true`, otherwise the endpoint
-returns 503 and makes no provider call. Keep false until CTO approval,
-confirmed Google partner membership, permissioned research source policy,
-budget controls and staging testing. A user must set an encrypted personal
-Claude API key before invoking the research. Search incurs provider charges.
+At staging commit `46bfd03d73bcfcdad8a7f9a5afe7874618a1e1f8`,
+the **existing** partner-scoped `POST /api/discovery/ai-research?workspaceId=...`
+can route to the signed-in partner's selected encrypted BYOK provider:
+Anthropic (Messages native web search), OpenAI (Responses web search),
+or Gemini (Google Search grounding). This is implemented code, **not**
+permission to activate paid search.
 
-Existing endpoint:
-`POST /api/discovery/ai-research?workspaceId=<active-workspace>`
-body `{ "query": "...", "limit": 10 }`.
-The workspace is verified from signed partner session and active membership.
-Admin legacy identity, ambiguous admin + partner identity, invalid CSRF
-origin, unknown tenant, and missing Anthropic BYOK key fail closed.
+`AI_WEB_RESEARCH_ENABLED` must equal the literal string `true`. Otherwise
+the endpoint returns HTTP 503 before any provider call. Staging currently
+keeps this flag OFF; partner UI may render the search form but submission
+returns “AI web research has not been enabled for this environment”.
+The legacy administrator session is **not authorized** to use the route;
+a Google partner identity, active workspace membership and Origin validation
+are required. Do not expose admin search by removing those checks.
 
-## Output and safety
-- Up to 20 **review-only** candidate previews; each must include an exact
-  URL from Anthropic web search **citation metadata**. URLs only written by
-  the model are rejected.
-- No email address, consent, legal basis, candidate row, evidence row, or
-  outreach draft is created or inferred.
-- No sending endpoint exists or is activated.
-- Untrusted web content cannot supply new API hosts, outbound recipients,
-  instructions or tool arguments.
-- One call is capped at 3 provider web searches, 3200 response tokens and
-  30 seconds, plus 2 requests/minute per HTTP source IP and global API limits.
-  Token usage and search request count are returned for visibility.
-- Provider may return fewer than 10 candidates, including zero; cite quality
-  does not prove the personal identity or live contact rights.
+## Provider and result boundaries
 
-## Remaining gates before any public activation
-1. Persistent per-user/workspace/day spend budget and provider-specific
-   exact pricing / charge reconciliation; IP rate limits alone are not a
-   sufficient cost-control mechanism.
-2. Test full tenant path, BYOK auth and feature flag against HTTP+PostgreSQL;
-   enable staging only after authorized smoke.
-3. Manual approval/import contract with reviewed evidence, legal basis and
-   provenance. No automatic email harvesting.
-4. Add Gemini and OpenAI search adapters behind shared domain contract,
-   without pretending they are supported by this first Claude-only iteration.
-5. Persist versioned research evidence and idempotent reuse once required.
+- Research uses the user's existing selected AI configuration and does
+  not store or reveal unencrypted keys to the browser.
+- A supported model name alone does not prove the selected provider/model
+  can perform the requested tool call. Actual compatibility, price and
+  chargeability must be verified separately for each model.
+- Provider-native signed/canonical search citation or grounding evidence
+  must back URLs. Model-generated URLs alone are not trusted citations.
+- Returned candidates are strictly review-only. The result contract includes
+  `imported:false`, `reviewRequired:true` and `sendingEnabled:false`.
+  No personal contact consent, legal basis, contact permission, verified
+  credentials or email is inferred.
+- Search is bounded by a 30-second transport deadline, configured tool
+  and output limits, per-user/workspace/day quota and concurrent leases.
+  These bounds **do not constitute a monetary provider spending cap**.
+- Candidate import and external outreach are separate, explicitly reviewed
+  workflows. No automated scraping of restricted directories is authorized.
+
+## Financial gate — blocking issue #44
+
+The database now contains owner-wide monetary ledger tables and the partner
+can save a monthly USD preference. **The paid research route does not yet
+reserve or settle money through that ledger.** The UI correctly reports
+`enforcedForPaidSearch:false`.
+
+Do not change the environment flag to true until all release criteria in
+`docs/research-owner-budget.md` pass: official exact-model pricing,
+conservative worst-case reservation before a call, provider-authentic
+settlement/uncertain-charge handling, cross-workspace concurrency and
+idempotency tests, exact-HEAD CI and a separately authorized small real
+provider staging smoke.
+
+## Admin-versus-partner UI
+
+Admin has free feed discovery and its own candidate review workflow; the
+paid AI research form is on the Google-partner workspace's discovery screen.
+This is intentional until the admin authorization and BYOK ownership
+contract is designed. Do not create a parallel admin search endpoint,
+impersonate a partner, or widen legacy admin authority to partner data.
+
+## Staging smoke checklist (non-billable)
+
+1. Partner Google login and workspace selection; member revocation fails
+   closed and cannot reuse cached candidates from another workspace.
+2. AI provider preference, key fingerprint, owner-scoped quotas and budget
+   settings load without ever returning plaintext keys.
+3. Submitting research while disabled returns HTTP 503 without reserving
+   quota, spending money, writing candidate rows or invoking a provider.
+4. Manual seed creates a review-pending candidate only; equivalent retry
+   stays idempotent. Article or public page source is not automatically
+   an independent professional profile.
+5. Admin remains unauthorized to call paid partner research; attempts
+   do not consume provider funds. Email sending remains disabled.
+
+These are test requirements; documenting them is not evidence that each
+browser/HTTP test was executed.
