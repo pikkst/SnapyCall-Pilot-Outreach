@@ -777,7 +777,12 @@ try {
     // and Origin. Its ledger scopes spending globally across all workspaces.
     assert.deepEqual(await (await call("/research-budget", {
       headers: { cookie: partnerCookie },
-    })).json(), { monthlyLimitCents: null, currency: "USD", enforcedForPaidSearch: false });
+    })).json(), {
+      monthlyLimitCents: null, currency: "USD", enforcedForPaidSearch: false,
+      ledger: { monthUtc: new Date().toISOString().slice(0, 7) + "-01",
+        reservedCents: 0, settledCents: 0, pendingReservations: 0,
+        availableCents: null, billingSource: "application-estimate" },
+    });
     const budgetBody = JSON.stringify({ monthlyLimitCents: 500 });
     assert.equal((await call("/research-budget", { method: "PUT",
       headers: { cookie: partnerCookie, "content-type": "application/json" },
@@ -795,6 +800,9 @@ try {
     assert.equal(budgetSaved.status, 200);
     assert.deepEqual(await budgetSaved.json(), {
       monthlyLimitCents: 500, currency: "USD", enforcedForPaidSearch: false,
+      ledger: { monthUtc: new Date().toISOString().slice(0, 7) + "-01",
+        reservedCents: 0, settledCents: 0, pendingReservations: 0,
+        availableCents: 500, billingSource: "application-estimate" },
     });
     const { reserveOwnerSpend, settleOwnerSpend, ResearchBudgetExceeded } =
       await import("../server/research-budget.js");
@@ -859,6 +867,19 @@ try {
     assert.equal(afterUnknown.settledCents, 450,
       "Unknown provider usage must settle conservatively at full reservation");
     assert.equal(afterUnknown.reservedCents, 0);
+    // Snapshot must expose owner-scoped totals, not cross-user data or a
+    // fabricated provider invoice. Historic fixture month differs from now.
+    const { readOwnerBudgetSnapshot } = await import("../server/research-budget.js");
+    const snapshot = await readOwnerBudgetSnapshot(partnerDb, member.id, budgetClock);
+    assert.deepEqual(snapshot.ledger, {
+      monthUtc: "2026-11-01", reservedCents: 0, settledCents: 450,
+      pendingReservations: 0, availableCents: 50,
+      billingSource: "application-estimate",
+    });
+    const otherOwner = await readOwnerBudgetSnapshot(partnerDb,
+      "c" + "f".repeat(24), budgetClock);
+    assert.equal(otherOwner.ledger.settledCents, 0);
+    assert.equal(otherOwner.monthlyLimitCents, null);
     await partnerDb.researchOwnerBudget.update({ where: { ownerId: member.id },
       data: { monthlyLimitCents: 100 } });
     await assert.rejects(() => partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
