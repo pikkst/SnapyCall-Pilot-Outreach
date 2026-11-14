@@ -25,6 +25,12 @@ type DuplicateHint = { id: string; reasons: string[] };
 type Evidence = { id: string; kind: string; sourceUrl: string; note: string | null; capturedAt: string };
 type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
 
+const defaultAiModels: Record<string, string> = {
+  gemini: "gemini-2.5-flash",
+  openai: "gpt-4.1-mini",
+  anthropic: "claude-sonnet-4-6",
+};
+
 const categories = [
   ["AI_AUTOMATION", "AI automation / no-code"],
   ["COACHING", "Coaching"],
@@ -526,9 +532,13 @@ function App() {
                 onClick={() => void loadPersonalAiSettings()}>Retry AI settings</button>
             : <form onSubmit={savePersonalAiSettings}>
               <label>AI provider
-                <select value={personalAi.provider} onChange={e => setPersonalAi({ ...personalAi, provider: e.target.value })}>
+                <select value={personalAi.provider} onChange={e => setPersonalAi({
+                  ...personalAi, provider: e.target.value,
+                  model: defaultAiModels[e.target.value] ?? personalAi.model,
+                })}>
                   <option value="gemini">Gemini</option>
                   <option value="openai">OpenAI</option>
+                  <option value="anthropic">Claude (Anthropic)</option>
                 </select>
               </label>
               <label>Model <input required value={personalAi.model}
@@ -730,7 +740,7 @@ function App() {
         <h2>Bring your own AI</h2>
         <p className="muted">Choose your provider, enter the model ID and optionally save your API key. Calls are made server-side; the key is encrypted at rest and never returned to the browser.</p>
         <form onSubmit={saveSettings}>
-          <label>Provider<select value={setting.provider} onChange={e => setSetting({ ...setting, provider: e.target.value, model: e.target.value === "openai" ? "gpt-4.1-mini" : "gemini-2.5-flash" })}><option value="gemini">Google Gemini</option><option value="openai">OpenAI</option></select></label>
+          <label>Provider<select value={setting.provider} onChange={e => setSetting({ ...setting, provider: e.target.value, model: defaultAiModels[e.target.value] ?? setting.model })}><option value="gemini">Google Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Claude (Anthropic)</option></select></label>
           <label>Model ID<input required minLength={2} maxLength={80} value={setting.model} onChange={e => setSetting({ ...setting, model: e.target.value })} placeholder="gemini-2.5-flash"/></label>
           <label>API key<input type="password" autoComplete="new-password" placeholder={setting.keyConfigured ? "Key saved • leave blank to keep" : "Paste provider API key"} value={apiKey} onChange={e => setApiKey(e.target.value)} /></label>
           <div className="key-status">{setting.keyConfigured ? "● Key configured (fingerprint: " + setting.fingerprint + ")" : "○ No API key configured"}</div>
