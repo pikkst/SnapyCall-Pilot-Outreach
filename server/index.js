@@ -537,6 +537,10 @@ app.get("/api/discovery/sources", authenticated, (_req, res) => {
 // modifies candidate, evidence or draft state and cannot send outreach.
 const researchLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders: "draft-7", legacyHeaders: false });
 app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+  // Explicit staged activation; no accidental spend or data disclosure at deploy.
+  if (env.AI_WEB_RESEARCH_ENABLED !== "true") return res.status(503).json({
+    error: "AI web research has not been enabled for this environment",
+  });
   // Partner-only until admin and partner research contracts are unified.
   if (req.candidateScope === null) return res.status(403).json({ error: "Select a Google partner workspace" });
   const identity = await partnerIdentity(req);
