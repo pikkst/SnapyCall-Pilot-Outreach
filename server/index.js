@@ -414,11 +414,18 @@ app.delete("/api/admin/partners/memberships/:id", authenticated, requireOrigin,
         where: { id: member.id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
-      if (changed.count) await tx.auditEvent.create({
-        data: { actorId: "admin", action: "partner.membership.revoked",
-          entityId: member.id,
-          metadata: { workspaceId: member.partnerId, userId: member.userId } },
-      });
+      if (changed.count) {
+        // The workspace-specific refresh token must not outlive access.
+        // User-owned Gmail consent is a separate grant and is not touched.
+        await tx.partnerGoogleConnection.deleteMany({
+          where: { partnerId: member.partnerId, userId: member.userId },
+        });
+        await tx.auditEvent.create({
+          data: { actorId: "admin", action: "partner.membership.revoked",
+            entityId: member.id,
+            metadata: { workspaceId: member.partnerId, userId: member.userId } },
+        });
+      }
       return { workspaceId: member.partnerId, changed: changed.count === 1 };
     });
     if (!result) return res.status(404).json({ error: "Membership not found" });
