@@ -21,7 +21,9 @@ type Candidate = {
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
 type ResearchPreview = {
-  workspaceId: string; candidates: Array<{
+  workspaceId: string; provider: "anthropic" | "openai" | "gemini"; model: string;
+  quota: { dayUtc: string; remaining: { userWorkspace: number; workspace: number } };
+  candidates: Array<{
     name: string; category: string; sourceUrl: string; rationale: string;
     email: null; contactReviewed: false; status: "REVIEW_PENDING";
   }>;
@@ -669,24 +671,31 @@ function App() {
               <section aria-label={"Workspace " + p.name}>
                 {partnerTab === "discovery" && <section aria-label="AI web research preview" className="review-panel">
                   <h3>Find experts with AI web search</h3>
-                  <p className="muted">Optional paid Claude search (up to 3 web searches). Results are unverified,
-                    not saved or authorized for outreach. No emails will be sent.</p>
+                  <p className="muted">Optional paid search using your selected
+                    { " " + personalAi.provider + " " + personalAi.model } model, with up to
+                    3 provider web searches per request. Research is review-only;
+                    no candidates are imported or contacted. Daily attempts are limited,
+                    including failed searches; provider charges may still apply.</p>
                   <form onSubmit={event => void runResearch(p.id, event)}>
                     <label>Research criteria
                       <input value={researchQuery} maxLength={350} minLength={12} required
                         onChange={event => setResearchQuery(event.target.value)}/>
                     </label>
                     <button type="submit" disabled={researchStatus === "loading" ||
-                      personalAi.provider !== "anthropic" || !personalAi.keyConfigured}>
+                      !personalAi.keyConfigured || personalAiStatus !== "ready"}>
                       {researchStatus === "loading" ? "Researching…" : "Search public web"}
                     </button>
                   </form>
-                  {(personalAi.provider !== "anthropic" || !personalAi.keyConfigured) &&
-                    <p className="muted">Configure your personal Claude API key under My AI provider first.</p>}
+                  {!personalAi.keyConfigured &&
+                    <p className="muted">Configure a personal Gemini, OpenAI or Claude API key
+                      under My AI provider first.</p>}
                   {researchStatus === "error" && <p role="alert">{researchError}</p>}
                   {researchResult && <>
-                    <p className="muted">{researchResult.candidates.length} candidates for manual review.
+                    <p className="muted">{researchResult.candidates.length} candidates for manual review
+                      from {researchResult.provider} ({researchResult.model}).
                       Web requests: {researchResult.usage.searchRequests ?? "unknown"}.
+                      Remaining requests today: {researchResult.quota.remaining.userWorkspace}
+                      personal / {researchResult.quota.remaining.workspace} workspace.
                       No candidates were imported.</p>
                     {researchResult.warnings.map(message => <p key={message} className="muted">{message}</p>)}
                     <ul>{researchResult.candidates.map(item =>
