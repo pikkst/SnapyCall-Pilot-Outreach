@@ -417,7 +417,7 @@ function App() {
               <label>AI provider
                 <select value={personalAi.provider} onChange={e => setPersonalAi({ ...personalAi, provider: e.target.value })}>
                   <option value="gemini">Gemini</option>
-                  <option value="claude">Claude</option>
+                  <option value="openai">OpenAI</option>
                 </select>
               </label>
               <label>Model <input required value={personalAi.model}
