@@ -652,6 +652,51 @@ try {
     await partnerDb.candidate.deleteMany({
       where: { id: { in: [createdFirstId, createdSecondId, adminCreatedId] } },
     });
+    // A partner can seed a human-reviewed profile without asking the server
+    // to visit a directory or infer email/consent. Existing candidate API.
+    const manualSeed = {
+      manualSeed: true, name: " Ada Manual Expert ", category: "COACHING",
+      sourceUrl: "https://professionalsus.com/profile/ada#public",
+    };
+    const seedPath = "?workspaceId=" + firstWorkspace;
+    assert.equal((await submitCandidate({ cookie: partnerCookie }, "",
+      manualSeed)).status, 403, "Manual leads require explicit workspace selection");
+    assert.equal((await submitCandidate({ cookie }, "", manualSeed)).status, 403,
+      "Legacy admin must not enter partner-only manual seeds");
+    assert.equal((await submitCandidate({ cookie: partnerCookie }, seedPath,
+      { ...manualSeed, email: "unverified@example.org" })).status, 400,
+      "Manual lead cannot include unreviewed email or consent");
+    assert.equal((await submitCandidate({ cookie: partnerCookie }, seedPath,
+      { ...manualSeed, workspaceId: secondWorkspace })).status, 400,
+      "Manual lead cannot override ownership");
+    const seedCalls = await Promise.all(Array.from({ length: 3 }, () =>
+      submitCandidate({ cookie: partnerCookie }, seedPath, manualSeed)));
+    assert.deepEqual(seedCalls.map(x => x.status).sort(), [200, 200, 201],
+      "Concurrent retries must create exactly one candidate");
+    const receipts = await Promise.all(seedCalls.map(x => x.json()));
+    assert.equal(new Set(receipts.map(x => x.id)).size, 1);
+    assert.equal(receipts.filter(x => x.created).length, 1);
+    const seededId = receipts[0].id;
+    const seeded = await partnerDb.candidate.findUnique({ where: { id: seededId } });
+    assert.equal(seeded.workspaceId, firstWorkspace);
+    assert.equal(seeded.name, "Ada Manual Expert");
+    assert.equal(seeded.sourceUrl, "https://professionalsus.com/profile/ada");
+    assert.equal(seeded.status, "REVIEW_PENDING");
+    assert.equal(seeded.email, null);
+    assert.equal(seeded.contactReviewed, false);
+    assert.equal(seeded.onlineEnglish, false);
+    assert.equal(seeded.legalBasis, null);
+    assert.equal(await partnerDb.auditEvent.count({ where: {
+      action: "candidate.manual-seed.created", entityId: seededId,
+    } }), 1, "Repeated submissions must not write duplicate audit events");
+    const crossSeed = await submitCandidate({ cookie: partnerCookie },
+      "?workspaceId=" + secondWorkspace, manualSeed);
+    assert.equal(crossSeed.status, 201, "Different workspace remains isolated");
+    const crossSeedId = (await crossSeed.json()).id;
+    assert.notEqual(crossSeedId, seededId);
+    await partnerDb.candidate.deleteMany({ where: {
+      id: { in: [seededId, crossSeedId] },
+    } });
     const legacyList = await call("/candidates", { headers: { cookie } });
     assert.equal(legacyList.status, 200);
     assert.equal((await legacyList.json()).some(row => row.id === privateLeadA.id), false,

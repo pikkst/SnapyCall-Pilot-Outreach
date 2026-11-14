@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
+import { manualIndependentResearch } from "../src/manual-research.js";
 
 type PartnerSession = { authenticated: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
@@ -126,6 +127,10 @@ function App() {
   const [workspaceDrafts, setWorkspaceDrafts] = useState<Draft[]>([]);
   const [workspaceDataStatus, setWorkspaceDataStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [researchQuery, setResearchQuery] = useState("Find experienced English-speaking AI automation consultants offering online consultations");
+  const [seedName, setSeedName] = useState("");
+  const [seedCategory, setSeedCategory] = useState("COACHING");
+  const [seedUrl, setSeedUrl] = useState("");
+  const [seedSaving, setSeedSaving] = useState(false);
   const [researchResult, setResearchResult] = useState<ResearchPreview | null>(null);
   const [researchStatus, setResearchStatus] = useState<"idle" | "loading" | "error">("idle");
   const [researchError, setResearchError] = useState("");
@@ -289,6 +294,63 @@ function App() {
       setError(err instanceof Error ? err.message : "Evidence could not be saved");
     } finally {
       setPartnerEvidenceSaving(false);
+    }
+  }
+
+  async function saveManualSeed(workspaceId: string, event: React.FormEvent) {
+    event.preventDefault();
+    if (activeWorkspaceId !== workspaceId || seedSaving) return;
+    const generation = workspaceRequest.current;
+    setSeedSaving(true);
+    setError("");
+    try {
+      const receipt = await api<{ id: string; created: boolean }>(
+        "/candidates?workspaceId=" + encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify({
+            manualSeed: true, name: seedName.trim(), category: seedCategory,
+            sourceUrl: seedUrl.trim(),
+          }),
+        });
+      if (workspaceRequest.current !== generation) return;
+      setSeedName("");
+      setSeedUrl("");
+      await viewWorkspace(workspaceId);
+      setNotice(receipt.created ? "Lead saved for manual review. No contact was authorized." :
+        "This candidate and source already exist in this workspace.");
+    } catch (err) {
+      if (workspaceRequest.current !== generation) return;
+      setError(err instanceof Error ? err.message : "Manual lead could not be saved");
+    } finally {
+      setSeedSaving(false);
+    }
+  }
+
+  function prepareIndependentResearch(item: Candidate) {
+    try {
+      const research = manualIndependentResearch(item.name, item.category, item.sourceUrl);
+      // No AI call, no source fetch and no provider charge on this action.
+      setResearchQuery(research.criteria);
+      setResearchResult(null);
+      setResearchError("");
+      setResearchStatus("idle");
+      setPartnerTab("discovery");
+      setNotice("Independent research criteria prepared. The original source domain " +
+        research.excludedHostname + " is excluded from the query text, not technically blocked " +
+        "by the AI provider. Do not launch automated research until source-policy controls " +
+        "and spending limits have been approved.");
+    } catch {
+      setError("A public HTTPS profile reference is needed before preparing research.");
+    }
+  }
+
+  function openIndependentManualSearch(item: Candidate) {
+    try {
+      const research = manualIndependentResearch(item.name, item.category, item.sourceUrl);
+      // Browser navigation only, initiated by a human; the app does no scraping.
+      window.open(research.searchUrl, "_blank", "noopener,noreferrer");
+    } catch {
+      setError("A public HTTPS profile reference is needed before searching independently.");
     }
   }
 
@@ -711,8 +773,9 @@ function App() {
         {error && <div className="error" role="alert">{error}</div>}
         {notice && <div className="success" role="status">{notice}</div>}
         {partnerTab !== "settings" && <section className="panel">
-          <p className="muted">Candidate and draft data are workspace-scoped. Partner editing, import and sending
-            remain disabled until their server authorization is released.</p>
+          <p className="muted">Candidate and draft data are workspace-scoped. Manual lead
+            entry is review-only; automated importing, AI drafting and sending remain disabled
+            until their separate authorization gates are released.</p>
         <h2>My workspaces</h2>
         {connectionStatus === "unavailable" && <div role="alert">
           <p>Google connection status is unavailable. No connection changes have been assumed.</p>
@@ -730,7 +793,37 @@ function App() {
             </button>
             {activeWorkspaceId === p.id &&
               <section aria-label={"Workspace " + p.name}>
-                {partnerTab === "discovery" && <section aria-label="AI web research preview" className="review-panel">
+                {partnerTab === "discovery" && <>
+                  <section aria-label="Manual expert lead" className="review-panel">
+                    <h3>Add an expert manually</h3>
+                    <p className="muted">Enter an expert name and the public page you reviewed.
+                      This does not scan or fetch the source website, check permissions,
+                      extract emails, qualify an expert or send any messages.
+                      Restricted directories must be researched manually or with permission.
+                      After saving, open an independent browser search or prepare a draft
+                      research query without triggering an automated provider call.</p>
+                    <form onSubmit={event => void saveManualSeed(p.id, event)}>
+                      <label>Expert name
+                        <input required minLength={2} maxLength={160} value={seedName}
+                          onChange={event => setSeedName(event.target.value)}/>
+                      </label>
+                      <label>Field
+                        <select value={seedCategory} onChange={event => setSeedCategory(event.target.value)}>
+                          {categories.map(([value, title]) =>
+                            <option key={value} value={value}>{title}</option>)}
+                        </select>
+                      </label>
+                      <label>Source page URL (HTTPS)
+                        <input type="url" required maxLength={2048} pattern="https://.*"
+                          value={seedUrl} onChange={event => setSeedUrl(event.target.value)}
+                          placeholder="https://example.org/experts/profile"/>
+                      </label>
+                      <button type="submit" disabled={seedSaving}>
+                        {seedSaving ? "Saving…" : "Add to my workspace"}
+                      </button>
+                    </form>
+                  </section>
+                  <section aria-label="AI web research preview" className="review-panel">
                   <h3>Find experts with AI web search</h3>
                   <p className="muted">Optional paid search using your selected
                     { " " + personalAi.provider + " " + personalAi.model } model, with up to
@@ -770,7 +863,7 @@ function App() {
                           Provider-cited source</a>
                       </li>)}</ul>
                   </>}
-                </section>}
+                </section></>}
                 {partnerTab !== "discovery" && <>
                 <h3>My candidates and outreach drafts</h3>
                 <p className="muted">Workspace-isolated read-only preview. Editing,
@@ -801,6 +894,10 @@ function App() {
                         <td>
                           <button type="button" className="secondary" disabled={busy}
                             onClick={() => void openPartnerEvidence(p.id, c.id)}>Evidence</button>
+                          <button type="button" className="secondary" disabled={busy}
+                            onClick={() => openIndependentManualSearch(c)}>Search independently</button>
+                          <button type="button" className="secondary" disabled={busy}
+                            onClick={() => prepareIndependentResearch(c)}>Prepare AI criteria</button>
                           {c.discoveryKey && <button type="button" className="secondary"
                             disabled={busy || partnerReviewSaving} onClick={() => beginProfileReview(c)}>
                             Review profile
