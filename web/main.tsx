@@ -71,6 +71,11 @@ function App() {
   const [googleConnections, setGoogleConnections] = useState<GoogleConnection[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("loading");
   const [googleConfigured, setGoogleConfigured] = useState(false);
+  const [personalAi, setPersonalAi] = useState<AiSetting>({
+    provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false,
+  });
+  const [personalApiKey, setPersonalApiKey] = useState("");
+  const [personalAiStatus, setPersonalAiStatus] = useState<"loading" | "ready" | "error">("loading");
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
@@ -135,9 +140,43 @@ function App() {
         else if (partner.authenticated) {
           setPartnerSession(partner);
           await loadGoogleConnections();
+          await loadPersonalAiSettings();
         }
       }).catch(() => setError("Unable to reach the authentication API"));
   }, []);
+
+  async function loadPersonalAiSettings() {
+    setPersonalAiStatus("loading");
+    try {
+      const current = await api<AiSetting>("/ai-settings");
+      setPersonalAi(current);
+      setPersonalAiStatus("ready");
+    } catch {
+      setPersonalAiStatus("error");
+    }
+  }
+
+  async function savePersonalAiSettings(event: React.FormEvent) {
+    event.preventDefault();
+    await execute(async () => {
+      await api("/ai-settings", { method: "PUT", body: JSON.stringify({
+        provider: personalAi.provider, model: personalAi.model,
+        ...(personalApiKey.trim() ? { apiKey: personalApiKey.trim() } : {}),
+      }) });
+      setPersonalApiKey("");
+      await loadPersonalAiSettings();
+      setNotice("Your AI key was saved to your account (encrypted). No AI request was made.");
+    });
+  }
+
+  async function deletePersonalAiSettings() {
+    await execute(async () => {
+      await api("/ai-settings", { method: "DELETE" });
+      setPersonalApiKey("");
+      await loadPersonalAiSettings();
+      setNotice("Your personal AI key was removed.");
+    });
+  }
 
   async function loadGoogleConnections() {
     setConnectionStatus("loading");
@@ -178,6 +217,9 @@ function App() {
     await execute(async () => {
       await api("/partner/session", { method: "DELETE" });
       setPartnerSession(null);
+      setPersonalApiKey("");
+      setPersonalAi({ provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
+      setPersonalAiStatus("loading");
       setGoogleConnections([]);
       setConnectionStatus("loading");
       setGoogleConfigured(false);
@@ -363,7 +405,37 @@ function App() {
               </>}
           </div>;
         })}
+        <section aria-label="Personal AI configuration">
+          <h2>My AI provider</h2>
+          <p className="muted">Use your own AI API key. Keys are encrypted, never shared
+            with other users or with the legacy admin account. Provider usage and charges are yours.
+            AI draft generation becomes available after the workspace workflow is enabled.</p>
+          {personalAiStatus === "loading" ? <p className="muted">Loading your AI settings…</p>
+            : personalAiStatus === "error" ? <button className="secondary" type="button"
+                onClick={() => void loadPersonalAiSettings()}>Retry AI settings</button>
+            : <form onSubmit={savePersonalAiSettings}>
+              <label>AI provider
+                <select value={personalAi.provider} onChange={e => setPersonalAi({ ...personalAi, provider: e.target.value })}>
+                  <option value="gemini">Gemini</option>
+                  <option value="claude">Claude</option>
+                </select>
+              </label>
+              <label>Model <input required value={personalAi.model}
+                onChange={e => setPersonalAi({ ...personalAi, model: e.target.value })} /></label>
+              <label>Personal API key <input type="password" autoComplete="off"
+                value={personalApiKey} required={!personalAi.keyConfigured}
+                onChange={e => setPersonalApiKey(e.target.value)}
+                placeholder={personalAi.keyConfigured ? "Configured — enter to replace" : "Paste your provider key"} /></label>
+              <p className="muted">{personalAi.keyConfigured
+                ? "Key configured (fingerprint: " + (personalAi.fingerprint ?? "unavailable") + ")"
+                : "No personal AI key configured."}</p>
+              <button type="submit" disabled={busy}>Save my AI settings</button>
+              {personalAi.keyConfigured && <button type="button" className="secondary" disabled={busy}
+                onClick={() => void deletePersonalAiSettings()}>Remove my AI key</button>}
+            </form>}
+        </section>
         {error && <div className="error" role="alert">{error}</div>}
+        {notice && <p className="success" role="status">{notice}</p>}
         <button className="secondary" disabled={busy} onClick={logoutPartner}>Sign out</button>
       </section>
     </main>
