@@ -173,3 +173,11 @@ model ResearchDailyQuota {
   attempts Int @default(0)
   @@id([scopeKey, dayUtc])
 }
+
+model ResearchUserLimits {
+  // The personal BYOK limit applies independently within each member workspace.
+  ownerId String @id
+  dailyLimit Int @default(2)
+  maxCandidates Int @default(10)
+  updatedAt DateTime @updatedAt
+}
