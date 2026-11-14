@@ -587,11 +587,36 @@ function App() {
                   </button>
                 </div>}
                 {workspaceDataStatus === "ready" && <>
-                  <p>Candidates: {workspaceCandidates.length} · Drafts: {workspaceDrafts.length}</p>
-                  <ul>{workspaceCandidates.map(candidate =>
-                    <li key={candidate.id}>{candidate.name} — {candidate.category} ({candidate.qualification.stage})</li>)}</ul>
-                  <ul>{workspaceDrafts.map(draft =>
-                    <li key={draft.id}>{draft.candidate.name}: {draft.subject}</li>)}</ul>
+                  <div className="metrics">
+                    <div className="metric"><strong>{workspaceCandidates.length}</strong><span>Total candidates</span></div>
+                    <div className="metric"><strong>{workspaceCandidates.filter(c => c.qualification.qualified).length}</strong><span>Qualified experts</span></div>
+                    <div className="metric"><strong>{workspaceDrafts.length}</strong><span>Saved drafts</span></div>
+                  </div>
+                  {partnerTab === "candidates" && <>
+                    <h3>Candidate pipeline</h3>
+                    <div className="table-scroll"><table><thead><tr>
+                      <th>Candidate</th><th>Category</th><th>Region</th><th>Next action</th>
+                    </tr></thead><tbody>
+                      {workspaceCandidates.map(c => <tr key={c.id}>
+                        <td><strong>{c.name}</strong><small>{c.email ?? "No email"}</small></td>
+                        <td>{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td>
+                        <td>{c.region ?? "Unconfirmed"}</td>
+                        <td>{stageNames[c.qualification.stage] ?? c.qualification.stage}</td>
+                      </tr>)}
+                      {!workspaceCandidates.length && <tr><td colSpan={4} className="empty">No candidates in this workspace.</td></tr>}
+                    </tbody></table></div>
+                  </>}
+                  {partnerTab === "drafts" && <>
+                    <h3>Outreach drafts</h3>
+                    <div className="table-scroll"><table><thead><tr>
+                      <th>Candidate</th><th>Subject</th><th>Provider</th>
+                    </tr></thead><tbody>
+                      {workspaceDrafts.map(d => <tr key={d.id}>
+                        <td>{d.candidate.name}</td><td>{d.subject}</td><td>{d.provider}</td>
+                      </tr>)}
+                      {!workspaceDrafts.length && <tr><td colSpan={3} className="empty">No saved drafts in this workspace.</td></tr>}
+                    </tbody></table></div>
+                  </>}
                 </>}
                 </>}
               </section>}
