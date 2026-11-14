@@ -635,6 +635,49 @@ try {
     })).status, 200, "Disconnect is idempotent");
     assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
 
+    // Concurrent membership revocation cannot commit between authorization
+    // and an authorized candidate write. The row lock must be held until the
+    // candidate transaction commits, not just until the membership SELECT.
+    const { lockActiveWorkspaceMembership } = await import("../server/workspace-access.js");
+    let releaseMemberLock;
+    let lockAcquired;
+    const memberLockAcquired = new Promise(resolve => { lockAcquired = resolve; });
+    const memberLockRelease = new Promise(resolve => { releaseMemberLock = resolve; });
+    const lockedWrite = partnerDb.$transaction(async tx => {
+      assert.equal(await lockActiveWorkspaceMembership(tx, {
+        userId: member.id, workspaceId: secondWorkspace,
+      }), true);
+      lockAcquired();
+      await memberLockRelease;
+      await tx.candidate.create({ data: {
+        workspaceId: secondWorkspace,
+        name: "Authorized before revoke", category: "COACHING",
+        sourceUrl: "https://example.org/pre-revoke",
+      } });
+    });
+    await memberLockAcquired;
+    let revokeCommitted = false;
+    const revocation = partnerDb.partnerMembership.update({
+      where: { partnerId_userId: { partnerId: secondWorkspace, userId: member.id } },
+      data: { revokedAt: new Date() },
+    }).then(result => { revokeCommitted = true; return result; });
+    try {
+      // A real concurrent UPDATE must block on the membership row lock.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      assert.equal(revokeCommitted, false,
+        "Revocation must wait for the in-flight authorized write transaction");
+    } finally {
+      releaseMemberLock();
+    }
+    await lockedWrite;
+    await revocation;
+    assert.equal(revokeCommitted, true);
+    assert.equal((await submitCandidate({ cookie: partnerCookie },
+      "?workspaceId=" + secondWorkspace, {
+        ...manualCandidate, email: "post-revoke@example.org",
+      })).status, 403,
+      "New candidate writes are forbidden after revocation commits");
+
     // Membership may be revoked while consent is underway; a valid signed
     // Google response cannot recreate its authorization after revocation.
     const revokedFlow = await beginGoogleConnection(firstWorkspace, partnerCookie);
