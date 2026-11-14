@@ -1,32 +1,12 @@
 // Read-only research preview. Sources are taken from provider-signed citation
 // metadata, not URLs invented in the model's JSON. No contact is authorized.
 import { z } from "zod";
+import { normalizeResearchEvidence } from "./research-evidence.js";
 
 export const researchInput = z.object({
   query: z.string().trim().min(12).max(350),
   limit: z.number().int().min(1).max(20).default(10),
 }).strict();
-
-const candidateSchema = z.object({
-  name: z.string().trim().min(2).max(160),
-  category: z.enum(["AI_AUTOMATION", "COACHING", "MARKETING_GROWTH", "BUSINESS_STRATEGY"]),
-  sourceUrl: z.string().url().max(2048),
-  rationale: z.string().trim().min(8).max(700),
-}).strict();
-
-function publicCitationUrl(value) {
-  if (typeof value !== "string" || value.length > 2048) return null;
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "https:" || url.username || url.password ||
-        !url.hostname.includes(".") || url.hostname === "localhost" ||
-        url.hostname.endsWith(".local") || url.hostname.endsWith(".internal") ||
-        /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname) ||
-        url.hostname.includes(":")) return null;
-    url.hash = "";
-    return url.href;
-  } catch { return null; }
-}
 
 function extractResult(json, limit) {
   if (!json || json.stop_reason !== "end_turn" || !Array.isArray(json.content)) {
@@ -38,48 +18,13 @@ function extractResult(json, limit) {
       results.some(x => !Array.isArray(x.content))) {
     throw new Error("AI web search unavailable or incomplete");
   }
-  const cited = new Map();
-  for (const block of json.content) {
-    if (block?.type !== "text" || !Array.isArray(block.citations)) continue;
-    for (const citation of block.citations) {
-      if (citation?.type !== "web_search_result_location") continue;
-      const url = publicCitationUrl(citation.url);
-      if (url) cited.set(url, (typeof citation.title === "string" ? citation.title : "").slice(0, 180));
-    }
-  }
-  if (!cited.size) return { candidates: [], sources: [], warnings: ["No provider-cited sources returned"] };
-  const output = json.content.filter(x => x?.type === "text").map(x => x.text).join("\n").trim();
-  // The model is not allowed to drive DB writes; parse only the contract.
-  const jsonText = output.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
-  let parsed;
-  try { parsed = JSON.parse(jsonText); }
-  catch { throw new Error("AI research did not return structured results"); }
-  if (!parsed || !Array.isArray(parsed.candidates) || parsed.candidates.length > 20) {
-    throw new Error("AI research returned an invalid candidate list");
-  }
-  const candidates = [];
-  const seen = new Set();
-  for (const raw of parsed.candidates) {
-    const item = candidateSchema.safeParse(raw);
-    if (!item.success) continue;
-    const sourceUrl = publicCitationUrl(item.data.sourceUrl);
-    if (!sourceUrl || !cited.has(sourceUrl)) continue;
-    const key = item.data.name.toLowerCase() + "|" + sourceUrl;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    candidates.push({
-      name: item.data.name, category: item.data.category,
-      sourceUrl, rationale: item.data.rationale,
-      email: null, contactReviewed: false, profileReviewed: false,
-      status: "REVIEW_PENDING",
-    });
-    if (candidates.length >= limit) break;
-  }
-  return {
-    candidates,
-    sources: [...cited].map(([url, title]) => ({ url, title })).slice(0, 60),
-    warnings: candidates.length ? [] : ["No evidence-linked candidates matched the requested criteria"],
-  };
+  const citations = json.content.filter(x => x?.type === "text")
+    .flatMap(x => Array.isArray(x.citations) ? x.citations : [])
+    .filter(x => x?.type === "web_search_result_location")
+    .map(x => ({ url: x.url, title: x.title }));
+  const output = json.content.filter(x => x?.type === "text")
+    .map(x => x.text).join("\n").trim();
+  return normalizeResearchEvidence({ text: output, citations, limit });
 }
 
 export async function researchCandidates({ query, limit = 10, model, apiKey }, options = {}) {
