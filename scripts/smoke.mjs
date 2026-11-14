@@ -293,7 +293,41 @@ try {
     const firstRetry = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
       body: JSON.stringify({ partnerId: firstWorkspace, email: "partner@example.org" }) });
     assert.equal(firstRetry.status, 200);
-    assert.equal((await call("/candidates", { headers: { cookie: partnerCookie } })).status, 401);
+    assert.equal((await call("/candidates", { headers: { cookie: partnerCookie } })).status, 403,
+      "Partner must select a workspace before reading candidate data");
+    const privateLeadA = await partnerDb.candidate.create({ data: {
+      workspaceId: firstWorkspace, name: "Private partner A", category: "COACHING",
+      sourceUrl: "https://example.org/tenant-a",
+    } });
+    const privateLeadB = await partnerDb.candidate.create({ data: {
+      workspaceId: secondWorkspace, name: "Private partner B", category: "COACHING",
+      sourceUrl: "https://example.org/tenant-b",
+    } });
+    const ownListA = await call("/candidates?workspaceId=" + firstWorkspace,
+      { headers: { cookie: partnerCookie } });
+    assert.equal(ownListA.status, 200);
+    const ownA = await ownListA.json();
+    assert.deepEqual(ownA.map(row => row.id), [privateLeadA.id]);
+    const ownListB = await call("/candidates?workspaceId=" + secondWorkspace,
+      { headers: { cookie: partnerCookie } });
+    assert.deepEqual((await ownListB.json()).map(row => row.id), [privateLeadB.id]);
+    assert.equal((await call("/candidates?workspaceId=" + firstWorkspace, {
+      headers: { cookie },
+    })).status, 403, "Legacy admin may not impersonate workspace readers");
+    assert.equal((await call("/candidates?workspaceId=not-a-cuid", {
+      headers: { cookie: partnerCookie },
+    })).status, 403);
+    assert.equal((await call("/drafts?workspaceId=" + firstWorkspace, {
+      headers: { cookie: partnerCookie },
+    })).status, 200);
+    assert.deepEqual(await (await call("/drafts?workspaceId=" + firstWorkspace, {
+      headers: { cookie: partnerCookie },
+    })).json(), []);
+    const legacyList = await call("/candidates", { headers: { cookie } });
+    assert.equal(legacyList.status, 200);
+    assert.equal((await legacyList.json()).some(row => row.id === privateLeadA.id), false,
+      "Legacy admin must not see Google-workspace candidates");
+
     assert.equal((await call("/ai-settings", { headers: { cookie: partnerCookie } })).status, 401);
     assert.equal((await call("/partner/google/connections")).status, 401,
       "Unauthenticated callers cannot list Google connections");
@@ -364,6 +398,14 @@ try {
       data: { googleSub: "outsider-google-sub" } });
     const outsiderCookie = "pilot_partner_session=" +
       createPartnerSession(outsider.id, env.SESSION_SIGNING_KEY);
+    assert.equal((await call("/candidates?workspaceId=" + firstWorkspace, {
+      headers: { cookie: outsiderCookie },
+    })).status, 403, "Outsider cannot read a different workspace");
+    const outsiderOwn = await call("/candidates?workspaceId=" + secondWorkspace,
+      { headers: { cookie: outsiderCookie } });
+    assert.equal(outsiderOwn.status, 200);
+    assert.deepEqual((await outsiderOwn.json()).map(row => row.id), [privateLeadB.id]);
+
     const outsiderList = await call("/partner/google/connections", {
       headers: { cookie: outsiderCookie },
     });

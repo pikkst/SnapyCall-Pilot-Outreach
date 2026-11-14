@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 
@@ -71,6 +71,11 @@ function App() {
   const [googleConnections, setGoogleConnections] = useState<GoogleConnection[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("loading");
   const [googleConfigured, setGoogleConfigured] = useState(false);
+  const workspaceRequest = useRef(0);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [workspaceCandidates, setWorkspaceCandidates] = useState<Candidate[]>([]);
+  const [workspaceDrafts, setWorkspaceDrafts] = useState<Draft[]>([]);
+  const [workspaceDataStatus, setWorkspaceDataStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
@@ -139,6 +144,31 @@ function App() {
       }).catch(() => setError("Unable to reach the authentication API"));
   }, []);
 
+  async function viewWorkspace(workspaceId: string) {
+    // An earlier response must never render under a newly selected workspace.
+    const generation = ++workspaceRequest.current;
+    setActiveWorkspaceId(workspaceId);
+    setWorkspaceCandidates([]);
+    setWorkspaceDrafts([]);
+    setWorkspaceDataStatus("loading");
+    try {
+      const q = "?workspaceId=" + encodeURIComponent(workspaceId);
+      const [leads, messages] = await Promise.all([
+        api<Candidate[]>("/candidates" + q),
+        api<Draft[]>("/drafts" + q),
+      ]);
+      if (workspaceRequest.current !== generation) return;
+      setWorkspaceCandidates(leads);
+      setWorkspaceDrafts(messages);
+      setWorkspaceDataStatus("ready");
+    } catch {
+      if (workspaceRequest.current !== generation) return;
+      setWorkspaceCandidates([]);
+      setWorkspaceDrafts([]);
+      setWorkspaceDataStatus("error");
+    }
+  }
+
   async function loadGoogleConnections() {
     setConnectionStatus("loading");
     try {
@@ -177,7 +207,12 @@ function App() {
   async function logoutPartner() {
     await execute(async () => {
       await api("/partner/session", { method: "DELETE" });
+      ++workspaceRequest.current;
       setPartnerSession(null);
+      setActiveWorkspaceId(null);
+      setWorkspaceCandidates([]);
+      setWorkspaceDrafts([]);
+      setWorkspaceDataStatus("idle");
       setGoogleConnections([]);
       setConnectionStatus("loading");
       setGoogleConfigured(false);
@@ -348,6 +383,30 @@ function App() {
           const connection = googleConnections.find(c => c.partnerId === p.id);
           return <div key={p.id}>
             <p><strong>{p.name}</strong> · {p.role}</p>
+            <button type="button" className="secondary" disabled={busy}
+              onClick={() => void viewWorkspace(p.id)}>
+              View my workspace
+            </button>
+            {activeWorkspaceId === p.id &&
+              <section aria-label={"Workspace " + p.name}>
+                <h3>My candidates and outreach drafts</h3>
+                <p className="muted">Workspace-isolated read-only preview. Editing,
+                  discovery import, AI drafting and sending are not enabled for Google users yet.</p>
+                {workspaceDataStatus === "loading" && <p>Loading workspace data…</p>}
+                {workspaceDataStatus === "error" && <div role="alert">
+                  Workspace data could not be loaded.
+                  <button type="button" className="secondary" onClick={() => void viewWorkspace(p.id)}>
+                    Retry
+                  </button>
+                </div>}
+                {workspaceDataStatus === "ready" && <>
+                  <p>Candidates: {workspaceCandidates.length} · Drafts: {workspaceDrafts.length}</p>
+                  <ul>{workspaceCandidates.map(candidate =>
+                    <li key={candidate.id}>{candidate.name} — {candidate.category} ({candidate.qualification.stage})</li>)}</ul>
+                  <ul>{workspaceDrafts.map(draft =>
+                    <li key={draft.id}>{draft.candidate.name}: {draft.subject}</li>)}</ul>
+                </>}
+              </section>}
             {connectionStatus === "loading" ? <p className="muted">Checking Google connection…</p>
               : connectionStatus === "unavailable" ? <p className="muted">Connection status unknown</p>
               : connection ? <>
