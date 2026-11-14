@@ -14,7 +14,7 @@ enable it in Render or other production environments.
 Even with the flag enabled, the endpoint reserves a durable attempt before each
 provider call, with one UTC-day workspace safety quota (100) and a configurable per-user
 workspace quota (default 2, allowed 1–100). The owner also chooses the
-maximum returned candidate count per request (1–20, default 10). Settings
+maximum returned candidate count per request (1–20, default 10) and the maximum\nsimultaneous research runs per user/workspace (1–3, default 1). Settings
 are stored in `ResearchUserLimits` and changed through owner-only
 `GET/PUT /api/research-limits`, after adding a personal API key. The two reservations are atomic in one transaction; revoked
 members cannot reserve. The configured personal limit row is locked in the
@@ -35,7 +35,7 @@ and reviewer approval are complete. The default rate limit also remains in place
 `ResearchUserLimits` stores the owner ID and configurable daily/per-run limits.
 Prisma's migration creates a single composite primary key and constraint.
 No API key, raw prompt, contact or PII are stored in this table.
-Concurrency and monetary caps are NOT yet customizable. A personal monthly
+Concurrency is now configurable, with a hard server cap of five active\nsearches per workspace across all users. `ResearchRunLease` stores a\nper-request lease (workspace/user, creation, expiry, release). The workspace\nrow lock serializes concurrent starts across app instances; PostgreSQL NOW()\ncontrols 120-second expiry. Every API exit releases its lease; an abandoned\nworker is recovered by expiry. The provider request itself has a 30-second\ntimeout. Expired lease rows need operational retention cleanup before scale.\nA personal monthly
 currency amount is not persisted or presented as an enforced cap until the
 provider-specific pricing/reservation/reconciliation contract is implemented.
 Concurrent Node instances use a bounded atomic SQL upsert under a real
@@ -54,6 +54,6 @@ PostgreSQL transaction; no in-memory rate/cost approximation.
 ## Tests
 
 CI runs mocked Anthropic/OpenAI/Gemini response tests and disposable PostgreSQL
-concurrent reservation tests, including exhausted user quota rollback and
+concurrent reservation and lease tests (same-user and workspace concurrency,\nrelease replay, expiry recovery), including exhausted user quota rollback and
 separate workspace budgets. Before paid rollout, verify the provider-specific
 web search tools with controlled, real keys and explicit financial controls.
