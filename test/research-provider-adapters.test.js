@@ -34,6 +34,8 @@ test("OpenAI Responses search uses own BYOK, native search and trusted citation 
   assert.equal(result.imported, false);
   assert.equal(result.sendingEnabled, false);
   assert.equal(result.usage.searchRequests, 1);
+  assert.equal(result.usage.billingEvidence, undefined,
+    "Provider adapter cannot certify complete billable units yet");
 });
 
 test("Gemini Search Grounding only accepts provider grounding chunks", async () => {
@@ -58,6 +60,8 @@ test("Gemini Search Grounding only accepts provider grounding chunks", async () 
   assert.deepEqual(result.candidates.map(c => c.name), ["Verified Professional"]);
   assert.equal(result.candidates[0].contactReviewed, false);
   assert.equal(result.usage.searchRequests, 1);
+  assert.equal(result.usage.billingEvidence, undefined,
+    "Provider adapter cannot certify complete billable units yet");
   assert.equal(result.reviewRequired, true);
 });
 
