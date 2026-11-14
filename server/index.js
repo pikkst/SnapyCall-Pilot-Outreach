@@ -769,17 +769,19 @@ app.post("/api/candidates/:id/evidence", candidateReadScope, requireOrigin, safe
   return res.status(result.status).json(result.body);
 }));
 // Exact matches are review hints, not automatic identity merges. No name-only matches.
-app.get("/api/candidates/:id/possible-duplicates", authenticated, safe(async (req, res) => {
-  const candidate = await prisma.candidate.findUnique({ where: { id: req.params.id } });
+app.get("/api/candidates/:id/possible-duplicates", candidateReadScope, safe(async (req, res) => {
+  const candidate = await prisma.candidate.findFirst({
+    where: { id: req.params.id, workspaceId: req.candidateScope },
+  });
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
   if (!candidate.expertProfileUrl && !candidate.emailNormalized) {
-    return res.json({ suggestions: [], automaticallyMerged: false });
+    return res.json({ suggestions: [], automaticallyMerged: false, incomplete: false });
   }
-  // Candidate counts are bounded in this single-admin pilot. Do not claim a
-  // complete cross-dataset identity match if the scan hits the bounded cap.
+  // Identity hints must never disclose candidates from another workspace.
+  // Bounded scanning is still explicitly incomplete when a tenant exceeds cap.
   const MAX_IDENTITY_CANDIDATES = 500;
   const others = await prisma.candidate.findMany({
-    where: { id: { not: candidate.id } },
+    where: { workspaceId: req.candidateScope, id: { not: candidate.id } },
     select: { id: true, emailNormalized: true, expertProfileUrl: true },
     orderBy: { id: "asc" },
     take: MAX_IDENTITY_CANDIDATES + 1,
