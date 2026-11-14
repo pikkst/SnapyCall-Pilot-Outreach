@@ -18,7 +18,7 @@ import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCo
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
 import { googleDataConfig, googleGmailConfig, createGoogleDataFlow, verifyGoogleDataFlow,
   exchangeGoogleDataCode } from "./google-data-auth.js";
-import { requireWorkspaceMembership } from "./workspace-access.js";
+import { requireWorkspaceMembership, lockActiveWorkspaceMembership } from "./workspace-access.js";
 import { deliverPartnerInvitation, publicInvitationStatus,
   invitationEmailConfig, resetInvitationAttempt } from "./partner-invitations.js";
 
@@ -731,11 +731,10 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
     if (req.candidateScope !== null) {
       // Re-check membership inside the write transaction. Revocation and
       // membership changes must not silently grant a new workspace write.
-      const active = await tx.partnerMembership.findUnique({
-        where: { partnerId_userId: { partnerId: req.candidateScope, userId: actorId } },
-        select: { revokedAt: true },
+      const active = await lockActiveWorkspaceMembership(tx, {
+        workspaceId: req.candidateScope, userId: actorId,
       });
-      if (!active || active.revokedAt) return null;
+      if (!active) return null;
     }
     const created = await tx.candidate.create({
       data: {
