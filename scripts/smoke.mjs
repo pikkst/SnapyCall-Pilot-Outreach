@@ -710,6 +710,14 @@ try {
     // Membership may be revoked while consent is underway; a valid signed
     // Google response cannot recreate its authorization after revocation.
     const revokedFlow = await beginGoogleConnection(firstWorkspace, partnerCookie);
+    // A prior Forms/Sheets refresh grant must be erased when workspace access
+    // is revoked; the Google account's unrelated Gmail consent stays separate.
+    const { encryptKey } = await import("../server/security.js");
+    await partnerDb.partnerGoogleConnection.create({ data: {
+      partnerId: firstWorkspace, userId: member.id, googleSub: "google-test-sub",
+      encryptedRefreshToken: encryptKey("ci-only-refresh-token", env.AI_ENCRYPTION_KEY),
+      scope: "https://www.googleapis.com/auth/spreadsheets.readonly",
+    } });
     const revokeUrl = "/admin/partners/memberships/" + firstMembership.id;
     assert.equal((await call(revokeUrl, { method: "DELETE",
       headers: { origin, cookie: partnerCookie } })).status, 401,
@@ -740,6 +748,9 @@ try {
     assert.equal(await partnerDb.auditEvent.count({
       where: { action: "partner.membership.revoked", entityId: firstMembership.id },
     }), 1, "Idempotent revocation emits exactly one audit event");
+    assert.equal(await partnerDb.partnerGoogleConnection.count({
+      where: { partnerId: firstWorkspace, userId: member.id },
+    }), 0, "Revocation must delete workspace-scoped Google refresh credentials");
     assert.equal((await completeGoogleConnection(revokedFlow)).status, 403);
     assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
 
