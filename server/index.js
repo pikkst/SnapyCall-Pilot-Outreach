@@ -613,6 +613,11 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
     throw error;
   }
   if (!quota) return res.status(403).json({ error: "Workspace membership revoked" });
+  // Membership can be revoked after the quota transaction commits. Recheck
+  // immediately before making a chargeable external provider request.
+  if (!await requireWorkspaceMembership(prisma, {
+    workspaceId: req.candidateScope, userId: identity.id,
+  })) return res.status(403).json({ error: "Workspace membership revoked" });
   // An attempt is counted conservatively even if the provider fails.
   // This caps requests, not monetary spend; keep the rollout gate disabled
   // until provider prices, usage and charging limits are reviewed.
