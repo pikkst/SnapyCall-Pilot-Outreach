@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const aiConfigSchema = z.object({
-  provider: z.enum(["openai", "gemini"]),
+  provider: z.enum(["openai", "gemini", "anthropic"]),
   model: z.string().min(2).max(80).regex(/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/),
   apiKey: z.string().min(8).max(4096).optional(),
 });
@@ -45,6 +45,22 @@ export async function generateDraft({ provider, model, apiKey, candidate }, opti
       const content = result?.choices?.[0]?.message?.content;
       if (typeof content !== "string") throw new Error("AI provider returned no text");
       return parseDraft(content);
+    }
+    if (parsed.provider === "anthropic") {
+      result = await fetcher("https://api.anthropic.com/v1/messages",
+        { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+        { model: parsed.model, max_tokens: 700,
+          messages: [{ role: "user", content: prompt }] },
+        controller.signal);
+      if (result?.stop_reason !== "end_turn") {
+        throw new Error("AI provider response incomplete");
+      }
+      const blocks = result?.content;
+      if (!Array.isArray(blocks) || !blocks.length ||
+          blocks.some(block => block?.type !== "text" || typeof block.text !== "string")) {
+        throw new Error("AI provider returned no plain text");
+      }
+      return parseDraft(blocks.map(block => block.text).join(""));
     }
     result = await fetcher("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(parsed.model) + ":generateContent",
       { "x-goog-api-key": apiKey },
