@@ -20,6 +20,16 @@ type Candidate = {
   outreach: { stage: string; canDraft: boolean; canSend: false; blockers: string[] };
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
+type ResearchPreview = {
+  workspaceId: string; candidates: Array<{
+    name: string; category: string; sourceUrl: string; rationale: string;
+    email: null; contactReviewed: false; status: "REVIEW_PENDING";
+  }>;
+  sources: Array<{ url: string; title: string }>;
+  warnings: string[]; usage: { inputTokens: number | null;
+    outputTokens: number | null; searchRequests: number | null };
+  imported: false; reviewRequired: true; sendingEnabled: false;
+};
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
 type DuplicateHint = { id: string; reasons: string[] };
 type Evidence = { id: string; kind: string; sourceUrl: string; note: string | null; capturedAt: string };
@@ -91,6 +101,10 @@ function App() {
   const [workspaceCandidates, setWorkspaceCandidates] = useState<Candidate[]>([]);
   const [workspaceDrafts, setWorkspaceDrafts] = useState<Draft[]>([]);
   const [workspaceDataStatus, setWorkspaceDataStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [researchQuery, setResearchQuery] = useState("Find experienced English-speaking AI automation consultants offering online consultations");
+  const [researchResult, setResearchResult] = useState<ResearchPreview | null>(null);
+  const [researchStatus, setResearchStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [researchError, setResearchError] = useState("");
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
@@ -165,6 +179,9 @@ function App() {
     // An earlier response must never render under a newly selected workspace.
     const generation = ++workspaceRequest.current;
     setActiveWorkspaceId(workspaceId);
+    setResearchResult(null);
+    setResearchStatus("idle");
+    setResearchError("");
     setWorkspaceCandidates([]);
     setWorkspaceDrafts([]);
     setWorkspaceDataStatus("loading");
@@ -183,6 +200,28 @@ function App() {
       setWorkspaceCandidates([]);
       setWorkspaceDrafts([]);
       setWorkspaceDataStatus("error");
+    }
+  }
+
+  async function runResearch(workspaceId: string, event: React.FormEvent) {
+    event.preventDefault();
+    if (activeWorkspaceId !== workspaceId || researchStatus === "loading") return;
+    const generation = workspaceRequest.current;
+    setResearchStatus("loading");
+    setResearchResult(null);
+    setResearchError("");
+    try {
+      const result = await api<ResearchPreview>("/discovery/ai-research?workspaceId=" +
+        encodeURIComponent(workspaceId), {
+        method: "POST", body: JSON.stringify({ query: researchQuery.trim(), limit: 10 }),
+      });
+      if (workspaceRequest.current !== generation || result.workspaceId !== workspaceId) return;
+      setResearchResult(result);
+      setResearchStatus("idle");
+    } catch (error) {
+      if (workspaceRequest.current !== generation) return;
+      setResearchStatus("error");
+      setResearchError(error instanceof Error ? error.message : "Research unavailable");
     }
   }
 
@@ -287,6 +326,9 @@ function App() {
       setWorkspaceCandidates([]);
       setWorkspaceDrafts([]);
       setWorkspaceDataStatus("idle");
+      setResearchResult(null);
+      setResearchStatus("idle");
+      setResearchError("");
       setGoogleConnections([]);
       setConnectionStatus("loading");
       setGoogleConfigured(false);
@@ -463,6 +505,37 @@ function App() {
             </button>
             {activeWorkspaceId === p.id &&
               <section aria-label={"Workspace " + p.name}>
+                <section aria-label="AI web research preview" className="review-panel">
+                  <h3>Find experts with AI web search</h3>
+                  <p className="muted">Optional paid Claude search (up to 3 web searches). Results are unverified,
+                    not saved or authorized for outreach. No emails will be sent.</p>
+                  <form onSubmit={event => void runResearch(p.id, event)}>
+                    <label>Research criteria
+                      <input value={researchQuery} maxLength={350} minLength={12} required
+                        onChange={event => setResearchQuery(event.target.value)}/>
+                    </label>
+                    <button type="submit" disabled={researchStatus === "loading" ||
+                      personalAi.provider !== "anthropic" || !personalAi.keyConfigured}>
+                      {researchStatus === "loading" ? "Researching…" : "Search public web"}
+                    </button>
+                  </form>
+                  {(personalAi.provider !== "anthropic" || !personalAi.keyConfigured) &&
+                    <p className="muted">Configure your personal Claude API key under My AI provider first.</p>}
+                  {researchStatus === "error" && <p role="alert">{researchError}</p>}
+                  {researchResult && <>
+                    <p className="muted">{researchResult.candidates.length} candidates for manual review.
+                      Web requests: {researchResult.usage.searchRequests ?? "unknown"}.
+                      No candidates were imported.</p>
+                    {researchResult.warnings.map(message => <p key={message} className="muted">{message}</p>)}
+                    <ul>{researchResult.candidates.map(item =>
+                      <li key={item.sourceUrl + item.name}>
+                        <strong>{item.name}</strong> — {item.category}
+                        <p>{item.rationale}</p>
+                        <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">
+                          Provider-cited source</a>
+                      </li>)}</ul>
+                  </>}
+                </section>
                 <h3>My candidates and outreach drafts</h3>
                 <p className="muted">Workspace-isolated read-only preview. Editing,
                   discovery import, AI drafting and sending are not enabled for Google users yet.</p>

@@ -13,6 +13,7 @@ import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { canonicalEvidenceUrl, EVIDENCE_KINDS, sameIdentityHints } from "../src/evidence.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
+import { researchCandidates, researchInput } from "./ai-research.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
@@ -532,6 +533,32 @@ const write = [authenticated, requireOrigin];
 app.get("/api/discovery/sources", authenticated, (_req, res) => {
   res.json({ feeds: approvedDiscoveryFeeds, providerCost: 0, requiresReview: true });
 });
+// Paid research preview is opt-in, authenticated and read-only. It never
+// modifies candidate, evidence or draft state and cannot send outreach.
+const researchLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders: "draft-7", legacyHeaders: false });
+app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+  // Explicit staged activation; no accidental spend or data disclosure at deploy.
+  if (env.AI_WEB_RESEARCH_ENABLED !== "true") return res.status(503).json({
+    error: "AI web research has not been enabled for this environment",
+  });
+  // Partner-only until admin and partner research contracts are unified.
+  if (req.candidateScope === null) return res.status(403).json({ error: "Select a Google partner workspace" });
+  const identity = await partnerIdentity(req);
+  if (!identity) return res.status(401).json({ error: "Unauthorized" });
+  const input = researchInput.parse(req.body);
+  const setting = await prisma.aiSetting.findUnique({ where: { ownerId: identity.id } });
+  if (!setting || setting.provider !== "anthropic") {
+    return res.status(409).json({ error: "Configure your own Claude API key to use web research" });
+  }
+  // Membership is checked again immediately before a chargeable request.
+  const active = await requireWorkspaceMembership(prisma, {
+    workspaceId: req.candidateScope, userId: identity.id,
+  });
+  if (!active) return res.status(403).json({ error: "Workspace membership revoked" });
+  const apiKey = decryptKey(setting.encryptedApiKey, env.AI_ENCRYPTION_KEY);
+  const output = await researchCandidates({ ...input, model: setting.model, apiKey });
+  return res.json({ ...output, workspaceId: req.candidateScope });
+}));
 const scanLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders: "draft-7", legacyHeaders: false });
 app.post("/api/discovery/scan", authenticated, requireOrigin, scanLimiter, safe(async (req, res) => {
   const input = z.object({ feedUrl: z.string().url().max(1200) }).strict().parse(req.body);
