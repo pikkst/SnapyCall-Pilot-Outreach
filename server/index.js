@@ -16,7 +16,7 @@ import { aiConfigSchema, generateDraft } from "./ai.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
-import { googleDataConfig, createGoogleDataFlow, verifyGoogleDataFlow,
+import { googleDataConfig, googleGmailConfig, createGoogleDataFlow, verifyGoogleDataFlow,
   exchangeGoogleDataCode } from "./google-data-auth.js";
 import { deliverPartnerInvitation, publicInvitationStatus,
   invitationEmailConfig, resetInvitationAttempt } from "./partner-invitations.js";
@@ -24,6 +24,7 @@ import { deliverPartnerInvitation, publicInvitationStatus,
 const env = requireRuntimeConfig();
 const google = googleOAuthConfig(env);
 const googleData = googleDataConfig(env);
+const googleGmail = env.GMAIL_OAUTH_ENABLED === "true" ? googleGmailConfig(env) : null;
 const prisma = new PrismaClient({ log: ["error"] });
 const approvedDiscoveryFeeds = parseApprovedSources(process.env.DISCOVERY_FEED_URLS);
 const app = express();
@@ -208,6 +209,112 @@ app.delete("/api/partner/google/connections/:partnerId", requireOrigin, safe(asy
   });
   return res.json({ disconnected: true, changed: removed > 0 });
 }));
+// Gmail send consent is user-owned, independent from Google identity login
+// and Forms/Sheets data read consent. There is intentionally NO send endpoint.
+const gmailFlowPath = "/api/partner/google/gmail";
+function clearGmailFlow(res) {
+  res.clearCookie("pilot_google_gmail_flow", {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production",
+    path: gmailFlowPath,
+  });
+}
+app.get("/api/partner/google/gmail", safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  const grant = await prisma.partnerGmailConnection.findUnique({
+    where: { userId: user.id }, select: { scope: true, updatedAt: true },
+  });
+  return res.json({
+    available: Boolean(googleGmail),
+    connected: Boolean(grant),
+    email: user.emailNormalized,
+    ...(grant ? { scope: grant.scope, updatedAt: grant.updatedAt } : {}),
+    sendingEnabled: false,
+  });
+}));
+app.get("/api/partner/google/gmail/start", loginLimiter, safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!googleGmail) return res.status(503).json({ error: "Gmail consent is not enabled" });
+  const workspaceId = req.query.workspaceId;
+  if (typeof workspaceId !== "string" ||
+      !user.memberships.some(m => m.partnerId === workspaceId)) {
+    return res.status(403).json({ error: "Active workspace membership required" });
+  }
+  const flow = createGoogleDataFlow(googleGmail, env.SESSION_SIGNING_KEY,
+    { userId: user.id, partnerId: workspaceId, kind: "gmail" });
+  res.cookie("pilot_google_gmail_flow", flow.cookie, {
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production",
+    path: gmailFlowPath, maxAge: 10 * 60_000,
+  });
+  return res.redirect(302, flow.url);
+}));
+app.get("/api/partner/google/gmail/callback", safe(async (req, res) => {
+  const cookie = req.cookies?.pilot_google_gmail_flow;
+  clearGmailFlow(res);
+  if (!googleGmail || typeof req.query.code !== "string" ||
+      typeof req.query.state !== "string" || req.query.error) {
+    return res.status(400).send("Gmail consent was not completed");
+  }
+  const flow = verifyGoogleDataFlow(cookie, req.query.state,
+    env.SESSION_SIGNING_KEY, Date.now(), "gmail");
+  if (!flow) return res.status(403).send("Gmail consent expired or invalid");
+  const user = await prisma.partnerUser.findUnique({
+    where: { id: flow.userId },
+    include: { memberships: { where: { partnerId: flow.partnerId, revokedAt: null } } },
+  });
+  if (!user?.googleSub || !user.memberships.length) {
+    return res.status(403).send("Workspace access was revoked");
+  }
+  let tokens, identity;
+  try {
+    tokens = await exchangeGoogleDataCode(req.query.code, flow, googleGmail);
+    identity = await verifyGoogleIdToken(tokens.id_token, googleGmail, flow.nonce);
+  } catch {
+    return res.status(403).send("Gmail send permission was not granted");
+  }
+  if (identity.googleSub !== user.googleSub || identity.emailNormalized !== user.emailNormalized) {
+    return res.status(403).send("Connect Gmail with the invited Google account");
+  }
+  const encrypted = encryptKey(tokens.refresh_token, env.AI_ENCRYPTION_KEY);
+  const saved = await prisma.$transaction(async tx => {
+    // Re-check membership on the transaction boundary after the OAuth exchange.
+    const active = await tx.partnerMembership.findUnique({
+      where: { partnerId_userId: { partnerId: flow.partnerId, userId: flow.userId } },
+    });
+    if (!active || active.revokedAt) return false;
+    await tx.partnerGmailConnection.upsert({
+      where: { userId: flow.userId },
+      create: { userId: flow.userId, googleSub: identity.googleSub,
+        encryptedRefreshToken: encrypted, scope: tokens.scope },
+      update: { googleSub: identity.googleSub,
+        encryptedRefreshToken: encrypted, scope: tokens.scope },
+    });
+    await tx.auditEvent.create({ data: {
+      actorId: flow.userId, action: "partner.gmail_send.connected",
+      entityId: flow.partnerId,
+    } });
+    return true;
+  });
+  if (!saved) return res.status(403).send("Workspace access was revoked");
+  return res.redirect(303, "/");
+}));
+app.delete("/api/partner/google/gmail", requireOrigin, safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  const removed = await prisma.$transaction(async tx => {
+    const result = await tx.partnerGmailConnection.deleteMany({
+      where: { userId: user.id },
+    });
+    if (result.count) await tx.auditEvent.create({ data: {
+      actorId: user.id, action: "partner.gmail_send.disconnected",
+      entityId: user.id,
+    } });
+    return result.count;
+  });
+  return res.json({ disconnected: true, changed: removed > 0 });
+}));
+
 app.get("/api/partner/session", safe(async (req, res) => {
   const user = await partnerIdentity(req);
   if (!user) return res.json({ authenticated: false });
