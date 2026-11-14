@@ -26,6 +26,8 @@ const env = {
   RESEND_API_KEY: "ci-only-resend-token",
   PARTNER_INVITE_FROM: "SnapyCall <invites@example.test>",
   PILOT_GOOGLE_MOCK: "integration-only",
+  // Mirror Render's one-hop trusted reverse proxy for HTTP client identity.
+  TRUST_PROXY: "1",
 };
 const server = spawn(process.execPath,
   ["--import", "./scripts/google-data-smoke-mock.mjs", "server/index.js"],
@@ -35,8 +37,14 @@ for (const stream of [server.stdout, server.stderr]) {
   stream.on("data", chunk => { logs += chunk.toString(); });
 }
 
+// The smoke covers independent operator, partner and follow-up clients in
+// a single fast process. Give each phase its own forwarded client IP; do not
+// disable or increase the production API rate limiter to make tests pass.
+let smokeClientIp = "198.51.100.10";
 async function call(path, init = {}) {
-  return fetch(origin + "/api" + path, init);
+  const headers = new Headers(init.headers ?? {});
+  headers.set("x-forwarded-for", smokeClientIp);
+  return fetch(origin + "/api" + path, { ...init, headers });
 }
 let cookie;
 try {
@@ -373,6 +381,8 @@ try {
     await partnerDb.candidate.deleteMany({
       where: { id: { in: [scopedOne.id, scopedTwo.id, legacyFirst.id] } },
     });
+    // Start the independent partner-write test phase as a second client.
+    smokeClientIp = "198.51.100.11";
     // Candidate create uses the exact same existing endpoint for admin and
     // Google users. Every partner write must select an active workspace.
     const manualCandidate = {
@@ -652,6 +662,8 @@ try {
     })).status, 200, "Disconnect is idempotent");
     assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
 
+    // Continue from a third simulated proxy client for revocation and review.
+    smokeClientIp = "198.51.100.12";
     // Concurrent membership revocation cannot commit between authorization
     // and an authorized candidate write. The row lock must be held until the
     // candidate transaction commits, not just until the membership SELECT.
