@@ -37,6 +37,17 @@ export function requireResearchPriceEnvelope({ provider, model }) {
 export function calculateVerifiedSpendCents(policy, usage) {
   if (!policy || policy.enforcementReady !== true ||
       !usage || typeof usage !== "object") return null;
+  // The adapter must explicitly certify that every chargeable usage unit
+  // for this exact model/tool tariff was captured from provider metadata.
+  // Current adapters do not provide this certification, so they must always
+  // settle conservatively at the full reserved amount.
+  if (usage.billingEvidence?.source !== "provider" ||
+      usage.billingEvidence?.complete !== true ||
+      usage.billingEvidence?.provider !== policy.provider ||
+      usage.billingEvidence?.contractVersion !== policy.billingContractVersion ||
+      !["openai", "anthropic", "gemini"].includes(policy.provider) ||
+      typeof policy.billingContractVersion !== "string" ||
+      policy.billingContractVersion.length < 1) return null;
   const pricing = policy.pricing;
   const limits = policy.usageLimits;
   // Tool billing differs across providers. Unsupported tariff shapes fail
