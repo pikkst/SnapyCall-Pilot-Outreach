@@ -413,6 +413,48 @@ try {
       data: { ...identityFields, workspaceId: null },
     }), error => error?.code === "P2002",
     "Legacy admin NULL ownership retains identifier uniqueness");
+    // Expert review stays on the existing endpoint, but must not cross
+    // workspace/legacy admin boundaries even when candidate IDs are known.
+    const scopedReviewUrl = "/candidates/" + scopedOne.id + "/expert-review";
+    const scopedReviewBody = JSON.stringify({
+      expertProfileUrl: "https://example.org/expert/verified",
+      region: "US", onlineEnglish: true, profileReviewed: true,
+    });
+    assert.equal((await call(scopedReviewUrl + "?workspaceId=" + firstWorkspace, {
+      method: "PATCH", headers: { cookie: partnerCookie, "content-type": "application/json" },
+      body: scopedReviewBody,
+    })).status, 403, "Expert review requires a valid Origin");
+    assert.equal((await call(scopedReviewUrl, {
+      method: "PATCH", headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: scopedReviewBody,
+    })).status, 403, "Partner must select exact workspace");
+    assert.equal((await call(scopedReviewUrl + "?workspaceId=" + secondWorkspace, {
+      method: "PATCH", headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: scopedReviewBody,
+    })).status, 404, "Foreign workspace candidate cannot be reviewed");
+    assert.equal((await call(scopedReviewUrl + "?workspaceId=" + firstWorkspace, {
+      method: "PATCH", headers: protectedHeaders, body: scopedReviewBody,
+    })).status, 403, "Admin must not impersonate partner scope");
+    assert.equal((await call(scopedReviewUrl, {
+      method: "PATCH", headers: protectedHeaders, body: scopedReviewBody,
+    })).status, 404, "Legacy admin cannot review partner-owned candidate");
+    const scopedReview = await call(scopedReviewUrl + "?workspaceId=" + firstWorkspace, {
+      method: "PATCH", headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: scopedReviewBody,
+    });
+    assert.equal(scopedReview.status, 200);
+    assert.deepEqual(await scopedReview.json(), { status: 200, reviewed: true, changed: true });
+    const reviewedScoped = await partnerDb.candidate.findUnique({ where: { id: scopedOne.id } });
+    assert.equal(reviewedScoped.workspaceId, firstWorkspace);
+    assert.equal(reviewedScoped.sourceUrl, identityFields.sourceUrl);
+    assert.equal(reviewedScoped.profileReviewed, true);
+    assert.equal((await call(scopedReviewUrl + "?workspaceId=" + firstWorkspace, {
+      method: "PATCH", headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: scopedReviewBody,
+    })).status, 200, "Expert review replay must be idempotent");
+    assert.equal(await partnerDb.auditEvent.count({
+      where: { action: "discovery.expert.reviewed", actorId: member.id, entityId: scopedOne.id },
+    }), 1, "Idempotent review emits only one partner audit event");
     await partnerDb.candidate.deleteMany({
       where: { id: { in: [scopedOne.id, scopedTwo.id, legacyFirst.id] } },
     });
