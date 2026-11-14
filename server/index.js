@@ -18,6 +18,7 @@ import { assertWebResearchModel } from "./research-provider-adapters.js";
 import {
   reserveResearchAttempt, ResearchQuotaExceeded, lockedResearchPreferences,
   validateResearchPreferences, RESEARCH_DAILY_USER_WORKSPACE_LIMIT,
+  reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded,
 } from "./research-quota.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
@@ -585,9 +586,9 @@ app.get("/api/research-limits", aiOwnerAuthenticated, safe(async (req, res) => {
   }
   const stored = await prisma.researchUserLimits.findUnique({
     where: { ownerId: identity.id },
-    select: { dailyLimit: true, maxCandidates: true },
+    select: { dailyLimit: true, maxCandidates: true, maxConcurrent: true },
   });
-  return res.json(stored ?? { dailyLimit: RESEARCH_DAILY_USER_WORKSPACE_LIMIT, maxCandidates: 10 });
+  return res.json(stored ?? { dailyLimit: RESEARCH_DAILY_USER_WORKSPACE_LIMIT, maxCandidates: 10, maxConcurrent: 1 });
 }));
 app.put("/api/research-limits", aiOwnerAuthenticated, requireOrigin, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
@@ -597,6 +598,7 @@ app.put("/api/research-limits", aiOwnerAuthenticated, requireOrigin, safe(async 
   const input = z.object({
     dailyLimit: z.number().int().min(1).max(100),
     maxCandidates: z.number().int().min(1).max(20),
+    maxConcurrent: z.number().int().min(1).max(3),
   }).strict().parse(req.body);
   validateResearchPreferences(input);
   const hasKey = await prisma.aiSetting.findUnique({ where: { ownerId: identity.id },
@@ -607,7 +609,7 @@ app.put("/api/research-limits", aiOwnerAuthenticated, requireOrigin, safe(async 
       where: { ownerId: identity.id },
       create: { ownerId: identity.id, ...input },
       update: input,
-      select: { dailyLimit: true, maxCandidates: true },
+      select: { dailyLimit: true, maxCandidates: true, maxConcurrent: true },
     });
     await tx.auditEvent.create({ data: {
       actorId: identity.id, action: "ai.research-limits.updated",
@@ -648,16 +650,26 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
       const preferences = await lockedResearchPreferences(tx, identity.id);
       // Reject oversized requests before reserving a paid search.
       if (input.limit > preferences.maxCandidates) return { limitExceeded: true };
+      // Reserve the concurrency slot and daily budget atomically.
+      // Any failure rolls back both; provider calls occur after commit.
+      const leaseId = await reserveResearchLease(tx, {
+        workspaceId: req.candidateScope, userId: identity.id,
+        maxConcurrent: preferences.maxConcurrent,
+      });
       const quota = await reserveResearchAttempt(tx, {
         workspaceId: req.candidateScope, userId: identity.id,
         dailyLimit: preferences.dailyLimit,
       });
-      return { ...quota, preferences };
+      return { ...quota, preferences, leaseId };
     });
   } catch (error) {
     if (error instanceof ResearchQuotaExceeded) {
       return res.status(429).json({ error: "Daily research quota reached",
         code: "RESEARCH_QUOTA_EXCEEDED" });
+    }
+    if (error instanceof ResearchConcurrencyExceeded) {
+      return res.status(429).json({ error: "Active research concurrency limit reached",
+        code: "RESEARCH_CONCURRENCY_EXCEEDED" });
     }
     throw error;
   }
@@ -668,18 +680,27 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
   });
   // Membership can be revoked after the quota transaction commits. Recheck
   // immediately before making a chargeable external provider request.
-  if (!await requireWorkspaceMembership(prisma, {
-    workspaceId: req.candidateScope, userId: identity.id,
-  })) return res.status(403).json({ error: "Workspace membership revoked" });
-  // An attempt is counted conservatively even if the provider fails.
-  // This caps requests, not monetary spend; keep the rollout gate disabled
-  // until provider prices, usage and charging limits are reviewed.
-  const apiKey = decryptKey(setting.encryptedApiKey, env.AI_ENCRYPTION_KEY);
-  const output = await researchCandidates({
-    ...input, provider: setting.provider, model: setting.model, apiKey,
-  });
-  return res.json({ ...output, workspaceId: req.candidateScope,
-    quota: { dayUtc: quota.dayUtc, remaining: quota.remaining } });
+  try {
+    if (!await requireWorkspaceMembership(prisma, {
+      workspaceId: req.candidateScope, userId: identity.id,
+    })) return res.status(403).json({ error: "Workspace membership revoked" });
+    // An attempt is counted conservatively even if the provider fails.
+    // Monetary spend enforcement remains a separate, required rollout gate.
+    const apiKey = decryptKey(setting.encryptedApiKey, env.AI_ENCRYPTION_KEY);
+    const output = await researchCandidates({
+      ...input, provider: setting.provider, model: setting.model, apiKey,
+    });
+    return res.json({ ...output, workspaceId: req.candidateScope,
+      quota: { dayUtc: quota.dayUtc, remaining: quota.remaining } });
+  } finally {
+    // A failed provider call or revoked membership must also release the slot.
+    // A crashed process eventually frees it via database-time expiry.
+    try {
+      await releaseResearchLease(prisma, quota.leaseId, req.candidateScope, identity.id);
+    } catch {
+      console.warn("[research] Failed to release search lease; expiry will recover");
+    }
+  }
 }));
 const scanLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders: "draft-7", legacyHeaders: false });
 app.post("/api/discovery/scan", authenticated, requireOrigin, scanLimiter, safe(async (req, res) => {
