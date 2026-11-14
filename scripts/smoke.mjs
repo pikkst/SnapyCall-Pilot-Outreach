@@ -373,6 +373,66 @@ try {
     await partnerDb.candidate.deleteMany({
       where: { id: { in: [scopedOne.id, scopedTwo.id, legacyFirst.id] } },
     });
+    // Candidate create uses the exact same existing endpoint for admin and
+    // Google users. Every partner write must select an active workspace.
+    const manualCandidate = {
+      name: "Independent coaching expert", category: "COACHING",
+      email: "own-lead@example.org", sourceUrl: "https://example.org/expert-profile",
+      onlineEnglish: false,
+    };
+    const submitCandidate = (headers, query = "", body = manualCandidate) =>
+      call("/candidates" + query, { method: "POST",
+        headers: { origin, "content-type": "application/json", ...headers },
+        body: JSON.stringify(body) });
+    assert.equal((await submitCandidate({ cookie: partnerCookie })).status, 403,
+      "Google partner must explicitly select active workspace");
+    assert.equal((await submitCandidate({ cookie: partnerCookie },
+      "?workspaceId=cnonexistent123456789")).status, 403);
+    assert.equal((await call("/candidates?workspaceId=" + firstWorkspace, {
+      method: "POST", headers: { cookie: partnerCookie, "content-type": "application/json" },
+      body: JSON.stringify(manualCandidate),
+    })).status, 403, "CSRF protection applies to partner writes");
+    assert.equal((await submitCandidate({ cookie: partnerCookie },
+      "?workspaceId=" + firstWorkspace,
+      { ...manualCandidate, workspaceId: secondWorkspace })).status, 400,
+      "Untrusted ownership fields must be rejected");
+    assert.equal((await submitCandidate({ cookie },
+      "?workspaceId=" + firstWorkspace)).status, 403,
+      "Legacy admin cannot write into partner workspace");
+    const createFirst = await submitCandidate({ cookie: partnerCookie },
+      "?workspaceId=" + firstWorkspace);
+    assert.equal(createFirst.status, 201);
+    const createdFirstId = (await createFirst.json()).id;
+    const createdFirst = await partnerDb.candidate.findUnique({ where: { id: createdFirstId } });
+    assert.equal(createdFirst.workspaceId, firstWorkspace);
+    assert.equal(createdFirst.emailNormalized, "own-lead@example.org");
+    assert.equal((await submitCandidate({ cookie: partnerCookie },
+      "?workspaceId=" + firstWorkspace)).status, 409,
+      "Duplicate email within one workspace is rejected");
+    const createSecond = await submitCandidate({ cookie: partnerCookie },
+      "?workspaceId=" + secondWorkspace);
+    assert.equal(createSecond.status, 201,
+      "Different workspaces can independently source the same professional");
+    const createdSecondId = (await createSecond.json()).id;
+    assert.equal((await partnerDb.candidate.findUnique({
+      where: { id: createdSecondId },
+    })).workspaceId, secondWorkspace);
+    const adminCreatedResponse = await submitCandidate({ cookie }, "");
+    assert.equal(adminCreatedResponse.status, 201, "Legacy admin create remains working");
+    const adminCreatedId = (await adminCreatedResponse.json()).id;
+    assert.equal((await partnerDb.candidate.findUnique({
+      where: { id: adminCreatedId },
+    })).workspaceId, null);
+    const isolationAudit = await partnerDb.auditEvent.findMany({
+      where: { action: "candidate.created", entityId: { in: [createdFirstId, createdSecondId, adminCreatedId] } },
+    });
+    assert.equal(isolationAudit.length, 3);
+    const partnerAudit = isolationAudit.find(a => a.entityId === createdFirstId);
+    assert.equal(partnerAudit.actorId, member.id);
+    assert.equal(partnerAudit.metadata.workspaceId, firstWorkspace);
+    await partnerDb.candidate.deleteMany({
+      where: { id: { in: [createdFirstId, createdSecondId, adminCreatedId] } },
+    });
     const legacyList = await call("/candidates", { headers: { cookie } });
     assert.equal(legacyList.status, 200);
     assert.equal((await legacyList.json()).some(row => row.id === privateLeadA.id), false,
@@ -591,6 +651,49 @@ try {
       method: "DELETE", headers: { cookie: partnerCookie, origin },
     })).status, 200, "Disconnect is idempotent");
     assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
+
+    // Concurrent membership revocation cannot commit between authorization
+    // and an authorized candidate write. The row lock must be held until the
+    // candidate transaction commits, not just until the membership SELECT.
+    const { lockActiveWorkspaceMembership } = await import("../server/workspace-access.js");
+    let releaseMemberLock;
+    let lockAcquired;
+    const memberLockAcquired = new Promise(resolve => { lockAcquired = resolve; });
+    const memberLockRelease = new Promise(resolve => { releaseMemberLock = resolve; });
+    const lockedWrite = partnerDb.$transaction(async tx => {
+      assert.equal(await lockActiveWorkspaceMembership(tx, {
+        userId: member.id, workspaceId: secondWorkspace,
+      }), true);
+      lockAcquired();
+      await memberLockRelease;
+      await tx.candidate.create({ data: {
+        workspaceId: secondWorkspace,
+        name: "Authorized before revoke", category: "COACHING",
+        sourceUrl: "https://example.org/pre-revoke",
+      } });
+    });
+    await memberLockAcquired;
+    let revokeCommitted = false;
+    const revocation = partnerDb.partnerMembership.update({
+      where: { partnerId_userId: { partnerId: secondWorkspace, userId: member.id } },
+      data: { revokedAt: new Date() },
+    }).then(result => { revokeCommitted = true; return result; });
+    try {
+      // A real concurrent UPDATE must block on the membership row lock.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      assert.equal(revokeCommitted, false,
+        "Revocation must wait for the in-flight authorized write transaction");
+    } finally {
+      releaseMemberLock();
+    }
+    await lockedWrite;
+    await revocation;
+    assert.equal(revokeCommitted, true);
+    assert.equal((await submitCandidate({ cookie: partnerCookie },
+      "?workspaceId=" + secondWorkspace, {
+        ...manualCandidate, email: "post-revoke@example.org",
+      })).status, 403,
+      "New candidate writes are forbidden after revocation commits");
 
     // Membership may be revoked while consent is underway; a valid signed
     // Google response cannot recreate its authorization after revocation.

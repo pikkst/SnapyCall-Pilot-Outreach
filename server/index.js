@@ -19,7 +19,7 @@ import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCo
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
 import { googleDataConfig, googleGmailConfig, createGoogleDataFlow, verifyGoogleDataFlow,
   exchangeGoogleDataCode } from "./google-data-auth.js";
-import { requireWorkspaceMembership } from "./workspace-access.js";
+import { requireWorkspaceMembership, lockActiveWorkspaceMembership } from "./workspace-access.js";
 import { deliverPartnerInvitation, publicInvitationStatus,
   invitationEmailConfig, resetInvitationAttempt } from "./partner-invitations.js";
 
@@ -744,25 +744,47 @@ app.get("/api/candidates", candidateReadScope, safe(async (req, res) => {
     outreach: outreachDecision(item),
   })));
 }));
-app.post("/api/candidates", ...write, safe(async (req, res) => {
+app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, res) => {
+  // Ownership comes exclusively from verified session + query membership.
+  // Never accept client-submitted ownership fields in candidate payloads.
+  if (req.body === null || typeof req.body !== "object" || Array.isArray(req.body) ||
+      Object.hasOwn(req.body, "workspaceId")) {
+    return res.status(400).json({ error: "Candidate ownership cannot be set in request body" });
+  }
   const candidate = normalizeCandidate(req.body);
+  const actorId = req.candidateScope === null ? "admin" :
+    verifyPartnerSession(req.cookies?.pilot_partner_session, env.SESSION_SIGNING_KEY);
   const row = await prisma.$transaction(async (tx) => {
+    if (req.candidateScope !== null) {
+      // Re-check membership inside the write transaction. Revocation and
+      // membership changes must not silently grant a new workspace write.
+      const active = await lockActiveWorkspaceMembership(tx, {
+        workspaceId: req.candidateScope, userId: actorId,
+      });
+      if (!active) return null;
+    }
     const created = await tx.candidate.create({
       data: {
-      kind: "EXPERT", name: candidate.name, category: candidate.category,
-      email: candidate.email, emailNormalized: candidate.email,
-      region: candidate.region, onlineEnglish: candidate.onlineEnglish,
-      sourceUrl: candidate.sourceUrl, legalBasis: candidate.legalBasis,
-      contactReviewed: candidate.contactReviewed, suppressed: candidate.suppressed,
+        workspaceId: req.candidateScope,
+        kind: "EXPERT", name: candidate.name, category: candidate.category,
+        email: candidate.email, emailNormalized: candidate.email,
+        region: candidate.region, onlineEnglish: candidate.onlineEnglish,
+        sourceUrl: candidate.sourceUrl, legalBasis: candidate.legalBasis,
+        contactReviewed: candidate.contactReviewed, suppressed: candidate.suppressed,
       },
     });
     await tx.auditEvent.create({ data: {
-      actorId: "admin", action: "candidate.created", entityId: created.id,
-      metadata: { sourceUrl: created.sourceUrl },
+      actorId, action: "candidate.created", entityId: created.id,
+      metadata: { sourceUrl: created.sourceUrl, workspaceId: req.candidateScope },
     } });
     return created;
+  }).catch(error => {
+    if (error?.code === "P2002") return "DUPLICATE";
+    throw error;
   });
-  res.status(201).json({ id: row.id });
+  if (row === null) return res.status(403).json({ error: "Workspace membership revoked" });
+  if (row === "DUPLICATE") return res.status(409).json({ error: "Candidate already exists in workspace" });
+  return res.status(201).json({ id: row.id });
 }));
 
 app.get("/api/ai-settings", aiOwnerAuthenticated, safe(async (req, res) => {

@@ -29,3 +29,17 @@ export function scopedCandidateWhere(access, extra = {}) {
   }
   return Object.freeze({ ...extra, workspaceId: access.workspaceId });
 }
+
+// Serialize a workspace write with membership revocation. A regular
+// findUnique() inside READ COMMITTED does not prevent revocation from
+// committing between authorization and mutation. PostgreSQL row locks
+// are held until the caller's transaction commits or rolls back.
+export async function lockActiveWorkspaceMembership(tx, { userId, workspaceId }) {
+  if (!isWorkspaceId(userId) || !isWorkspaceId(workspaceId)) return false;
+  const rows = await tx.$queryRaw`
+    SELECT "revokedAt" FROM "PartnerMembership"
+    WHERE "partnerId" = ${workspaceId} AND "userId" = ${userId}
+    FOR UPDATE
+  `;
+  return rows.length === 1 && rows[0].revokedAt === null;
+}
