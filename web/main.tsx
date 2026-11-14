@@ -117,6 +117,11 @@ function App() {
   const [researchResult, setResearchResult] = useState<ResearchPreview | null>(null);
   const [researchStatus, setResearchStatus] = useState<"idle" | "loading" | "error">("idle");
   const [researchError, setResearchError] = useState("");
+  const [manualSeed, setManualSeed] = useState({
+    name: "", category: "AI_AUTOMATION", sourceUrl: "",
+  });
+  const [manualSeedSaving, setManualSeedSaving] = useState(false);
+  const manualSeedRequest = useRef(0);
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
@@ -192,6 +197,8 @@ function App() {
     const generation = ++workspaceRequest.current;
     ++partnerEvidenceRequest.current;
     ++partnerReviewRequest.current;
+    ++manualSeedRequest.current;
+    setManualSeedSaving(false);
     setPartnerReviewSaving(false);
     setReviewId(null);
     setPartnerEvidenceId(null);
@@ -275,6 +282,33 @@ function App() {
       setError(err instanceof Error ? err.message : "Evidence could not be saved");
     } finally {
       setPartnerEvidenceSaving(false);
+    }
+  }
+
+  async function saveManualSeed(workspaceId: string, event: React.FormEvent) {
+    event.preventDefault();
+    if (activeWorkspaceId !== workspaceId || manualSeedSaving) return;
+    const generation = workspaceRequest.current;
+    const request = ++manualSeedRequest.current;
+    setManualSeedSaving(true);
+    setError("");
+    try {
+      const receipt = await api<{ id: string; created: boolean }>(
+        "/candidates?workspaceId=" + encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify({ manualSeed: true, ...manualSeed }),
+        });
+      if (workspaceRequest.current !== generation || request !== manualSeedRequest.current) return;
+      setManualSeed({ name: "", category: "AI_AUTOMATION", sourceUrl: "" });
+      setNotice(receipt.created
+        ? "Manual expert seed saved for verification. No contact permission or email was inferred."
+        : "This expert reference already exists in this workspace. No duplicate was created.");
+      await viewWorkspace(workspaceId);
+    } catch (err) {
+      if (workspaceRequest.current !== generation || request !== manualSeedRequest.current) return;
+      setError(err instanceof Error ? err.message : "Could not save expert reference");
+    } finally {
+      if (request === manualSeedRequest.current) setManualSeedSaving(false);
     }
   }
 
@@ -412,6 +446,9 @@ function App() {
 
       ++partnerEvidenceRequest.current;
       ++partnerReviewRequest.current;
+      ++manualSeedRequest.current;
+      setManualSeedSaving(false);
+      setManualSeed({ name: "", category: "AI_AUTOMATION", sourceUrl: "" });
       setPartnerReviewSaving(false);
       setReviewId(null);
       setPartnerEvidenceId(null);
@@ -648,8 +685,9 @@ function App() {
         {error && <div className="error" role="alert">{error}</div>}
         {notice && <div className="success" role="status">{notice}</div>}
         {partnerTab !== "settings" && <section className="panel">
-          <p className="muted">Candidate and draft data are workspace-scoped. Partner editing, import and sending
-            remain disabled until their server authorization is released.</p>
+          <p className="muted">Candidate and draft data are workspace-scoped. Manual
+            expert references can be saved for review; automated directory import
+            and outbound sending remain disabled.</p>
         <h2>My workspaces</h2>
         {connectionStatus === "unavailable" && <div role="alert">
           <p>Google connection status is unavailable. No connection changes have been assumed.</p>
@@ -667,6 +705,36 @@ function App() {
             </button>
             {activeWorkspaceId === p.id &&
               <section aria-label={"Workspace " + p.name}>
+                {partnerTab === "discovery" && <section
+                  aria-label="Manual expert seed" className="review-panel">
+                  <h3>Add an expert for manual verification</h3>
+                  <p className="muted">Enter an expert's name and a public reference URL
+                    found through lawful manual research. This stores only the reference;
+                    it does not crawl the site, import its directory, verify the person,
+                    collect emails or authorize outreach.</p>
+                  <form onSubmit={event => void saveManualSeed(p.id, event)}>
+                    <label>Expert name
+                      <input required minLength={2} maxLength={160} value={manualSeed.name}
+                        onChange={event => setManualSeed({ ...manualSeed, name: event.target.value })}/>
+                    </label>
+                    <label>Area of expertise
+                      <select value={manualSeed.category}
+                        onChange={event => setManualSeed({ ...manualSeed, category: event.target.value })}>
+                        {categories.map(([value, label]) =>
+                          <option key={value} value={value}>{label}</option>)}
+                      </select>
+                    </label>
+                    <label>Public source or reference URL (HTTPS)
+                      <input required type="url" maxLength={2048}
+                        value={manualSeed.sourceUrl}
+                        onChange={event => setManualSeed({ ...manualSeed, sourceUrl: event.target.value })}
+                        placeholder="https://example.org/profile"/>
+                    </label>
+                    <button type="submit" disabled={manualSeedSaving}>
+                      {manualSeedSaving ? "Saving…" : "Save for review"}
+                    </button>
+                  </form>
+                </section>}
                 {partnerTab === "discovery" && <section aria-label="AI web research preview" className="review-panel">
                   <h3>Find experts with AI web search</h3>
                   <p className="muted">Optional paid Claude search (up to 3 web searches). Results are unverified,
