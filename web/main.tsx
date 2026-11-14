@@ -84,6 +84,7 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [partnerTab, setPartnerTab] = useState<"candidates" | "discovery" | "drafts" | "settings">("candidates");
   const [partnerSession, setPartnerSession] = useState<PartnerSession | null>(null);
   const [googleConnections, setGoogleConnections] = useState<GoogleConnection[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("loading");
@@ -496,11 +497,36 @@ function App() {
   }
 
   if (partnerSession?.authenticated && !loggedIn) return (
-    <main className="login-shell">
-      <section className="panel login" aria-label="Partner workspace">
-        <span className="eyebrow">SNAPYCALL • PARTNER</span>
-        <h1>Welcome{partnerSession.displayName ? ", " + partnerSession.displayName : ""}</h1>
-        <p className="muted">Your Google identity is verified. You can authorize read-only Google Forms and Sheets access per workspace; data synchronization is not yet available.</p>
+    <main className="layout">
+      <aside>
+        <div className="brand">SNAPYCALL<span> / PILOT</span></div>
+        <p className="sidebar-label">WORKSPACE</p>
+        <nav aria-label="Workspace sections">
+          {(["candidates", "discovery", "drafts", "settings"] as const).map(item =>
+            <button type="button" key={item} className={partnerTab === item ? "active" : ""}
+              onClick={() => setPartnerTab(item)}>
+              {item === "settings" ? "AI configuration" : item === "drafts" ? "Outreach drafts" :
+                item === "discovery" ? "Free discovery" : "Candidates"}
+            </button>)}
+        </nav>
+        <div className="sidebar-bottom">
+          <span className="state">● Draft-only mode · Partner session</span>
+          <button type="button" className="ghost" disabled={busy} onClick={logoutPartner}>Use administrator sign-in</button>
+          <button type="button" className="ghost" disabled={busy} onClick={logoutPartner}>Sign out</button>
+        </div>
+      </aside>
+      <section className="content" aria-label="Partner workspace">
+        <header><div><span className="eyebrow">SNAPYCALL • PARTNER</span>
+          <h1>{partnerTab === "candidates" ? "Expert candidates" : partnerTab === "discovery" ?
+            "Free lead discovery" : partnerTab === "drafts" ? "Outreach drafts" : "Your AI provider"}</h1>
+          <p className="muted">Welcome{partnerSession.displayName ? ", " + partnerSession.displayName : ""}.
+            Your access is limited to your authorized workspaces.</p>
+        </div><span className="pill">No automatic sending</span></header>
+        {error && <div className="error" role="alert">{error}</div>}
+        {notice && <div className="success" role="status">{notice}</div>}
+        {partnerTab !== "settings" && <section className="panel">
+          <p className="muted">Candidate and draft data are workspace-scoped. Partner editing, import and sending
+            remain disabled until their server authorization is released.</p>
         <h2>My workspaces</h2>
         {connectionStatus === "unavailable" && <div role="alert">
           <p>Google connection status is unavailable. No connection changes have been assumed.</p>
@@ -518,7 +544,7 @@ function App() {
             </button>
             {activeWorkspaceId === p.id &&
               <section aria-label={"Workspace " + p.name}>
-                <section aria-label="AI web research preview" className="review-panel">
+                {partnerTab === "discovery" && <section aria-label="AI web research preview" className="review-panel">
                   <h3>Find experts with AI web search</h3>
                   <p className="muted">Optional paid Claude search (up to 3 web searches). Results are unverified,
                     not saved or authorized for outreach. No emails will be sent.</p>
@@ -548,7 +574,8 @@ function App() {
                           Provider-cited source</a>
                       </li>)}</ul>
                   </>}
-                </section>
+                </section>}
+                {partnerTab !== "discovery" && <>
                 <h3>My candidates and outreach drafts</h3>
                 <p className="muted">Workspace-isolated read-only preview. Editing,
                   discovery import, AI drafting and sending are not enabled for Google users yet.</p>
@@ -560,11 +587,37 @@ function App() {
                   </button>
                 </div>}
                 {workspaceDataStatus === "ready" && <>
-                  <p>Candidates: {workspaceCandidates.length} · Drafts: {workspaceDrafts.length}</p>
-                  <ul>{workspaceCandidates.map(candidate =>
-                    <li key={candidate.id}>{candidate.name} — {candidate.category} ({candidate.qualification.stage})</li>)}</ul>
-                  <ul>{workspaceDrafts.map(draft =>
-                    <li key={draft.id}>{draft.candidate.name}: {draft.subject}</li>)}</ul>
+                  <div className="metrics">
+                    <div className="metric"><strong>{workspaceCandidates.length}</strong><span>Total candidates</span></div>
+                    <div className="metric"><strong>{workspaceCandidates.filter(c => c.qualification.qualified).length}</strong><span>Qualified experts</span></div>
+                    <div className="metric"><strong>{workspaceDrafts.length}</strong><span>Saved drafts</span></div>
+                  </div>
+                  {partnerTab === "candidates" && <>
+                    <h3>Candidate pipeline</h3>
+                    <div className="table-scroll"><table><thead><tr>
+                      <th>Candidate</th><th>Category</th><th>Region</th><th>Next action</th>
+                    </tr></thead><tbody>
+                      {workspaceCandidates.map(c => <tr key={c.id}>
+                        <td><strong>{c.name}</strong><small>{c.email ?? "No email"}</small></td>
+                        <td>{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td>
+                        <td>{c.region ?? "Unconfirmed"}</td>
+                        <td>{stageNames[c.qualification.stage] ?? c.qualification.stage}</td>
+                      </tr>)}
+                      {!workspaceCandidates.length && <tr><td colSpan={4} className="empty">No candidates in this workspace.</td></tr>}
+                    </tbody></table></div>
+                  </>}
+                  {partnerTab === "drafts" && <>
+                    <h3>Outreach drafts</h3>
+                    <div className="table-scroll"><table><thead><tr>
+                      <th>Candidate</th><th>Subject</th><th>Provider</th>
+                    </tr></thead><tbody>
+                      {workspaceDrafts.map(d => <tr key={d.id}>
+                        <td>{d.candidate.name}</td><td>{d.subject}</td><td>{d.provider}</td>
+                      </tr>)}
+                      {!workspaceDrafts.length && <tr><td colSpan={3} className="empty">No saved drafts in this workspace.</td></tr>}
+                    </tbody></table></div>
+                  </>}
+                </>}
                 </>}
               </section>}
             {connectionStatus === "loading" ? <p className="muted">Checking Google connection…</p>
@@ -582,6 +635,11 @@ function App() {
               </>}
           </div>;
         })}
+
+        </section>}
+        {partnerTab === "settings" && <section className="panel">
+          <h2>Partner settings</h2>
+          <p className="muted">Google Forms and Sheets consent is read-only. Synchronization is not active.</p>
         <section aria-label="Personal Gmail sending authorization">
           <h2>My Gmail sender</h2>
           <p className="muted">Gmail consent is optional and separate from Google login and Forms/Sheets.
@@ -641,10 +699,8 @@ function App() {
                 onClick={() => void deletePersonalAiSettings()}>Remove my AI key</button>}
             </form>}
         </section>
-        {error && <div className="error" role="alert">{error}</div>}
-        <p className="muted">Administrator tools require a separate admin sign-in. Switching accounts signs out of this partner session first.</p>
-        <button type="button" className="secondary" disabled={busy} onClick={logoutPartner}>Use administrator sign-in</button>
-        <button type="button" className="secondary" disabled={busy} onClick={logoutPartner}>Sign out</button>
+
+        </section>}
       </section>
     </main>
   );
