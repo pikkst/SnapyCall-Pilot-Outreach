@@ -127,7 +127,10 @@ export async function readOwnerBudgetSnapshot(db, ownerId, now = new Date()) {
     throw new TypeError("Authenticated owner required");
   }
   const monthUtc = utcBudgetMonth(now);
-  const [budget, month, pendingReservations] = await Promise.all([
+  // Count unresolved claims across all UTC months: a previous month's
+  // possibly billed reservation must not disappear from diagnostics.
+  const staleBefore = new Date(now.getTime() - 5 * 60_000);
+  const [budget, month, pendingReservations, staleReservations, oldestPending] = await Promise.all([
     db.researchOwnerBudget.findUnique({
       where: { ownerId }, select: { monthlyLimitCents: true },
     }),
@@ -138,11 +141,19 @@ export async function readOwnerBudgetSnapshot(db, ownerId, now = new Date()) {
     db.researchSpendReservation.count({
       where: { ownerId, monthUtc, status: "RESERVED" },
     }),
+    db.researchSpendReservation.count({
+      where: { ownerId, status: "RESERVED", createdAt: { lte: staleBefore } },
+    }),
+    db.researchSpendReservation.findFirst({
+      where: { ownerId, status: "RESERVED" },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
   ]);
   const reservedCents = month?.reservedCents ?? 0;
   const settledCents = month?.settledCents ?? 0;
   const monthlyLimitCents = budget?.monthlyLimitCents ?? null;
-  if (![reservedCents, settledCents, pendingReservations].every(
+  if (![reservedCents, settledCents, pendingReservations, staleReservations].every(
     value => Number.isSafeInteger(value) && value >= 0)) {
     throw new TypeError("Invalid persisted spend ledger totals");
   }
@@ -155,6 +166,13 @@ export async function readOwnerBudgetSnapshot(db, ownerId, now = new Date()) {
         Math.max(0, monthlyLimitCents - reservedCents - settledCents),
       // Values represent app-side budget accounting, never provider invoices.
       billingSource: "application-estimate",
+    },
+    reconciliation: {
+      // Alerts must be read-only. Never auto-refund uncertain provider costs.
+      staleAfterMinutes: 5,
+      staleReservations,
+      oldestPendingAt: oldestPending?.createdAt?.toISOString() ?? null,
+      needsReview: staleReservations > 0,
     },
   };
 }
