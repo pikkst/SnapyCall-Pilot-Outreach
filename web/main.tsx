@@ -40,7 +40,8 @@ type ResearchBudget = { monthlyLimitCents: number | null; currency: "USD";
     monthUtc: string; reservedCents: number; settledCents: number;
     pendingReservations: number; availableCents: number | null;
     billingSource: "application-estimate";
-  } };
+  }; reconciliation?: { staleAfterMinutes: number; staleReservations: number;
+    oldestPendingAt: string | null; needsReview: boolean } };
 type DuplicateHint = { id: string; reasons: string[] };
 type Evidence = { id: string; kind: string; sourceUrl: string; note: string | null; capturedAt: string };
 type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
@@ -1137,6 +1138,13 @@ function App() {
                 <p>Pending reservations: {researchBudget.ledger.pendingReservations}
                   · Available in application ledger: {researchBudget.ledger.availableCents === null ?
                     "Not configured" : (researchBudget.ledger.availableCents / 100).toFixed(2) + " USD"}</p>
+                {researchBudget.reconciliation?.needsReview && <p role="status">
+                  Manual reconciliation required: {researchBudget.reconciliation.staleReservations}
+                  {" "}unresolved reservation(s) older than
+                  {" "}{researchBudget.reconciliation.staleAfterMinutes} minutes, across UTC months.
+                  Possible provider charges remain reserved. Contact an operator to
+                  investigate; no automatic refund is performed.
+                </p>}
                 <p className="muted">These are internal estimates, not verified provider charges.
                   They do not cap your external provider invoice. Paid research remains disabled.</p>
               </div>}
