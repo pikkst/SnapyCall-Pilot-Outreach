@@ -10,6 +10,7 @@ import { z } from "zod";
 import { normalizeCandidate, outreachDecision, scoreCandidate, qualificationDecision, EXPERT_CATEGORIES } from "../src/domain.js";
 import { parseApprovedSources, discoverFeed, normalizeFeedAuthor, DiscoverySourceError } from "./discovery.js";
 import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
+import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { canonicalEvidenceUrl, EVIDENCE_KINDS, sameIdentityHints } from "../src/evidence.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
@@ -818,7 +819,14 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
       Object.hasOwn(req.body, "workspaceId")) {
     return res.status(400).json({ error: "Candidate ownership cannot be set in request body" });
   }
-  const candidate = normalizeCandidate(req.body);
+  const manualSeed = req.body.manualSeed === true;
+  // This extends the existing candidate endpoint without relaxing legacy
+  // create semantics. A manual discovery seed cannot assert contact status.
+  if (manualSeed && req.candidateScope === null) {
+    return res.status(403).json({ error: "Manual leads require a partner workspace" });
+  }
+  const seed = manualSeed ? normalizeManualLeadSeed(req.body) : null;
+  const candidate = normalizeCandidate(seed ?? req.body);
   const actorId = req.candidateScope === null ? "admin" :
     verifyPartnerSession(req.cookies?.pilot_partner_session, env.SESSION_SIGNING_KEY);
   const row = await prisma.$transaction(async (tx) => {
@@ -830,6 +838,12 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
       });
       if (!active) return null;
     }
+    if (manualSeed) {
+      const existing = await tx.candidate.findFirst({ where: {
+        workspaceId: req.candidateScope, discoveryKey: seed.discoveryKey,
+      } });
+      if (existing) return { id: existing.id, created: false };
+    }
     const created = await tx.candidate.create({
       data: {
         workspaceId: req.candidateScope,
@@ -838,20 +852,36 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
         region: candidate.region, onlineEnglish: candidate.onlineEnglish,
         sourceUrl: candidate.sourceUrl, legalBasis: candidate.legalBasis,
         contactReviewed: candidate.contactReviewed, suppressed: candidate.suppressed,
+        ...(manualSeed ? { discoveryKey: seed.discoveryKey,
+          profileReviewed: false, status: "REVIEW_PENDING" } : {}),
       },
     });
     await tx.auditEvent.create({ data: {
-      actorId, action: "candidate.created", entityId: created.id,
-      metadata: { sourceUrl: created.sourceUrl, workspaceId: req.candidateScope },
+      actorId, action: manualSeed ? "discovery.manual-seed.created" : "candidate.created",
+      entityId: created.id,
+      metadata: { sourceUrl: created.sourceUrl, workspaceId: req.candidateScope,
+        ...(manualSeed ? { sourceType: "manually_supplied_reference",
+          permissionVerified: false, reviewRequired: true } : {}) },
     } });
-    return created;
-  }).catch(error => {
-    if (error?.code === "P2002") return "DUPLICATE";
-    throw error;
+    return manualSeed ? { id: created.id, created: true } : created;
+  }).catch(async error => {
+    if (error?.code !== "P2002") throw error;
+    if (!manualSeed) return "DUPLICATE";
+    // Concurrent requests for the same manual seed are idempotent. Never
+    // resolve collisions outside the authenticated tenant segment.
+    const winner = await prisma.candidate.findFirst({ where: {
+      workspaceId: req.candidateScope, discoveryKey: seed.discoveryKey,
+    } });
+    if (!winner) throw error;
+    return { id: winner.id, created: false };
   });
   if (row === null) return res.status(403).json({ error: "Workspace membership revoked" });
   if (row === "DUPLICATE") return res.status(409).json({ error: "Candidate already exists in workspace" });
-  return res.status(201).json({ id: row.id });
+  return res.status(manualSeed && !row.created ? 200 : 201).json({
+    id: row.id, ...(manualSeed ? {
+      created: row.created, reviewRequired: true, contactAuthorized: false,
+    } : {}),
+  });
 }));
 
 app.get("/api/ai-settings", aiOwnerAuthenticated, safe(async (req, res) => {
