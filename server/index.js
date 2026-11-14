@@ -18,6 +18,7 @@ import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCo
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
 import { googleDataConfig, createGoogleDataFlow, verifyGoogleDataFlow,
   exchangeGoogleDataCode } from "./google-data-auth.js";
+import { requireWorkspaceMembership } from "./workspace-access.js";
 import { deliverPartnerInvitation, publicInvitationStatus,
   invitationEmailConfig, resetInvitationAttempt } from "./partner-invitations.js";
 
@@ -371,6 +372,29 @@ app.get("/api/auth/google/callback", safe(async (req, res) => {
   partnerCookie(res, createPartnerSession(user.id, env.SESSION_SIGNING_KEY), 8 * 60 * 60_000);
   return res.redirect(303, "/");
 }));
+// Shared read routes start tenant-aware without granting partner write access.
+// Admin-only legacy rows remain visible only to the original admin session.
+async function candidateReadScope(req, res, next) {
+  try {
+    const admin = verifySession(req.cookies?.pilot_session, env.SESSION_SIGNING_KEY);
+    const user = await partnerIdentity(req);
+    if (admin && user) return res.status(409).json({ error: "Multiple active identities; sign out of one" });
+    if (!admin && !user) return res.status(401).json({ error: "Unauthorized" });
+    if (admin) {
+      if (req.query.workspaceId !== undefined) return res.status(403).json({ error: "Admin legacy data has no partner workspace" });
+      req.candidateScope = null;
+    } else {
+      const membership = await requireWorkspaceMembership(prisma, {
+        userId: user.id, workspaceId: req.query.workspaceId,
+      });
+      if (!membership) return res.status(403).json({ error: "Active workspace membership required" });
+      req.candidateScope = membership.workspaceId;
+    }
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
 const write = [authenticated, requireOrigin];
 // Free discovery: explicit RSS/Atom sources, no paid people-search API.
 // Each scan is a bounded, admin-triggered read. Imports require separate review.
@@ -550,8 +574,11 @@ app.get("/api/candidates/:id/possible-duplicates", authenticated, safe(async (re
   const suggestions = sameIdentityHints(candidate, others.slice(0, MAX_IDENTITY_CANDIDATES));
   return res.json({ suggestions, automaticallyMerged: false, incomplete });
 }));
-app.get("/api/candidates", authenticated, safe(async (_req, res) => {
-  const items = await prisma.candidate.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
+app.get("/api/candidates", candidateReadScope, safe(async (req, res) => {
+  const items = await prisma.candidate.findMany({
+    where: { workspaceId: req.candidateScope },
+    orderBy: { createdAt: "desc" }, take: 500,
+  });
   res.json(items.map((item) => ({ ...item,
     name: item.discoveryKey ? normalizeFeedAuthor(item.name) : item.name,
     score: scoreCandidate(item),
@@ -646,8 +673,9 @@ app.post("/api/candidates/:id/draft", ...write, draftLimiter, safe(async (req, r
   });
   res.status(201).json({ id: row.id, ...draft });
 }));
-app.get("/api/drafts", authenticated, safe(async (_req, res) => {
+app.get("/api/drafts", candidateReadScope, safe(async (req, res) => {
   const drafts = await prisma.outreachDraft.findMany({
+    where: { workspaceId: req.candidateScope },
     take: 200, orderBy: { createdAt: "desc" },
     include: { candidate: { select: { id: true, name: true } } },
   });
