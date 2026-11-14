@@ -2,6 +2,7 @@
 // metadata, not URLs invented in the model's JSON. No contact is authorized.
 import { z } from "zod";
 import { normalizeResearchEvidence } from "./research-evidence.js";
+import { searchWithOpenAI, searchWithGemini } from "./research-provider-adapters.js";
 
 export const researchInput = z.object({
   query: z.string().trim().min(12).max(350),
@@ -27,11 +28,11 @@ function extractResult(json, limit) {
   return normalizeResearchEvidence({ text: output, citations, limit });
 }
 
-export async function researchCandidates({ query, limit = 10, model, apiKey }, options = {}) {
+export async function researchCandidates({ query, limit = 10, provider = "anthropic", model, apiKey }, options = {}) {
   const input = researchInput.parse({ query, limit });
   if (typeof apiKey !== "string" || apiKey.length < 8 || typeof model !== "string" ||
       !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{1,79}$/.test(model)) {
-    throw new TypeError("Personal Claude model and API key required");
+    throw new TypeError("Personal research model and API key required");
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
@@ -44,6 +45,15 @@ export async function researchCandidates({ query, limit = 10, model, apiKey }, o
       if (!response.ok) throw new Error("AI provider request failed (HTTP " + response.status + ")");
       return response.json();
     });
+    if (provider === "openai") {
+      return searchWithOpenAI({ query: input.query, limit: input.limit, model, apiKey },
+        post, controller.signal);
+    }
+    if (provider === "gemini") {
+      return searchWithGemini({ query: input.query, limit: input.limit, model, apiKey },
+        post, controller.signal);
+    }
+    if (provider !== "anthropic") throw new TypeError("Unsupported research provider");
     const payload = {
       model, max_tokens: 3200,
       tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
