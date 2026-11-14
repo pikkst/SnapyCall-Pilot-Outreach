@@ -782,6 +782,8 @@ try {
       ledger: { monthUtc: new Date().toISOString().slice(0, 7) + "-01",
         reservedCents: 0, settledCents: 0, pendingReservations: 0,
         availableCents: null, billingSource: "application-estimate" },
+      reconciliation: { staleAfterMinutes: 5, staleReservations: 0,
+        oldestPendingAt: null, needsReview: false },
     });
     const budgetBody = JSON.stringify({ monthlyLimitCents: 500 });
     assert.equal((await call("/research-budget", { method: "PUT",
@@ -803,6 +805,8 @@ try {
       ledger: { monthUtc: new Date().toISOString().slice(0, 7) + "-01",
         reservedCents: 0, settledCents: 0, pendingReservations: 0,
         availableCents: 500, billingSource: "application-estimate" },
+      reconciliation: { staleAfterMinutes: 5, staleReservations: 0,
+        oldestPendingAt: null, needsReview: false },
     });
     const { reserveOwnerSpend, settleOwnerSpend, ResearchBudgetExceeded } =
       await import("../server/research-budget.js");
@@ -880,6 +884,34 @@ try {
       "c" + "f".repeat(24), budgetClock);
     assert.equal(otherOwner.ledger.settledCents, 0);
     assert.equal(otherOwner.monthlyLimitCents, null);
+    const staleId = "07dcc5e1-9e62-4f8a-83a7-3ea8363b9271";
+    await partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: firstWorkspace,
+      reservationId: staleId, worstCaseCents: 25, now: budgetClock,
+    }));
+    const agedAt = new Date(Date.now() - 15 * 60_000);
+    await partnerDb.researchSpendReservation.update({
+      where: { id: staleId }, data: { createdAt: agedAt },
+    });
+    const aged = await readOwnerBudgetSnapshot(partnerDb, member.id);
+    assert.equal(aged.reconciliation.staleReservations, 1);
+    assert.equal(aged.reconciliation.needsReview, true);
+    assert.equal(aged.reconciliation.oldestPendingAt, agedAt.toISOString());
+    assert.equal((await readOwnerBudgetSnapshot(partnerDb,
+      "c" + "f".repeat(24))).reconciliation.staleReservations, 0,
+    "Stale reservation diagnostics must never cross owner scope");
+    const previousMonth = await readOwnerBudgetSnapshot(partnerDb, member.id,
+      new Date("2027-01-02T00:00:00Z"));
+    assert.equal(previousMonth.ledger.pendingReservations, 0);
+    assert.equal(previousMonth.reconciliation.staleReservations, 1,
+      "Old unsettled reservations must remain visible across month rollover");
+    // Resolve the synthetic stale reservation; only explicit settlement changes money.
+    await partnerDb.$transaction(tx => settleOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: firstWorkspace,
+      reservationId: staleId, actualCents: null,
+    }));
+    assert.equal((await readOwnerBudgetSnapshot(partnerDb, member.id))
+      .reconciliation.staleReservations, 0);
     await partnerDb.researchOwnerBudget.update({ where: { ownerId: member.id },
       data: { monthlyLimitCents: 100 } });
     await assert.rejects(() => partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
