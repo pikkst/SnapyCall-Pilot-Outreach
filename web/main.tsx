@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 
@@ -71,6 +71,7 @@ function App() {
   const [googleConnections, setGoogleConnections] = useState<GoogleConnection[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("loading");
   const [googleConfigured, setGoogleConfigured] = useState(false);
+  const workspaceRequest = useRef(0);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [workspaceCandidates, setWorkspaceCandidates] = useState<Candidate[]>([]);
   const [workspaceDrafts, setWorkspaceDrafts] = useState<Draft[]>([]);
@@ -144,6 +145,8 @@ function App() {
   }, []);
 
   async function viewWorkspace(workspaceId: string) {
+    // An earlier response must never render under a newly selected workspace.
+    const generation = ++workspaceRequest.current;
     setActiveWorkspaceId(workspaceId);
     setWorkspaceCandidates([]);
     setWorkspaceDrafts([]);
@@ -154,10 +157,12 @@ function App() {
         api<Candidate[]>("/candidates" + q),
         api<Draft[]>("/drafts" + q),
       ]);
+      if (workspaceRequest.current !== generation) return;
       setWorkspaceCandidates(leads);
       setWorkspaceDrafts(messages);
       setWorkspaceDataStatus("ready");
     } catch {
+      if (workspaceRequest.current !== generation) return;
       setWorkspaceCandidates([]);
       setWorkspaceDrafts([]);
       setWorkspaceDataStatus("error");
@@ -202,6 +207,7 @@ function App() {
   async function logoutPartner() {
     await execute(async () => {
       await api("/partner/session", { method: "DELETE" });
+      ++workspaceRequest.current;
       setPartnerSession(null);
       setActiveWorkspaceId(null);
       setWorkspaceCandidates([]);
