@@ -707,40 +707,61 @@ app.patch("/api/candidates/:id/expert-review", ...write, safe(async (req, res) =
 }));
 // Append-only source observations. An observation never auto-confirms
 // eligibility, ownership of the identity, or consent to contact.
-app.get("/api/candidates/:id/evidence", authenticated, safe(async (req, res) => {
-  const candidate = await prisma.candidate.findUnique({ where: { id: req.params.id }, select: { id: true } });
+app.get("/api/candidates/:id/evidence", candidateReadScope, safe(async (req, res) => {
+  const candidate = await prisma.candidate.findFirst({
+    where: { id: req.params.id, workspaceId: req.candidateScope },
+    select: { id: true },
+  });
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
   const items = await prisma.candidateEvidence.findMany({
-    where: { candidateId: candidate.id }, orderBy: { capturedAt: "asc" }, take: 100,
+    where: { candidateId: candidate.id, workspaceId: req.candidateScope },
+    orderBy: { capturedAt: "asc" }, take: 100,
   });
   return res.json(items);
 }));
-app.post("/api/candidates/:id/evidence", ...write, safe(async (req, res) => {
+app.post("/api/candidates/:id/evidence", candidateReadScope, requireOrigin, safe(async (req, res) => {
   const input = z.object({
     kind: z.enum(EVIDENCE_KINDS),
     sourceUrl: z.string().url().max(2048),
     note: z.string().trim().max(500).optional(),
   }).strict().parse(req.body);
   const normalizedUrl = canonicalEvidenceUrl(input.sourceUrl);
+  const actorId = req.candidateScope === null ? "admin" :
+    verifyPartnerSession(req.cookies?.pilot_partner_session, env.SESSION_SIGNING_KEY);
   const key = { candidateId_kind_normalizedUrl: {
     candidateId: req.params.id, kind: input.kind, normalizedUrl,
   } };
   const result = await prisma.$transaction(async tx => {
-    const row = await tx.candidate.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (req.candidateScope !== null && !await lockActiveWorkspaceMembership(tx, {
+      workspaceId: req.candidateScope, userId: actorId,
+    })) return { status: 403, body: { error: "Workspace membership revoked" } };
+    const row = await tx.candidate.findFirst({
+      where: { id: req.params.id, workspaceId: req.candidateScope }, select: { id: true },
+    });
     if (!row) return { status: 404, body: { error: "Candidate not found" } };
     const existing = await tx.candidateEvidence.findUnique({ where: key });
     if (existing) return { status: 200, body: { id: existing.id, created: false } };
     const observation = await tx.candidateEvidence.create({ data: {
+      workspaceId: req.candidateScope,
       candidateId: row.id, kind: input.kind, sourceUrl: input.sourceUrl,
-      normalizedUrl, note: input.note ?? null, capturedBy: "admin",
+      normalizedUrl, note: input.note ?? null, capturedBy: actorId,
     } });
     await tx.auditEvent.create({ data: {
-      actorId: "admin", action: "candidate.evidence.added", entityId: row.id,
+      actorId, action: "candidate.evidence.added", entityId: row.id,
       metadata: { evidenceId: observation.id, kind: input.kind, sourceUrl: normalizedUrl },
     } });
     return { status: 201, body: { id: observation.id, created: true } };
   }).catch(async error => {
     if (error?.code !== "P2002") throw error;
+    // A concurrent insert can only be reused for the exact candidate
+    // identified by this request, and a revoked partner may not view it.
+    if (req.candidateScope !== null && !await requireWorkspaceMembership(prisma, {
+      workspaceId: req.candidateScope, userId: actorId,
+    })) return { status: 403, body: { error: "Workspace membership revoked" } };
+    const candidate = await prisma.candidate.findFirst({
+      where: { id: req.params.id, workspaceId: req.candidateScope }, select: { id: true },
+    });
+    if (!candidate) return { status: 404, body: { error: "Candidate not found" } };
     const existing = await prisma.candidateEvidence.findUnique({ where: key });
     if (!existing) throw error;
     return { status: 200, body: { id: existing.id, created: false } };

@@ -427,6 +427,52 @@ try {
     assert.equal((await partnerDb.candidate.findUnique({
       where: { id: createdSecondId },
     })).workspaceId, secondWorkspace);
+    // Existing evidence endpoints must fence workspace identity as strictly as
+    // candidate creation. No cross-tenant evidence or audit access is permitted.
+    const evidencePath = "/candidates/" + createdFirstId + "/evidence";
+    const evidenceBody = JSON.stringify({
+      kind: "PROFILE", sourceUrl: "https://example.org/partner-evidence",
+      note: "Public source to review",
+    });
+    assert.equal((await call(evidencePath, {
+      headers: { cookie: partnerCookie },
+    })).status, 403, "Workspace selection is mandatory for evidence reads");
+    assert.equal((await call(evidencePath + "?workspaceId=" + secondWorkspace, {
+      headers: { cookie: partnerCookie },
+    })).status, 404, "Another workspace must not expose candidate evidence");
+    assert.equal((await call(evidencePath + "?workspaceId=" + firstWorkspace, {
+      headers: { cookie },
+    })).status, 403, "Admin cannot impersonate workspace evidence reader");
+    assert.equal((await call(evidencePath + "?workspaceId=" + firstWorkspace, {
+      method: "POST", headers: { cookie: partnerCookie, "content-type": "application/json" },
+      body: evidenceBody,
+    })).status, 403, "Evidence writes require CSRF origin");
+    assert.equal((await call(evidencePath + "?workspaceId=" + secondWorkspace, {
+      method: "POST", headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: evidenceBody,
+    })).status, 404, "Evidence cannot be written into a foreign candidate");
+    const ownEvidence = await call(evidencePath + "?workspaceId=" + firstWorkspace, {
+      method: "POST", headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: evidenceBody,
+    });
+    assert.equal(ownEvidence.status, 201);
+    const ownEvidenceId = (await ownEvidence.json()).id;
+    assert.equal((await call(evidencePath + "?workspaceId=" + firstWorkspace, {
+      method: "POST", headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: evidenceBody,
+    })).status, 200, "Idempotent evidence replay must not duplicate a source");
+    const ownEvidenceList = await call(evidencePath + "?workspaceId=" + firstWorkspace, {
+      headers: { cookie: partnerCookie },
+    });
+    assert.equal(ownEvidenceList.status, 200);
+    assert.deepEqual((await ownEvidenceList.json()).map(item => item.id), [ownEvidenceId]);
+    assert.equal((await partnerDb.candidateEvidence.findUnique({
+      where: { id: ownEvidenceId },
+    })).workspaceId, firstWorkspace);
+    assert.equal(await partnerDb.auditEvent.count({
+      where: { action: "candidate.evidence.added", entityId: createdFirstId, actorId: member.id },
+    }), 1);
+    await partnerDb.candidateEvidence.delete({ where: { id: ownEvidenceId } });
     const adminCreatedResponse = await submitCandidate({ cookie }, "");
     assert.equal(adminCreatedResponse.status, 201, "Legacy admin create remains working");
     const adminCreatedId = (await adminCreatedResponse.json()).id;
