@@ -328,7 +328,38 @@ try {
     assert.equal((await legacyList.json()).some(row => row.id === privateLeadA.id), false,
       "Legacy admin must not see Google-workspace candidates");
 
-    assert.equal((await call("/ai-settings", { headers: { cookie: partnerCookie } })).status, 401);
+    // Google users configure their own AI keys through the existing endpoint.
+    // The admin key is never used as a fallback for a partner session.
+    const ownSettings = await call("/ai-settings", { headers: { cookie: partnerCookie } });
+    assert.equal(ownSettings.status, 200);
+    assert.equal((await ownSettings.json()).keyConfigured, false);
+    const keyPayload = JSON.stringify({
+      provider: "gemini", model: "gemini-2.5-flash",
+      apiKey: "partner-personal-api-key-for-ci",
+    });
+    assert.equal((await call("/ai-settings", { method: "PUT",
+      headers: { cookie: partnerCookie, "content-type": "application/json" },
+      body: keyPayload })).status, 403, "Partner key mutation requires CSRF origin");
+    const savedOwn = await call("/ai-settings", { method: "PUT",
+      headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: keyPayload });
+    assert.equal(savedOwn.status, 200);
+    const ownMetadata = await call("/ai-settings", { headers: { cookie: partnerCookie } });
+    const metadataText = await ownMetadata.text();
+    assert.equal(JSON.parse(metadataText).keyConfigured, true);
+    assert.equal(metadataText.includes("partner-personal-api-key-for-ci"), false);
+    const ownKeyRow = await partnerDb.aiSetting.findUnique({ where: { ownerId: member.id } });
+    assert.ok(ownKeyRow);
+    assert.notEqual(ownKeyRow.encryptedApiKey, "partner-personal-api-key-for-ci");
+    const legacyAdminSettings = await call("/ai-settings", { headers: { cookie } });
+    assert.equal((await legacyAdminSettings.json()).keyConfigured, false);
+    const ambiguousCookies = await call("/ai-settings", {
+      headers: { cookie: cookie + "; " + partnerCookie },
+    });
+    assert.equal(ambiguousCookies.status, 409,
+      "Concurrent admin and partner sessions must not fall back to admin AI key");
+
+
     assert.equal((await call("/partner/google/connections")).status, 401,
       "Unauthenticated callers cannot list Google connections");
     assert.equal((await call("/partner/google/connections", { headers: { cookie } })).status, 401,
@@ -398,6 +429,20 @@ try {
       data: { googleSub: "outsider-google-sub" } });
     const outsiderCookie = "pilot_partner_session=" +
       createPartnerSession(outsider.id, env.SESSION_SIGNING_KEY);
+    const outsiderSettings = await call("/ai-settings", { headers: { cookie: outsiderCookie } });
+    assert.equal((await outsiderSettings.json()).keyConfigured, false,
+      "Distinct Google users never inherit another user's AI key");
+    assert.equal((await call("/ai-settings", { method: "DELETE", headers: {
+      cookie: outsiderCookie, origin,
+    } })).status, 200);
+    assert.equal((await (await call("/ai-settings", { headers: { cookie: partnerCookie } })).json()).keyConfigured,
+      true, "Outsider deletion must not affect another user");
+    assert.equal((await call("/ai-settings", { method: "DELETE", headers: {
+      cookie: partnerCookie, origin,
+    } })).status, 200);
+    assert.equal(await partnerDb.aiSetting.count({ where: { ownerId: member.id } }), 0);
+
+
     assert.equal((await call("/candidates?workspaceId=" + firstWorkspace, {
       headers: { cookie: outsiderCookie },
     })).status, 403, "Outsider cannot read a different workspace");
