@@ -866,6 +866,69 @@ try {
       reservationId: "04dcc5e1-9e62-4f8a-83a7-3ea8363b9271",
       worstCaseCents: 1, now: budgetClock,
     })), ResearchBudgetExceeded, "Lowering budget cannot erase spent amount");
+    // Integration contract: the same transaction must claim an owner-wide
+    // currency reservation and daily quota; a budget rejection must not leave
+    // a lease, quota count or spend record behind. No provider call is made.
+    const futureClock = new Date("2026-12-02T10:00:00Z");
+    const futureDay = new Date("2026-12-02T00:00:00Z");
+    const rejectedReservation = "05dcc5e1-9e62-4f8a-83a7-3ea8363b9271";
+    const leasesBefore = await partnerDb.researchRunLease.count();
+    await assert.rejects(() => partnerDb.$transaction(async tx => {
+      const lease = await reserveResearchLease(tx, {
+        workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
+      });
+      assert.ok(lease);
+      await reserveOwnerSpend(tx, {
+        ownerId: member.id, workspaceId: firstWorkspace,
+        reservationId: rejectedReservation, worstCaseCents: 101,
+        now: futureClock,
+      });
+      await reserveResearchAttempt(tx, {
+        workspaceId: firstWorkspace, userId: member.id, now: futureClock,
+      });
+    }), ResearchBudgetExceeded, "No owner funds means zero research claims");
+    assert.equal(await partnerDb.researchRunLease.count(), leasesBefore,
+      "Currency denial rolls back the concurrency lease");
+    assert.equal(await partnerDb.researchSpendReservation.count({
+      where: { id: rejectedReservation },
+    }), 0, "Rejected request must not persist a spend reservation");
+    assert.equal(await partnerDb.researchDailyQuota.count({
+      where: { dayUtc: futureDay, scopeKey: {
+        in: ["workspace:" + firstWorkspace,
+          "workspace-user:" + firstWorkspace + ":" + member.id],
+      } },
+    }), 0, "Currency denial must not consume either daily quota");
+
+    // A bounded reservation is stored before the simulated chargeable call;
+    // with unknown provider billing it settles conservatively at the maximum.
+    const allowedReservation = "06dcc5e1-9e62-4f8a-83a7-3ea8363b9271";
+    const allocated = await partnerDb.$transaction(async tx => {
+      const leaseId = await reserveResearchLease(tx, {
+        workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
+      });
+      await reserveOwnerSpend(tx, {
+        ownerId: member.id, workspaceId: firstWorkspace,
+        reservationId: allowedReservation, worstCaseCents: 80,
+        now: futureClock,
+      });
+      const count = await reserveResearchAttempt(tx, {
+        workspaceId: firstWorkspace, userId: member.id, now: futureClock,
+      });
+      return { leaseId, count };
+    });
+    assert.equal(allocated.count.remaining.userWorkspace, 1);
+    assert.equal((await partnerDb.researchSpendReservation.findUnique({
+      where: { id: allowedReservation },
+    })).status, "RESERVED");
+    await partnerDb.$transaction(tx => settleOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: firstWorkspace,
+      reservationId: allowedReservation, actualCents: null,
+    }));
+    assert.equal((await partnerDb.researchSpendReservation.findUnique({
+      where: { id: allowedReservation },
+    })).chargedCents, 80);
+    assert.equal((await releaseResearchLease(partnerDb, allocated.leaseId,
+      firstWorkspace, member.id)).count, 1);
     const ownMetadata = await call("/ai-settings", { headers: { cookie: partnerCookie } });
     const metadataText = await ownMetadata.text();
     assert.equal(JSON.parse(metadataText).keyConfigured, true);
