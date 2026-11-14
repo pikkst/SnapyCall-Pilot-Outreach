@@ -30,3 +30,11 @@ td button+button{margin-left:6px}
   .invitation-table td:last-child { padding-bottom: 0; }
   .invitation-table td button { max-width: 100%; white-space: normal; }
 }
+
+/* Keep both session-switch and sign-out controls accessible on mobile. */
+@media (max-width: 800px) {
+  .layout aside .sidebar-bottom { display:flex; flex-wrap:wrap; align-items:center;
+    margin-top:12px; gap:8px; }
+  .layout aside .sidebar-bottom .state { width:100%; margin-left:0; }
+  .layout aside .sidebar-bottom button { flex:1 1 180px; min-width:0; }
+}
