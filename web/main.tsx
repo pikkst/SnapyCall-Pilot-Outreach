@@ -9,6 +9,7 @@ type PartnerInvitation = { id: string; workspaceId: string; workspace: string;
   leaseUntil: string | null; errorCode: string | null; attempt: number };
 type ConnectionStatus = "loading" | "ready" | "unavailable";
 type ConnectionResponse = { connections: GoogleConnection[]; available: boolean };
+type GmailStatus = { connected: boolean; available: boolean; email: string; sendingEnabled: false };
 type Candidate = {
   id: string; name: string; email: string | null; category: string;
   region: string | null; onlineEnglish: boolean; status: string;
@@ -71,6 +72,8 @@ function App() {
   const [googleConnections, setGoogleConnections] = useState<GoogleConnection[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("loading");
   const [googleConfigured, setGoogleConfigured] = useState(false);
+  const [gmailStatus, setGmailStatus] = useState<GmailStatus | null>(null);
+  const [gmailStatusError, setGmailStatusError] = useState(false);
   const [personalAi, setPersonalAi] = useState<AiSetting>({
     provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false,
   });
@@ -140,6 +143,7 @@ function App() {
         else if (partner.authenticated) {
           setPartnerSession(partner);
           await loadGoogleConnections();
+          await loadGmailStatus();
           await loadPersonalAiSettings();
         }
       }).catch(() => setError("Unable to reach the authentication API"));
@@ -175,6 +179,24 @@ function App() {
       setPersonalApiKey("");
       await loadPersonalAiSettings();
       setNotice("Your personal AI key was removed.");
+    });
+  }
+
+  async function loadGmailStatus() {
+    setGmailStatusError(false);
+    try {
+      setGmailStatus(await api<GmailStatus>("/partner/google/gmail"));
+    } catch {
+      setGmailStatus(null);
+      setGmailStatusError(true);
+    }
+  }
+
+  async function disconnectGmail() {
+    await execute(async () => {
+      await api("/partner/google/gmail", { method: "DELETE" });
+      await loadGmailStatus();
+      setNotice("Gmail authorization removed locally. You may also revoke it in Google Account permissions.");
     });
   }
 
@@ -217,6 +239,8 @@ function App() {
     await execute(async () => {
       await api("/partner/session", { method: "DELETE" });
       setPartnerSession(null);
+      setGmailStatus(null);
+      setGmailStatusError(false);
       setPersonalApiKey("");
       setPersonalAi({ provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
       setPersonalAiStatus("loading");
@@ -405,6 +429,32 @@ function App() {
               </>}
           </div>;
         })}
+        <section aria-label="Personal Gmail sending authorization">
+          <h2>My Gmail sender</h2>
+          <p className="muted">Gmail consent is optional and separate from Google login and Forms/Sheets.
+            Connecting does not send any email. Sending remains disabled pending campaign approval and safety checks.</p>
+          {gmailStatusError && <div role="alert">
+            Gmail connection status is unavailable.
+            <button type="button" className="secondary" onClick={() => void loadGmailStatus()}>
+              Retry status
+            </button>
+          </div>}
+          {!gmailStatusError && !gmailStatus && <p className="muted">Checking Gmail authorization…</p>}
+          {gmailStatus?.connected && <>
+            <p className="muted">Authorized Gmail account: {gmailStatus.email} · Sending disabled.</p>
+            <button type="button" className="secondary" disabled={busy} onClick={() => void disconnectGmail()}>
+              Disconnect Gmail
+            </button>
+          </>}
+          {gmailStatus && !gmailStatus.connected && !gmailStatus.available &&
+            <p className="muted">Gmail authorization is not enabled for this environment.</p>}
+          {gmailStatus && !gmailStatus.connected && gmailStatus.available &&
+            (partnerSession.partners?.length ?? 0) > 0 &&
+            <a className="secondary" href={"/api/partner/google/gmail/start?workspaceId=" +
+              encodeURIComponent(partnerSession.partners![0].id)}>
+              Authorize my Gmail sender
+            </a>}
+        </section>
         <section aria-label="Personal AI configuration">
           <h2>My AI provider</h2>
           <p className="muted">Use your own AI API key. Keys are encrypted, never shared
