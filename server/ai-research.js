@@ -50,7 +50,7 @@ function extractResult(json, limit) {
   if (!cited.size) return { candidates: [], sources: [], warnings: ["No provider-cited sources returned"] };
   const output = json.content.filter(x => x?.type === "text").map(x => x.text).join("\n").trim();
   // The model is not allowed to drive DB writes; parse only the contract.
-  const jsonText = output.replace(/^\\s*```(?:json)?\\s*/i, "").replace(/\\s*```\\s*$/, "");
+  const jsonText = output.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
   let parsed;
   try { parsed = JSON.parse(jsonText); }
   catch { throw new Error("AI research did not return structured results"); }
