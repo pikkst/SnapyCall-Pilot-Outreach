@@ -21,6 +21,8 @@ const env = {
   GOOGLE_CLIENT_SECRET: "ci-only-oauth-client-secret",
   GOOGLE_REDIRECT_URI: "https://smoke.example.org/api/auth/google/callback",
   GOOGLE_DATA_REDIRECT_URI: "https://smoke.example.org/api/partner/google/connect/callback",
+  GMAIL_OAUTH_ENABLED: "true",
+  GOOGLE_GMAIL_REDIRECT_URI: "https://smoke.example.org/api/partner/google/gmail/callback",
   RESEND_API_KEY: "ci-only-resend-token",
   PARTNER_INVITE_FROM: "SnapyCall <invites@example.test>",
   PILOT_GOOGLE_MOCK: "integration-only",
@@ -381,6 +383,58 @@ try {
     assert.equal(listedBody.includes("fixture-refresh-token-secret-value"), false);
     assert.equal(listedBody.includes(stored.encryptedRefreshToken), false);
     assert.deepEqual(JSON.parse(listedBody).connections.map(c => c.partnerId), [firstWorkspace]);
+    // Gmail sending consent is separate from Forms/Sheets and never sends mail.
+    assert.equal((await call("/partner/google/gmail")).status, 401);
+    assert.equal((await call("/partner/google/gmail", { headers: { cookie } })).status,
+      401, "Admin must not impersonate a Gmail account");
+    assert.equal((await call("/partner/google/gmail/start?workspaceId=" + secondWorkspace,
+      { headers: { cookie }, redirect: "manual" })).status, 401);
+    assert.equal((await call("/partner/google/gmail/start?workspaceId=cnonexistent12345",
+      { headers: { cookie: partnerCookie }, redirect: "manual" })).status, 403);
+    const initialGmail = await call("/partner/google/gmail", { headers: { cookie: partnerCookie } });
+    assert.deepEqual(await initialGmail.json(), {
+      available: true, connected: false, email: "partner@example.org", sendingEnabled: false,
+    });
+    async function beginGmailConsent() {
+      const start = await call("/partner/google/gmail/start?workspaceId=" + firstWorkspace,
+        { headers: { cookie: partnerCookie }, redirect: "manual" });
+      assert.equal(start.status, 302);
+      const authUrl = new URL(start.headers.get("location"));
+      const scopes = authUrl.searchParams.get("scope");
+      assert.match(scopes, /https:\/\/www.googleapis.com\/auth\/gmail.send/);
+      assert.equal(scopes.includes("forms.responses.readonly"), false);
+      const flowCookie = start.headers.get("set-cookie")?.split(";")[0];
+      assert.ok(flowCookie?.startsWith("pilot_google_gmail_flow="));
+      return { flowCookie, state: authUrl.searchParams.get("state"),
+        nonce: authUrl.searchParams.get("nonce") };
+    }
+    async function completeGmailConsent(flow, kind = "good") {
+      return call("/partner/google/gmail/callback?state=" + flow.state +
+        "&code=" + flow.nonce + "%3A" + kind,
+        { headers: { cookie: flow.flowCookie }, redirect: "manual" });
+    }
+    const wrongGmail = await beginGmailConsent();
+    assert.equal((await completeGmailConsent(wrongGmail, "wrong-sub")).status, 403);
+    assert.equal(await partnerDb.partnerGmailConnection.count(), 0);
+    const validGmail = await beginGmailConsent();
+    assert.equal((await completeGmailConsent(validGmail)).status, 303);
+    const gmailGrant = await partnerDb.partnerGmailConnection.findUnique({
+      where: { userId: member.id },
+    });
+    assert.ok(gmailGrant);
+    assert.equal(gmailGrant.googleSub, "google-test-sub");
+    assert.equal(gmailGrant.scope.includes("gmail.send"), true);
+    assert.equal(decryptKey(gmailGrant.encryptedRefreshToken, env.AI_ENCRYPTION_KEY),
+      "fixture-refresh-token-secret-value");
+    assert.equal(await partnerDb.partnerGoogleConnection.count(), 1,
+      "Gmail grant must not mutate read-only Forms/Sheets connection");
+    const gmailResponse = await call("/partner/google/gmail", { headers: { cookie: partnerCookie } });
+    const gmailText = await gmailResponse.text();
+    assert.equal(gmailText.includes("fixture-refresh-token-secret-value"), false);
+    assert.equal(gmailText.includes(gmailGrant.encryptedRefreshToken), false);
+    assert.equal(JSON.parse(gmailText).sendingEnabled, false);
+    assert.equal(JSON.parse(gmailText).connected, true);
+
 
     // A separately invited user may access another workspace but not this
     // user's grant, including via guessed partner IDs.
@@ -394,6 +448,23 @@ try {
       data: { googleSub: "outsider-google-sub" } });
     const outsiderCookie = "pilot_partner_session=" +
       createPartnerSession(outsider.id, env.SESSION_SIGNING_KEY);
+    const outsiderGmail = await call("/partner/google/gmail", { headers: { cookie: outsiderCookie } });
+    assert.equal((await outsiderGmail.json()).connected, false);
+    assert.equal((await call("/partner/google/gmail", {
+      method: "DELETE", headers: { cookie: outsiderCookie, origin },
+    })).status, 200);
+    assert.equal(await partnerDb.partnerGmailConnection.count(), 1,
+      "Another Google account cannot delete the owner's Gmail grant");
+    assert.equal((await call("/partner/google/gmail", {
+      method: "DELETE", headers: { cookie: partnerCookie },
+    })).status, 403, "Gmail disconnect requires a CSRF origin");
+    assert.equal((await call("/partner/google/gmail", {
+      method: "DELETE", headers: { cookie: partnerCookie, origin },
+    })).status, 200);
+    assert.equal(await partnerDb.partnerGmailConnection.count(), 0);
+    assert.equal(await partnerDb.partnerGoogleConnection.count(), 1,
+      "Disconnecting Gmail must not disconnect Forms/Sheets");
+
     const outsiderSettings = await call("/ai-settings", { headers: { cookie: outsiderCookie } });
     assert.equal((await outsiderSettings.json()).keyConfigured, false,
       "Distinct Google users never inherit another user's AI key");
