@@ -8,6 +8,9 @@ datasource db {
 }
 model Candidate {
   id String @id @default(cuid())
+  // Null records are historical admin-only data until an audited ownership migration.
+  workspaceId String?
+  workspace Partner? @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   kind String @default("EXPERT")
   name String
   email String?
@@ -28,10 +31,13 @@ model Candidate {
   updatedAt DateTime @updatedAt
   drafts OutreachDraft[]
   evidence CandidateEvidence[]
+  @@index([workspaceId, createdAt])
   @@index([category, status])
 }
 model AiSetting {
   id String @id @default(cuid())
+  workspaceId String? @unique
+  workspace Partner? @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   ownerId String @unique
   provider String
   model String
@@ -41,6 +47,8 @@ model AiSetting {
 }
 model OutreachDraft {
   id String @id @default(cuid())
+  workspaceId String?
+  workspace Partner? @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   candidateId String
   candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Restrict)
   subject String
@@ -49,6 +57,7 @@ model OutreachDraft {
   provider String
   approvedAt DateTime?
   createdAt DateTime @default(now())
+  @@index([workspaceId, createdAt])
   @@index([candidateId, createdAt])
 }
 model AuditEvent {
@@ -70,6 +79,8 @@ model AdminCredential {
 
 model CandidateEvidence {
   id String @id @default(cuid())
+  workspaceId String?
+  workspace Partner? @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   candidateId String
   candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Restrict)
   kind String
@@ -80,6 +91,7 @@ model CandidateEvidence {
   capturedBy String @default("admin")
   @@unique([candidateId, kind, normalizedUrl])
   @@index([normalizedUrl])
+  @@index([workspaceId, capturedAt])
   @@index([candidateId, capturedAt])
 }
 
@@ -87,6 +99,10 @@ model Partner {
   id String @id @default(cuid())
   name String
   memberships PartnerMembership[]
+  candidates Candidate[]
+  drafts OutreachDraft[]
+  candidateEvidence CandidateEvidence[]
+  aiSettings AiSetting[]
   googleConnections PartnerGoogleConnection[]
   createdAt DateTime @default(now())
 }
