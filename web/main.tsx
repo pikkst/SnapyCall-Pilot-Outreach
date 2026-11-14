@@ -36,7 +36,11 @@ type ResearchPreview = {
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
 type ResearchLimits = { dailyLimit: number; maxCandidates: number; maxConcurrent: number };
 type ResearchBudget = { monthlyLimitCents: number | null; currency: "USD";
-  enforcedForPaidSearch: boolean };
+  enforcedForPaidSearch: boolean; ledger?: {
+    monthUtc: string; reservedCents: number; settledCents: number;
+    pendingReservations: number; availableCents: number | null;
+    billingSource: "application-estimate";
+  } };
 type DuplicateHint = { id: string; reasons: string[] };
 type Evidence = { id: string; kind: string; sourceUrl: string; note: string | null; capturedAt: string };
 type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
@@ -1126,6 +1130,16 @@ function App() {
                     monthlyLimitCents: e.target.value === "" ? null :
                       Math.round(Number(e.target.value) * 100) })}/>
               </label>
+              {researchBudget.ledger && <div aria-label="Research spend ledger" className="review-panel">
+                <h3>Application spending ledger · {researchBudget.ledger.monthUtc.slice(0, 7)} UTC</h3>
+                <p>Estimated settled: ${(researchBudget.ledger.settledCents / 100).toFixed(2)} USD
+                  · Reserved: ${(researchBudget.ledger.reservedCents / 100).toFixed(2)} USD</p>
+                <p>Pending reservations: {researchBudget.ledger.pendingReservations}
+                  · Available in application ledger: {researchBudget.ledger.availableCents === null ?
+                    "Not configured" : (researchBudget.ledger.availableCents / 100).toFixed(2) + " USD"}</p>
+                <p className="muted">These are internal estimates, not verified provider charges.
+                  They do not cap your external provider invoice. Paid research remains disabled.</p>
+              </div>}
               <p className="muted">Provider invoices can differ from estimated usage.
                 No guaranteed billing cap is offered until provider-side
                 spending controls and our reservation contract are verified.</p>
