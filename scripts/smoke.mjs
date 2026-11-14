@@ -728,6 +728,99 @@ try {
         now: quotaClock, dailyLimit: prefs.dailyLimit,
       });
     }), ResearchQuotaExceeded, "Reducing a limit must not reset consumed quota");
+    // Owner-wide monthly currency preference requires the partner BYOK session
+    // and Origin. Its ledger scopes spending globally across all workspaces.
+    assert.deepEqual(await (await call("/research-budget", {
+      headers: { cookie: partnerCookie },
+    })).json(), { monthlyLimitCents: null, currency: "USD", enforcedForPaidSearch: false });
+    const budgetBody = JSON.stringify({ monthlyLimitCents: 500 });
+    assert.equal((await call("/research-budget", { method: "PUT",
+      headers: { cookie: partnerCookie, "content-type": "application/json" },
+      body: budgetBody })).status, 403, "Monthly budget requires Origin");
+    assert.equal((await call("/research-budget", { method: "PUT",
+      headers: protectedHeaders, body: budgetBody })).status, 403,
+      "Legacy admin cannot change partner budget");
+    assert.equal((await call("/research-budget", { method: "PUT",
+      headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ monthlyLimitCents: 101_000 }),
+    })).status, 400, "Invalid monthly currency limit is rejected");
+    const budgetSaved = await call("/research-budget", { method: "PUT",
+      headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: budgetBody });
+    assert.equal(budgetSaved.status, 200);
+    assert.deepEqual(await budgetSaved.json(), {
+      monthlyLimitCents: 500, currency: "USD", enforcedForPaidSearch: false,
+    });
+    const { reserveOwnerSpend, settleOwnerSpend, ResearchBudgetExceeded } =
+      await import("../server/research-budget.js");
+    const budgetClock = new Date("2026-11-14T10:00:00Z");
+    const budgetMonth = new Date("2026-11-01T00:00:00Z");
+    const r1 = "01dcc5e1-9e62-4f8a-83a7-3ea8363b9271";
+    const r2 = "02dcc5e1-9e62-4f8a-83a7-3ea8363b9271";
+    const r3 = "03dcc5e1-9e62-4f8a-83a7-3ea8363b9271";
+    const concurrentSpend = await Promise.allSettled([
+      partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
+        ownerId: member.id, workspaceId: firstWorkspace,
+        reservationId: r1, worstCaseCents: 300, now: budgetClock,
+      })),
+      partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
+        ownerId: member.id, workspaceId: secondWorkspace,
+        reservationId: r2, worstCaseCents: 300, now: budgetClock,
+      })),
+    ]);
+    assert.equal(concurrentSpend.filter(x => x.status === "fulfilled").length, 1,
+      "Global owner budget must cap parallel spending across workspaces");
+    assert.equal(concurrentSpend.filter(x => x.status === "rejected" &&
+      x.reason instanceof ResearchBudgetExceeded).length, 1);
+    const winner = concurrentSpend[0].status === "fulfilled" ?
+      { id: r1, workspaceId: firstWorkspace } :
+      { id: r2, workspaceId: secondWorkspace };
+    assert.equal((await partnerDb.researchSpendMonth.findUnique({ where: {
+      ownerId_monthUtc: { ownerId: member.id, monthUtc: budgetMonth },
+    } })).reservedCents, 300);
+    assert.equal((await partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: winner.workspaceId,
+      reservationId: winner.id, worstCaseCents: 300, now: budgetClock,
+    }))).id, winner.id, "Reservation replay is idempotent");
+    const settlement = await partnerDb.$transaction(tx => settleOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: winner.workspaceId,
+      reservationId: winner.id, actualCents: 250,
+    }));
+    assert.equal(settlement.chargedCents, 250);
+    assert.equal((await partnerDb.$transaction(tx => settleOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: winner.workspaceId,
+      reservationId: winner.id, actualCents: 250,
+    }))).chargedCents, 250, "Settlement replay does not double-charge");
+    await assert.rejects(() => partnerDb.$transaction(tx => settleOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: winner.workspaceId,
+      reservationId: winner.id, actualCents: 200,
+    })), TypeError, "Conflicting settlement must not change committed totals");
+    const monthAfter = await partnerDb.researchSpendMonth.findUnique({ where: {
+      ownerId_monthUtc: { ownerId: member.id, monthUtc: budgetMonth },
+    } });
+    assert.equal(monthAfter.reservedCents, 0);
+    assert.equal(monthAfter.settledCents, 250);
+    await partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: secondWorkspace,
+      reservationId: r3, worstCaseCents: 200, now: budgetClock,
+    }));
+    await partnerDb.$transaction(tx => settleOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: secondWorkspace,
+      reservationId: r3, actualCents: null,
+    }));
+    const afterUnknown = await partnerDb.researchSpendMonth.findUnique({ where: {
+      ownerId_monthUtc: { ownerId: member.id, monthUtc: budgetMonth },
+    } });
+    assert.equal(afterUnknown.settledCents, 450,
+      "Unknown provider usage must settle conservatively at full reservation");
+    assert.equal(afterUnknown.reservedCents, 0);
+    await partnerDb.researchOwnerBudget.update({ where: { ownerId: member.id },
+      data: { monthlyLimitCents: 100 } });
+    await assert.rejects(() => partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: firstWorkspace,
+      reservationId: "04dcc5e1-9e62-4f8a-83a7-3ea8363b9271",
+      worstCaseCents: 1, now: budgetClock,
+    })), ResearchBudgetExceeded, "Lowering budget cannot erase spent amount");
     const ownMetadata = await call("/ai-settings", { headers: { cookie: partnerCookie } });
     const metadataText = await ownMetadata.text();
     assert.equal(JSON.parse(metadataText).keyConfigured, true);
