@@ -698,10 +698,36 @@ try {
     // Membership may be revoked while consent is underway; a valid signed
     // Google response cannot recreate its authorization after revocation.
     const revokedFlow = await beginGoogleConnection(firstWorkspace, partnerCookie);
-    await partnerDb.partnerMembership.update({
-      where: { partnerId_userId: { partnerId: firstWorkspace, userId: member.id } },
-      data: { revokedAt: new Date() },
+    const revokeUrl = "/admin/partners/memberships/" + firstMembership.id;
+    assert.equal((await call(revokeUrl, { method: "DELETE",
+      headers: { origin, cookie: partnerCookie } })).status, 401,
+      "Google partner may never revoke workspace membership");
+    assert.equal((await call(revokeUrl, { method: "DELETE",
+      headers: { cookie } })).status, 403, "Admin revoke requires same-origin CSRF");
+    assert.equal((await call("/admin/partners/memberships/invalid", {
+      method: "DELETE", headers: protectedHeaders })).status, 400);
+    assert.equal((await call("/admin/partners/memberships/" + "c" + "x".repeat(24), {
+      method: "DELETE", headers: protectedHeaders })).status, 404);
+    const firstRevoke = await call(revokeUrl, {
+      method: "DELETE", headers: protectedHeaders,
     });
+    assert.equal(firstRevoke.status, 200);
+    assert.deepEqual(await firstRevoke.json(), {
+      revoked: true, workspaceId: firstWorkspace, changed: true,
+    });
+    const secondRevoke = await call(revokeUrl, {
+      method: "DELETE", headers: protectedHeaders,
+    });
+    assert.equal(secondRevoke.status, 200);
+    assert.deepEqual(await secondRevoke.json(), {
+      revoked: true, workspaceId: firstWorkspace, changed: false,
+    });
+    assert.equal(await partnerDb.partnerMembership.count({
+      where: { id: firstMembership.id, revokedAt: { not: null } },
+    }), 1, "Revocation preserves the membership row and audit history");
+    assert.equal(await partnerDb.auditEvent.count({
+      where: { action: "partner.membership.revoked", entityId: firstMembership.id },
+    }), 1, "Idempotent revocation emits exactly one audit event");
     assert.equal((await completeGoogleConnection(revokedFlow)).status, 403);
     assert.equal(await partnerDb.partnerGoogleConnection.count(), 0);
 
