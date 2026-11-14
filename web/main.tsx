@@ -20,10 +20,26 @@ type Candidate = {
   outreach: { stage: string; canDraft: boolean; canSend: false; blockers: string[] };
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
+type ResearchPreview = {
+  workspaceId: string; candidates: Array<{
+    name: string; category: string; sourceUrl: string; rationale: string;
+    email: null; contactReviewed: false; status: "REVIEW_PENDING";
+  }>;
+  sources: Array<{ url: string; title: string }>;
+  warnings: string[]; usage: { inputTokens: number | null;
+    outputTokens: number | null; searchRequests: number | null };
+  imported: false; reviewRequired: true; sendingEnabled: false;
+};
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
 type DuplicateHint = { id: string; reasons: string[] };
 type Evidence = { id: string; kind: string; sourceUrl: string; note: string | null; capturedAt: string };
 type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
+
+const defaultAiModels: Record<string, string> = {
+  gemini: "gemini-2.5-flash",
+  openai: "gpt-4.1-mini",
+  anthropic: "claude-sonnet-4-6",
+};
 
 const categories = [
   ["AI_AUTOMATION", "AI automation / no-code"],
@@ -85,6 +101,10 @@ function App() {
   const [workspaceCandidates, setWorkspaceCandidates] = useState<Candidate[]>([]);
   const [workspaceDrafts, setWorkspaceDrafts] = useState<Draft[]>([]);
   const [workspaceDataStatus, setWorkspaceDataStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [researchQuery, setResearchQuery] = useState("Find experienced English-speaking AI automation consultants offering online consultations");
+  const [researchResult, setResearchResult] = useState<ResearchPreview | null>(null);
+  const [researchStatus, setResearchStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [researchError, setResearchError] = useState("");
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
@@ -159,6 +179,9 @@ function App() {
     // An earlier response must never render under a newly selected workspace.
     const generation = ++workspaceRequest.current;
     setActiveWorkspaceId(workspaceId);
+    setResearchResult(null);
+    setResearchStatus("idle");
+    setResearchError("");
     setWorkspaceCandidates([]);
     setWorkspaceDrafts([]);
     setWorkspaceDataStatus("loading");
@@ -177,6 +200,28 @@ function App() {
       setWorkspaceCandidates([]);
       setWorkspaceDrafts([]);
       setWorkspaceDataStatus("error");
+    }
+  }
+
+  async function runResearch(workspaceId: string, event: React.FormEvent) {
+    event.preventDefault();
+    if (activeWorkspaceId !== workspaceId || researchStatus === "loading") return;
+    const generation = workspaceRequest.current;
+    setResearchStatus("loading");
+    setResearchResult(null);
+    setResearchError("");
+    try {
+      const result = await api<ResearchPreview>("/discovery/ai-research?workspaceId=" +
+        encodeURIComponent(workspaceId), {
+        method: "POST", body: JSON.stringify({ query: researchQuery.trim(), limit: 10 }),
+      });
+      if (workspaceRequest.current !== generation || result.workspaceId !== workspaceId) return;
+      setResearchResult(result);
+      setResearchStatus("idle");
+    } catch (error) {
+      if (workspaceRequest.current !== generation) return;
+      setResearchStatus("error");
+      setResearchError(error instanceof Error ? error.message : "Research unavailable");
     }
   }
 
@@ -281,6 +326,9 @@ function App() {
       setWorkspaceCandidates([]);
       setWorkspaceDrafts([]);
       setWorkspaceDataStatus("idle");
+      setResearchResult(null);
+      setResearchStatus("idle");
+      setResearchError("");
       setGoogleConnections([]);
       setConnectionStatus("loading");
       setGoogleConfigured(false);
@@ -457,6 +505,37 @@ function App() {
             </button>
             {activeWorkspaceId === p.id &&
               <section aria-label={"Workspace " + p.name}>
+                <section aria-label="AI web research preview" className="review-panel">
+                  <h3>Find experts with AI web search</h3>
+                  <p className="muted">Optional paid Claude search (up to 3 web searches). Results are unverified,
+                    not saved or authorized for outreach. No emails will be sent.</p>
+                  <form onSubmit={event => void runResearch(p.id, event)}>
+                    <label>Research criteria
+                      <input value={researchQuery} maxLength={350} minLength={12} required
+                        onChange={event => setResearchQuery(event.target.value)}/>
+                    </label>
+                    <button type="submit" disabled={researchStatus === "loading" ||
+                      personalAi.provider !== "anthropic" || !personalAi.keyConfigured}>
+                      {researchStatus === "loading" ? "Researching…" : "Search public web"}
+                    </button>
+                  </form>
+                  {(personalAi.provider !== "anthropic" || !personalAi.keyConfigured) &&
+                    <p className="muted">Configure your personal Claude API key under My AI provider first.</p>}
+                  {researchStatus === "error" && <p role="alert">{researchError}</p>}
+                  {researchResult && <>
+                    <p className="muted">{researchResult.candidates.length} candidates for manual review.
+                      Web requests: {researchResult.usage.searchRequests ?? "unknown"}.
+                      No candidates were imported.</p>
+                    {researchResult.warnings.map(message => <p key={message} className="muted">{message}</p>)}
+                    <ul>{researchResult.candidates.map(item =>
+                      <li key={item.sourceUrl + item.name}>
+                        <strong>{item.name}</strong> — {item.category}
+                        <p>{item.rationale}</p>
+                        <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">
+                          Provider-cited source</a>
+                      </li>)}</ul>
+                  </>}
+                </section>
                 <h3>My candidates and outreach drafts</h3>
                 <p className="muted">Workspace-isolated read-only preview. Editing,
                   discovery import, AI drafting and sending are not enabled for Google users yet.</p>
@@ -526,9 +605,13 @@ function App() {
                 onClick={() => void loadPersonalAiSettings()}>Retry AI settings</button>
             : <form onSubmit={savePersonalAiSettings}>
               <label>AI provider
-                <select value={personalAi.provider} onChange={e => setPersonalAi({ ...personalAi, provider: e.target.value })}>
+                <select value={personalAi.provider} onChange={e => setPersonalAi({
+                  ...personalAi, provider: e.target.value,
+                  model: defaultAiModels[e.target.value] ?? personalAi.model,
+                })}>
                   <option value="gemini">Gemini</option>
                   <option value="openai">OpenAI</option>
+                  <option value="anthropic">Claude (Anthropic)</option>
                 </select>
               </label>
               <label>Model <input required value={personalAi.model}
@@ -730,7 +813,7 @@ function App() {
         <h2>Bring your own AI</h2>
         <p className="muted">Choose your provider, enter the model ID and optionally save your API key. Calls are made server-side; the key is encrypted at rest and never returned to the browser.</p>
         <form onSubmit={saveSettings}>
-          <label>Provider<select value={setting.provider} onChange={e => setSetting({ ...setting, provider: e.target.value, model: e.target.value === "openai" ? "gpt-4.1-mini" : "gemini-2.5-flash" })}><option value="gemini">Google Gemini</option><option value="openai">OpenAI</option></select></label>
+          <label>Provider<select value={setting.provider} onChange={e => setSetting({ ...setting, provider: e.target.value, model: defaultAiModels[e.target.value] ?? setting.model })}><option value="gemini">Google Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Claude (Anthropic)</option></select></label>
           <label>Model ID<input required minLength={2} maxLength={80} value={setting.model} onChange={e => setSetting({ ...setting, model: e.target.value })} placeholder="gemini-2.5-flash"/></label>
           <label>API key<input type="password" autoComplete="new-password" placeholder={setting.keyConfigured ? "Key saved • leave blank to keep" : "Paste provider API key"} value={apiKey} onChange={e => setApiKey(e.target.value)} /></label>
           <div className="key-status">{setting.keyConfigured ? "● Key configured (fingerprint: " + setting.fingerprint + ")" : "○ No API key configured"}</div>
@@ -758,14 +841,14 @@ function App() {
             <button type="submit" disabled={busy}>Provision partner access and invite</button>
           </form>
           <h3>Partner invitations</h3>
-          <div className="table-scroll"><table>
+          <div className="table-scroll invitation-table"><table>
             <thead><tr><th>Workspace</th><th>Google account</th><th>Invitation</th><th>Action</th></tr></thead>
             <tbody>{partnerInvitations.map(invite => <tr key={invite.id}>
-              <td>{invite.workspace}</td>
-              <td>{invite.email}</td>
-              <td>{invite.status === "SENT" ? "Sent (provider accepted)" : invite.status}
+              <td data-label="Workspace">{invite.workspace}</td>
+              <td data-label="Google account">{invite.email}</td>
+              <td data-label="Invitation">{invite.status === "SENT" ? "Sent (provider accepted)" : invite.status}
                 {invite.errorCode ? " · " + invite.errorCode : ""}</td>
-              <td>{(["PENDING", "FAILED", "UNCONFIGURED", "MANUAL_REVIEW"].includes(invite.status) ||
+              <td data-label="Action">{(["PENDING", "FAILED", "UNCONFIGURED", "MANUAL_REVIEW"].includes(invite.status) ||
                 (invite.status === "SENDING" && invite.leaseUntil &&
                   Date.parse(invite.leaseUntil) <= Date.now())) ?
                 <button type="button" className="secondary" disabled={busy || !inviteEmailConfigured}

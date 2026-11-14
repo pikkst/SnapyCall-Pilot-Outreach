@@ -297,6 +297,23 @@ try {
     assert.equal(firstRetry.status, 200);
     assert.equal((await call("/candidates", { headers: { cookie: partnerCookie } })).status, 403,
       "Partner must select a workspace before reading candidate data");
+    // Default-disabled research can never incur provider charges in staging.
+    const researchPath = "/discovery/ai-research?workspaceId=" + firstWorkspace;
+    const researchBody = JSON.stringify({
+      query: "Find online AI automation consultants in English", limit: 10,
+    });
+    assert.equal((await call(researchPath, {
+      method: "POST", headers: { origin, "content-type": "application/json" },
+      body: researchBody,
+    })).status, 401, "Research requires verified partner session");
+    assert.equal((await call(researchPath, {
+      method: "POST", headers: { cookie: partnerCookie, "content-type": "application/json" },
+      body: researchBody,
+    })).status, 403, "Research must honor CSRF origin");
+    assert.equal((await call(researchPath, {
+      method: "POST", headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: researchBody,
+    })).status, 503, "Paid research is disabled until rollout explicitly enabled");
     const privateLeadA = await partnerDb.candidate.create({ data: {
       workspaceId: firstWorkspace, name: "Private partner A", category: "COACHING",
       sourceUrl: "https://example.org/tenant-a",
