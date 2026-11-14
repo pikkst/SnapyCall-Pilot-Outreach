@@ -675,7 +675,10 @@ app.post("/api/candidates/:id/draft", ...write, draftLimiter, safe(async (req, r
 }));
 app.get("/api/drafts", candidateReadScope, safe(async (req, res) => {
   const drafts = await prisma.outreachDraft.findMany({
-    where: { workspaceId: req.candidateScope },
+    // Guard against a draft accidentally referencing a candidate from a
+    // different workspace, even if legacy data was inconsistently migrated.
+    where: { workspaceId: req.candidateScope,
+      candidate: { workspaceId: req.candidateScope } },
     take: 200, orderBy: { createdAt: "desc" },
     include: { candidate: { select: { id: true, name: true } } },
   });
