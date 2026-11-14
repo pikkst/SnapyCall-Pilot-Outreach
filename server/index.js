@@ -14,6 +14,8 @@ import { canonicalEvidenceUrl, EVIDENCE_KINDS, sameIdentityHints } from "../src/
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput } from "./ai-research.js";
+import { assertWebResearchModel } from "./research-provider-adapters.js";
+import { reserveResearchAttempt, ResearchQuotaExceeded } from "./research-quota.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
@@ -582,17 +584,44 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
   if (!identity) return res.status(401).json({ error: "Unauthorized" });
   const input = researchInput.parse(req.body);
   const setting = await prisma.aiSetting.findUnique({ where: { ownerId: identity.id } });
-  if (!setting || setting.provider !== "anthropic") {
-    return res.status(409).json({ error: "Configure your own Claude API key to use web research" });
+  if (!setting || !["anthropic", "openai", "gemini"].includes(setting.provider)) {
+    return res.status(409).json({ error: "Configure a supported personal AI provider and API key" });
   }
-  // Membership is checked again immediately before a chargeable request.
-  const active = await requireWorkspaceMembership(prisma, {
-    workspaceId: req.candidateScope, userId: identity.id,
-  });
-  if (!active) return res.status(403).json({ error: "Workspace membership revoked" });
+  // Model/tool incompatibility must fail before any reservation or paid call.
+  if (setting.provider !== "anthropic") {
+    try { assertWebResearchModel(setting.provider, setting.model); }
+    catch { return res.status(409).json({ error: "Selected model does not support configured web search" }); }
+  }
+  let quota;
+  try {
+    quota = await prisma.$transaction(async tx => {
+      // Lock membership until the durable quota reservation commits.
+      // A concurrent member revocation cannot leave an authorized reservation.
+      const membership = await lockActiveWorkspaceMembership(tx, {
+        workspaceId: req.candidateScope, userId: identity.id,
+      });
+      if (!membership) return null;
+      return reserveResearchAttempt(tx, {
+        workspaceId: req.candidateScope, userId: identity.id,
+      });
+    });
+  } catch (error) {
+    if (error instanceof ResearchQuotaExceeded) {
+      return res.status(429).json({ error: "Daily research quota reached",
+        code: "RESEARCH_QUOTA_EXCEEDED" });
+    }
+    throw error;
+  }
+  if (!quota) return res.status(403).json({ error: "Workspace membership revoked" });
+  // An attempt is counted conservatively even if the provider fails.
+  // This caps requests, not monetary spend; keep the rollout gate disabled
+  // until provider prices, usage and charging limits are reviewed.
   const apiKey = decryptKey(setting.encryptedApiKey, env.AI_ENCRYPTION_KEY);
-  const output = await researchCandidates({ ...input, model: setting.model, apiKey });
-  return res.json({ ...output, workspaceId: req.candidateScope });
+  const output = await researchCandidates({
+    ...input, provider: setting.provider, model: setting.model, apiKey,
+  });
+  return res.json({ ...output, workspaceId: req.candidateScope,
+    quota: { dayUtc: quota.dayUtc, remaining: quota.remaining } });
 }));
 const scanLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders: "draft-7", legacyHeaders: false });
 app.post("/api/discovery/scan", authenticated, requireOrigin, scanLimiter, safe(async (req, res) => {
