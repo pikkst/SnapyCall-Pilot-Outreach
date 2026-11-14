@@ -105,7 +105,7 @@ test("unapproved or differently metered provider pricing cannot produce a refund
 
 test("worst-case quote covers all bounded input, output and search tool units", () => {
   assert.equal(calculateBoundedWorstCaseCents(reviewedFixture.pricing,
-    reviewedFixture.usageLimits), 5);
+    reviewedFixture.usageLimits), 6);
   const bad = [
     { ...reviewedFixture.pricing, billingUnit: "grounded_prompts" },
     { ...reviewedFixture.pricing, searchCentsPerThousand: 0 },
