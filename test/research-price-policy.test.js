@@ -31,6 +31,8 @@ import { calculateVerifiedSpendCents } from "../server/research-price-policy.js"
 
 const reviewedFixture = Object.freeze({
   enforcementReady: true,
+  provider: "openai",
+  billingContractVersion: "synthetic-search-v1",
   worstCaseCents: 100,
   // Synthetic test rates; these are NOT approved real provider prices.
   pricing: { billingUnit: "search_requests",
@@ -40,17 +42,35 @@ const reviewedFixture = Object.freeze({
     maxSearchRequests: 3 },
 });
 
-test("synthetic server tariff reconciles authenticated usage with upward cent rounding", () => {
+const completeUsage = Object.freeze({
+  inputTokens: 1000, outputTokens: 500, searchRequests: 2,
+  // Synthetic certification only. Real provider adapters currently omit it.
+  billingEvidence: { source: "provider", complete: true, provider: "openai",
+    contractVersion: "synthetic-search-v1", billingUnit: "search_requests" },
+});
+
+test("synthetic complete billing evidence rounds USD cents conservatively", () => {
+  assert.equal(calculateVerifiedSpendCents(reviewedFixture, completeUsage), 3);
   assert.equal(calculateVerifiedSpendCents(reviewedFixture, {
-    inputTokens: 1000, outputTokens: 500, searchRequests: 2,
-  }), 3);
-  assert.equal(calculateVerifiedSpendCents(reviewedFixture, {
-    inputTokens: 0, outputTokens: 0, searchRequests: 0,
+    ...completeUsage, inputTokens: 0, outputTokens: 0, searchRequests: 0,
   }), null, "A claimed zero searches cannot refund a billable web-search call");
 });
 
+test("provider totals alone never authorize refund without a complete billing contract", () => {
+  const { billingEvidence: _billingEvidence, ...adapterUsage } = completeUsage;
+  assert.equal(calculateVerifiedSpendCents(reviewedFixture, adapterUsage), null);
+  for (const billingEvidence of [
+    { ...completeUsage.billingEvidence, complete: false },
+    { ...completeUsage.billingEvidence, provider: "anthropic" },
+    { ...completeUsage.billingEvidence, billingUnit: "grounded_prompts" },
+    { ...completeUsage.billingEvidence, contractVersion: "stale-contract" },
+    { ...completeUsage.billingEvidence, source: "browser" },
+  ]) assert.equal(calculateVerifiedSpendCents(reviewedFixture,
+    { ...completeUsage, billingEvidence }), null);
+});
+
 test("missing or unbounded usage preserves the entire monetary reservation", () => {
-  const complete = { inputTokens: 1000, outputTokens: 500, searchRequests: 1 };
+  const complete = { ...completeUsage, searchRequests: 1 };
   for (const usage of [
     null, {}, { ...complete, searchRequests: null },
     { ...complete, inputTokens: -1 },
@@ -65,7 +85,7 @@ test("missing or unbounded usage preserves the entire monetary reservation", () 
 });
 
 test("unapproved or differently metered provider pricing cannot produce a refund", () => {
-  const usage = { inputTokens: 20, outputTokens: 20, searchRequests: 1 };
+  const usage = { ...completeUsage, inputTokens: 20, outputTokens: 20, searchRequests: 1 };
   assert.equal(calculateVerifiedSpendCents({ ...reviewedFixture,
     enforcementReady: false }, usage), null);
   assert.equal(calculateVerifiedSpendCents({ ...reviewedFixture,
