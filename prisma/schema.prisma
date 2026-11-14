@@ -36,8 +36,7 @@ model Candidate {
 }
 model AiSetting {
   id String @id @default(cuid())
-  workspaceId String? @unique
-  workspace Partner? @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  // BYOK: each Google user owns one credential; never bind key uniqueness to workspace.
   ownerId String @unique
   provider String
   model String
@@ -102,7 +101,6 @@ model Partner {
   candidates Candidate[]
   drafts OutreachDraft[]
   candidateEvidence CandidateEvidence[]
-  aiSettings AiSetting[]
   googleConnections PartnerGoogleConnection[]
   createdAt DateTime @default(now())
 }
