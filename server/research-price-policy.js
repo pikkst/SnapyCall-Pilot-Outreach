@@ -3,6 +3,25 @@
 // request quotas and saved USD preferences are not monetary enforcement.
 const approvedResearchPrices = Object.freeze({});
 
+// Compute a strictly conservative ceiling for the only currently modeled
+// billing shape. Other provider tool billing units require their own reviewed
+// capability contracts; we never reinterpret them as search requests.
+export function calculateBoundedWorstCaseCents(pricing, limits) {
+  if (pricing?.billingUnit !== "search_requests" || !limits) return null;
+  const rates = [pricing.inputCentsPerMillion, pricing.outputCentsPerMillion,
+    pricing.searchCentsPerThousand];
+  const max = [limits.maxInputTokens, limits.maxOutputTokens,
+    limits.maxSearchRequests];
+  if (rates.some(x => !Number.isSafeInteger(x) || x <= 0) ||
+      max.some(x => !Number.isSafeInteger(x) || x <= 0)) return null;
+  const costUnits = BigInt(max[0]) * BigInt(rates[0]) +
+    BigInt(max[1]) * BigInt(rates[1]) +
+    BigInt(max[2]) * BigInt(rates[2]) * 1000n;
+  const rounded = (costUnits + 999999n) / 1000000n;
+  if (rounded < 1n || rounded > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(rounded);
+}
+
 export class ResearchPricingUnavailable extends Error {
   constructor() {
     super("Paid AI research pricing and monetary enforcement are not available");
@@ -22,6 +41,11 @@ export function requireResearchPriceEnvelope({ provider, model }) {
   if (!policy || policy.enforcementReady !== true ||
       !Number.isSafeInteger(policy.worstCaseCents) ||
       policy.worstCaseCents <= 0 ||
+      // A positive client-independent amount alone proves nothing. Require
+      // the reviewed tariff's conservative worst-case calculation.
+      calculateBoundedWorstCaseCents(policy.pricing, policy.usageLimits) === null ||
+      policy.worstCaseCents <
+        calculateBoundedWorstCaseCents(policy.pricing, policy.usageLimits) ||
       typeof policy.priceVersion !== "string" || !policy.priceVersion ||
       !(policy.expiresAt instanceof Date) ||
       policy.expiresAt.getTime() <= Date.now()) {
