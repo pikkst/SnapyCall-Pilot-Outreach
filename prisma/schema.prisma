@@ -165,3 +165,11 @@ model PartnerGmailConnection {
   updatedAt DateTime @updatedAt
   user PartnerUser @relation(fields: [userId], references: [id], onDelete: Restrict)
 }
+
+model ResearchDailyQuota {
+  // Durable conservative reservations; requests that fail still count.
+  scopeKey String
+  dayUtc DateTime @db.Date
+  attempts Int @default(0)
+  @@id([scopeKey, dayUtc])
+}
