@@ -366,6 +366,41 @@ try {
     });
     assert.notEqual(scopedOne.id, scopedTwo.id,
       "Different workspaces may import the same public professional");
+    const duplicateUrl = "/candidates/" + scopedOne.id + "/possible-duplicates";
+    assert.equal((await call(duplicateUrl, {
+      headers: { cookie: partnerCookie },
+    })).status, 403, "Duplicate hints require explicit workspace selection");
+    assert.equal((await call(duplicateUrl + "?workspaceId=" + secondWorkspace, {
+      headers: { cookie: partnerCookie },
+    })).status, 404, "A foreign candidate ID must not leak identity data");
+    assert.equal((await call(duplicateUrl + "?workspaceId=" + firstWorkspace, {
+      headers: { cookie },
+    })).status, 403, "Legacy admin may not inspect partner identity hints");
+    const isolatedHints = await call(duplicateUrl + "?workspaceId=" + firstWorkspace, {
+      headers: { cookie: partnerCookie },
+    });
+    assert.equal(isolatedHints.status, 200);
+    assert.deepEqual((await isolatedHints.json()).suggestions, [],
+      "Matching email in another workspace is never a duplicate suggestion");
+    const sameWorkspaceHint = await partnerDb.candidate.create({ data: {
+      workspaceId: firstWorkspace, name: "Same profile, separate evidence",
+      category: "COACHING", sourceUrl: "https://example.org/secondary",
+      emailNormalized: "separate@example.org",
+      expertProfileUrl: "https://example.org/shared-consultant",
+    } });
+    await partnerDb.candidate.update({ where: { id: scopedOne.id },
+      data: { expertProfileUrl: "https://example.org/shared-consultant" },
+    });
+    const ownHints = await call(duplicateUrl + "?workspaceId=" + firstWorkspace, {
+      headers: { cookie: partnerCookie },
+    });
+    assert.equal(ownHints.status, 200);
+    const ownHintBody = await ownHints.json();
+    assert.equal(ownHintBody.automaticallyMerged, false);
+    assert.deepEqual(ownHintBody.suggestions.map(x => x.id), [sameWorkspaceHint.id],
+      "Only verified same-workspace identities are eligible for duplicate hints");
+    await partnerDb.candidate.delete({ where: { id: sameWorkspaceHint.id } });
+
     await assert.rejects(() => partnerDb.candidate.create({
       data: { ...identityFields, workspaceId: firstWorkspace },
     }), error => error?.code === "P2002",
