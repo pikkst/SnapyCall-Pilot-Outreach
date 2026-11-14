@@ -14,8 +14,8 @@ model Candidate {
   kind String @default("EXPERT")
   name String
   email String?
-  emailNormalized String? @unique
-  discoveryKey String? @unique
+  emailNormalized String?
+  discoveryKey String?
   expertProfileUrl String?
   profileReviewed Boolean @default(false)
   category String
@@ -31,6 +31,8 @@ model Candidate {
   updatedAt DateTime @updatedAt
   drafts OutreachDraft[]
   evidence CandidateEvidence[]
+  @@unique([workspaceId, emailNormalized])
+  @@unique([workspaceId, discoveryKey])
   @@index([workspaceId, createdAt])
   @@index([category, status])
 }
