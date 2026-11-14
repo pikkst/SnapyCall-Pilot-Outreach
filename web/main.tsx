@@ -390,6 +390,17 @@ function App() {
     });
   }
 
+  async function revokePartnerMembership(invite: PartnerInvitation) {
+    if (!window.confirm("Revoke " + invite.email + " access to " + invite.workspace +
+      "? This immediately blocks their workspace access but preserves audit history.")) return;
+    await execute(async () => {
+      const result = await api<{ revoked: boolean; changed: boolean }>(
+        "/admin/partners/memberships/" + encodeURIComponent(invite.id), { method: "DELETE" });
+      await load();
+      setNotice(result.changed ? "Workspace access revoked." : "Workspace access was already revoked.");
+    });
+  }
+
   async function saveCandidate(event: React.FormEvent) {
     event.preventDefault();
     await execute(async () => {
@@ -934,7 +945,12 @@ function App() {
                 </button> : invite.status === "SENT" ?
                 <button type="button" className="secondary" disabled={busy || !inviteEmailConfigured}
                   onClick={() => resendPartnerInvite(invite.id, true)}>Send again</button> :
-                <span>—</span>}</td>
+                <span>—</span>}
+                {invite.status !== "REVOKED" && <button type="button" className="danger"
+                  disabled={busy} onClick={() => void revokePartnerMembership(invite)}>
+                  Revoke access
+                </button>}
+              </td>
             </tr>)}</tbody>
           </table></div>
           {!partnerInvitations.length && <p className="muted">No invitations yet.</p>}
