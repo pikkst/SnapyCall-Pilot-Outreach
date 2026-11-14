@@ -16,11 +16,9 @@ test("daily quota boundary uses UTC, never local timezone", () => {
 
 test("conservative quota reserves both scopes and returns correct remaining budgets", async () => {
   const counts = new Map();
-  const tx = { $queryRaw: async query => {
-    // Unit fake only checks transaction reservation order/counts. The real SQL
-    // atomicity is separately covered by disposable PostgreSQL HTTP smoke.
-    const key = query.values[0];
-    const limit = query.values[2];
+  const tx = { $queryRaw: async (_template, key, _day, limit) => {
+    // Prisma receives tagged template interpolations as positional arguments.
+    // Real SQL atomicity is covered by disposable PostgreSQL smoke.
     const current = counts.get(key) ?? 0;
     if (current >= limit) return [];
     counts.set(key, current + 1);
