@@ -232,7 +232,12 @@ app.get("/api/partner/google/gmail", safe(async (req, res) => {
     sendingEnabled: false,
   });
 }));
-app.get("/api/partner/google/gmail/start", loginLimiter, safe(async (req, res) => {
+// Consent starts must not consume the sign-in brute-force budget.
+// Keep independent protection against repeated Gmail authorization prompts.
+const gmailConsentLimiter = rateLimit({
+  windowMs: 15 * 60_000, limit: 8, standardHeaders: "draft-7", legacyHeaders: false,
+});
+app.get("/api/partner/google/gmail/start", gmailConsentLimiter, safe(async (req, res) => {
   const user = await partnerIdentity(req);
   if (!user) return res.status(401).json({ error: "Unauthorized" });
   if (!googleGmail) return res.status(503).json({ error: "Gmail consent is not enabled" });
