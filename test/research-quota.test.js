@@ -48,14 +48,16 @@ test("quota rejects client-controlled invalid identities without hitting databas
 test("personal preferences respect server bounds and cannot be bypassed", async () => {
   const { validateResearchPreferences, RESEARCH_MAX_USER_DAILY_LIMIT } =
     await import("../server/research-quota.js");
-  assert.deepEqual(validateResearchPreferences({ dailyLimit: 20, maxCandidates: 12 }),
-    { dailyLimit: 20, maxCandidates: 12 });
+  assert.deepEqual(validateResearchPreferences({ dailyLimit: 20, maxCandidates: 12, maxConcurrent: 2 }),
+    { dailyLimit: 20, maxCandidates: 12, maxConcurrent: 2 });
   for (const input of [
     { dailyLimit: 0, maxCandidates: 10 },
     { dailyLimit: RESEARCH_MAX_USER_DAILY_LIMIT + 1, maxCandidates: 10 },
     { dailyLimit: 3.5, maxCandidates: 10 },
     { dailyLimit: 3, maxCandidates: 21 },
     { dailyLimit: 3, maxCandidates: "10" },
+    { dailyLimit: 3, maxCandidates: 10, maxConcurrent: 0 },
+    { dailyLimit: 3, maxCandidates: 10, maxConcurrent: 4 },
   ]) assert.throws(() => validateResearchPreferences(input));
 });
 
@@ -79,4 +81,20 @@ test("custom daily threshold is enforced without changing the workspace ceiling"
   await assert.rejects(() => reserveResearchAttempt(tx, {
     workspaceId, userId, dailyLimit: 1,
   }), ResearchQuotaExceeded);
+});
+
+test("research lease rejects invalid identities and out-of-bounds concurrency without SQL", async () => {
+  const { reserveResearchLease, ResearchConcurrencyExceeded } =
+    await import("../server/research-quota.js");
+  let called = 0;
+  const tx = { $queryRaw: async () => { called++; return []; } };
+  for (const data of [
+    { workspaceId: "wrong", userId, maxConcurrent: 1 },
+    { workspaceId, userId, maxConcurrent: 0 },
+    { workspaceId, userId, maxConcurrent: 4 },
+  ]) await assert.rejects(() => reserveResearchLease(tx, data), TypeError);
+  assert.equal(called, 0);
+  await assert.rejects(() => reserveResearchLease(tx, {
+    workspaceId, userId, maxConcurrent: 1,
+  }), ResearchConcurrencyExceeded);
 });
