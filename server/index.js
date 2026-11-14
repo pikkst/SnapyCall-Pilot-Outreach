@@ -24,7 +24,8 @@ import {
 } from "./research-quota.js";
 import { validateMonthlyBudgetCents, reserveOwnerSpend, settleOwnerSpend,
   ResearchBudgetExceeded } from "./research-budget.js";
-import { requireResearchPriceEnvelope, ResearchPricingUnavailable } from "./research-price-policy.js";
+import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
+  calculateVerifiedSpendCents } from "./research-price-policy.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
@@ -791,9 +792,11 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
     const output = await researchCandidates({
       ...input, provider: setting.provider, model: setting.model, apiKey,
     });
-    // Until provider usage is authoritatively priced, conservatively settle
-    // the full reserved envelope even on success. Never trust browser usage.
-    await settle(null);
+    // Only server-side provider usage with a reviewed exact-model tariff can
+    // reduce the reservation. Missing or unsupported usage keeps the entire
+    // worst-case amount charged; browser numbers are never accepted.
+    const verifiedCents = calculateVerifiedSpendCents(priceEnvelope, output.usage);
+    await settle(verifiedCents);
     return res.json({ ...output, workspaceId: req.candidateScope,
       quota: { dayUtc: quota.dayUtc, remaining: quota.remaining } });
   } finally {
