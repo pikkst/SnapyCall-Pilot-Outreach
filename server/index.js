@@ -574,7 +574,7 @@ app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req,
   let result;
   try {
     result = await prisma.$transaction(async (tx) => {
-      const existing = await tx.candidate.findUnique({ where: { discoveryKey } });
+      const existing = await tx.candidate.findFirst({ where: { workspaceId: null, discoveryKey } });
       if (existing) return { id: existing.id, created: false };
       const created = await tx.candidate.create({
         data: {
@@ -593,7 +593,7 @@ app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req,
     // Concurrent review clicks can race the initial existence check.
     // The unique DB constraint determines the winner; the loser reads it.
     if (error?.code !== "P2002") throw error;
-    const winner = await prisma.candidate.findUnique({ where: { discoveryKey } });
+    const winner = await prisma.candidate.findFirst({ where: { workspaceId: null, discoveryKey } });
     if (!winner) throw error;
     result = { id: winner.id, created: false };
   }
