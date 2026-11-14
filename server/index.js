@@ -663,48 +663,57 @@ app.post("/api/discovery/import", authenticated, requireOrigin, safe(async (req,
 }));
 // Review is an explicit administrative attestation, not an inference from an RSS
 // byline. Keep the original article URL unchanged as source provenance.
-app.patch("/api/candidates/:id/expert-review", ...write, safe(async (req, res) => {
-  const input = z.object({
-    expertProfileUrl: z.string().url().max(2048),
-    region: z.enum(["US", "UK_IRELAND", "OTHER_ENGLISH_SPEAKING"]).nullable(),
-    onlineEnglish: z.boolean(),
-    profileReviewed: z.literal(true),
-  }).strict().parse(req.body);
-  const result = await prisma.$transaction(async (tx) => {
-    const row = await tx.candidate.findUnique({ where: { id: req.params.id } });
-    if (!row) return { status: 404, error: "Candidate not found" };
-    if (!row.discoveryKey) return { status: 409, error: "Only discovered candidates use this review flow" };
-    if (row.suppressed) return { status: 409, error: "Suppressed candidate cannot be reviewed" };
-    if (input.expertProfileUrl === row.sourceUrl) {
-      return { status: 400, error: "Expert profile must be distinct from article evidence" };
-    }
-    // Validate the profile URL through the existing candidate domain contract.
-    const verified = normalizeCandidate({ ...row, ...input });
-    if (!verified.expertProfileUrl) return { status: 400, error: "Expert profile URL required" };
-    const changed = row.expertProfileUrl !== verified.expertProfileUrl ||
-      !row.profileReviewed || row.onlineEnglish !== verified.onlineEnglish ||
-      row.region !== verified.region;
-    if (!changed) return { status: 200, reviewed: true, changed: false };
-    await tx.candidate.update({
-      where: { id: row.id },
-      data: {
-        name: normalizeFeedAuthor(row.name),
-        expertProfileUrl: verified.expertProfileUrl,
-        profileReviewed: true,
-        onlineEnglish: verified.onlineEnglish,
-        region: verified.region,
-        status: "REVIEWED",
-      },
+app.patch("/api/candidates/:id/expert-review", candidateReadScope, requireOrigin,
+  safe(async (req, res) => {
+    const input = z.object({
+      expertProfileUrl: z.string().url().max(2048),
+      region: z.enum(["US", "UK_IRELAND", "OTHER_ENGLISH_SPEAKING"]).nullable(),
+      onlineEnglish: z.boolean(),
+      profileReviewed: z.literal(true),
+    }).strict().parse(req.body);
+    const actorId = req.candidateScope === null ? "admin" :
+      verifyPartnerSession(req.cookies?.pilot_partner_session, env.SESSION_SIGNING_KEY);
+    const result = await prisma.$transaction(async tx => {
+      // Serialize revocation against the entire read-modify-write transaction.
+      if (req.candidateScope !== null && !await lockActiveWorkspaceMembership(tx, {
+        userId: actorId, workspaceId: req.candidateScope,
+      })) return { status: 403, error: "Workspace membership revoked" };
+      const row = await tx.candidate.findFirst({
+        where: { id: req.params.id, workspaceId: req.candidateScope },
+      });
+      if (!row) return { status: 404, error: "Candidate not found" };
+      if (!row.discoveryKey) return { status: 409, error: "Only discovered candidates use this review flow" };
+      if (row.suppressed) return { status: 409, error: "Suppressed candidate cannot be reviewed" };
+      if (input.expertProfileUrl === row.sourceUrl) {
+        return { status: 400, error: "Expert profile must be distinct from article evidence" };
+      }
+      // Keep original byline/source provenance and existing domain validation.
+      const verified = normalizeCandidate({ ...row, ...input });
+      if (!verified.expertProfileUrl) return { status: 400, error: "Expert profile URL required" };
+      const changed = row.expertProfileUrl !== verified.expertProfileUrl ||
+        !row.profileReviewed || row.onlineEnglish !== verified.onlineEnglish ||
+        row.region !== verified.region;
+      if (!changed) return { status: 200, reviewed: true, changed: false };
+      await tx.candidate.update({
+        where: { id: row.id },
+        data: {
+          name: normalizeFeedAuthor(row.name),
+          expertProfileUrl: verified.expertProfileUrl,
+          profileReviewed: true,
+          onlineEnglish: verified.onlineEnglish,
+          region: verified.region,
+          status: "REVIEWED",
+        },
+      });
+      await tx.auditEvent.create({ data: {
+        actorId, action: "discovery.expert.reviewed", entityId: row.id,
+        metadata: { profileUrl: verified.expertProfileUrl, articleUrl: row.sourceUrl,
+          onlineEnglish: verified.onlineEnglish, region: verified.region },
+      } });
+      return { status: 200, reviewed: true, changed: true };
     });
-    await tx.auditEvent.create({ data: {
-      actorId: "admin", action: "discovery.expert.reviewed", entityId: row.id,
-      metadata: { profileUrl: verified.expertProfileUrl, articleUrl: row.sourceUrl,
-        onlineEnglish: verified.onlineEnglish, region: verified.region },
-    } });
-    return { status: 200, reviewed: true, changed: true };
-  });
-  return res.status(result.status).json(result);
-}));
+    return res.status(result.status).json(result);
+  }));
 // Append-only source observations. An observation never auto-confirms
 // eligibility, ownership of the identity, or consent to contact.
 app.get("/api/candidates/:id/evidence", candidateReadScope, safe(async (req, res) => {
