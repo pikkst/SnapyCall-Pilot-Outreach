@@ -54,6 +54,20 @@ try {
   const html = await home.text();
   assert.match(html, /SnapyCall Pilot Outreach/);
   assert.match(html, /\/assets\/index-[a-zA-Z0-9_-]+\.js/);
+  // Google OAuth production branding requires publicly accessible product,
+  // privacy and terms pages on the same application domain.
+  for (const [path, required] of [
+    ["/about.html", "SnapyCall Pilot Outreach"],
+    ["/privacy.html", "Google data and permissions"],
+    ["/terms.html", "Terms of Service"],
+  ]) {
+    const page = await fetch(origin + path);
+    assert.equal(page.status, 200, path + " must be public");
+    assert.match(page.headers.get("content-type") ?? "", /text\/html/);
+    assert.match(await page.text(), new RegExp(required));
+  }
+  assert.match(html, /\/privacy\.html/);
+  assert.match(html, /\/terms\.html/);
 
   assert.equal((await call("/candidates")).status, 401);
   assert.equal((await call("/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
