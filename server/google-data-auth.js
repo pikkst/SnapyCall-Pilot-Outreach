@@ -8,6 +8,10 @@ export const DATA_SCOPES = Object.freeze([
   "https://www.googleapis.com/auth/forms.responses.readonly",
   "https://www.googleapis.com/auth/spreadsheets.readonly",
 ]);
+export const GMAIL_SEND_SCOPES = Object.freeze([
+  "openid", "email", "https://www.googleapis.com/auth/gmail.send",
+]);
+
 
 function sign(payload, key) {
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -25,36 +29,47 @@ function verifySigned(value, key) {
   catch { return null; }
 }
 
-export function googleDataConfig(env) {
-  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_DATA_REDIRECT_URI) return null;
-  const url = new URL(env.GOOGLE_DATA_REDIRECT_URI);
+function oauthConfig(env, redirectKey, callbackPath) {
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env[redirectKey]) return null;
+  const url = new URL(env[redirectKey]);
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
-      url.pathname !== "/api/partner/google/connect/callback") {
-    throw new Error("Invalid Google data OAuth callback URL");
+      url.pathname !== callbackPath) {
+    throw new Error("Invalid Google OAuth callback URL");
   }
   return { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET,
-    redirectUri: env.GOOGLE_DATA_REDIRECT_URI };
+    redirectUri: env[redirectKey] };
 }
 
-export function createGoogleDataFlow(config, signingKey, { userId, partnerId }, now = Date.now()) {
+export function googleDataConfig(env) {
+  return oauthConfig(env, "GOOGLE_DATA_REDIRECT_URI", "/api/partner/google/connect/callback");
+}
+
+export function googleGmailConfig(env) {
+  return oauthConfig(env, "GOOGLE_GMAIL_REDIRECT_URI", "/api/partner/google/gmail/callback");
+}
+
+export function createGoogleDataFlow(config, signingKey, { userId, partnerId, kind = "data" }, now = Date.now()) {
+  if (kind !== "data" && kind !== "gmail") throw new TypeError("Invalid OAuth flow kind");
   const state = randomBytes(32).toString("base64url");
   const nonce = randomBytes(32).toString("base64url");
   const verifier = randomBytes(32).toString("base64url");
   const url = new URL(AUTH_URL);
   for (const [name, value] of Object.entries({
     client_id: config.clientId, redirect_uri: config.redirectUri, response_type: "code",
-    scope: DATA_SCOPES.join(" "), state, nonce,
+    scope: (kind === "gmail" ? GMAIL_SEND_SCOPES : DATA_SCOPES).join(" "), state, nonce,
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256", access_type: "offline", prompt: "consent",
   })) url.searchParams.set(name, value);
-  const cookie = sign({ purpose: "google_data", userId, partnerId, state, nonce, verifier,
+  const cookie = sign({ purpose: kind === "gmail" ? "google_gmail_send" : "google_data", userId, partnerId, state, nonce, verifier,
     expires: now + FLOW_TTL_MS }, signingKey);
   return { url: url.toString(), cookie };
 }
 
-export function verifyGoogleDataFlow(cookie, state, signingKey, now = Date.now()) {
+export function verifyGoogleDataFlow(cookie, state, signingKey, now = Date.now(), kind = "data") {
+  if (kind !== "data" && kind !== "gmail") return null;
+  const purpose = kind === "gmail" ? "google_gmail_send" : "google_data";
   const flow = verifySigned(cookie, signingKey);
-  if (!flow || flow.purpose !== "google_data" || !Number.isSafeInteger(flow.expires) ||
+  if (!flow || flow.purpose !== purpose || !Number.isSafeInteger(flow.expires) ||
       flow.expires <= now || flow.expires > now + FLOW_TTL_MS ||
       typeof state !== "string" || !/^[\w-]{43}$/.test(state) ||
       !/^[\w-]{43}$/.test(flow.state ?? "") ||
@@ -80,7 +95,10 @@ export async function exchangeGoogleDataCode(code, flow, config, fetcher = fetch
   const response = await result.json();
   if (typeof response.id_token !== "string" || typeof response.refresh_token !== "string" ||
       response.refresh_token.length < 8 || response.refresh_token.length > 4096 ||
-      typeof response.scope !== "string" || !requiredScopesGranted(response.scope)) {
+      typeof response.scope !== "string" ||
+      !(flow.purpose === "google_gmail_send"
+        ? requiredGmailScopesGranted(response.scope)
+        : requiredScopesGranted(response.scope))) {
     throw new Error("Google did not grant required offline permissions");
   }
   return response;
@@ -90,5 +108,13 @@ export function requiredScopesGranted(granted) {
   if (typeof granted !== "string") return false;
   const scopes = new Set(granted.split(/\s+/).filter(Boolean));
   return DATA_SCOPES.filter(scope => scope !== "email").every(scope => scopes.has(scope)) &&
+    (scopes.has("email") || scopes.has("https://www.googleapis.com/auth/userinfo.email"));
+}
+
+export function requiredGmailScopesGranted(granted) {
+  if (typeof granted !== "string") return false;
+  const scopes = new Set(granted.split(/\s+/).filter(Boolean));
+  return scopes.has("openid") &&
+    scopes.has("https://www.googleapis.com/auth/gmail.send") &&
     (scopes.has("email") || scopes.has("https://www.googleapis.com/auth/userinfo.email"));
 }

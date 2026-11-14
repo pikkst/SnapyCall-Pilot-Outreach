@@ -56,14 +56,17 @@ globalThis.fetch = async (url, options) => {
     if (!/^[a-zA-Z0-9_-]{43}$/.test(nonce ?? "")) {
       return Response.json({ error: "invalid_grant" }, { status: 400 });
     }
+    const isGmail = params.get("redirect_uri") === process.env.GOOGLE_GMAIL_REDIRECT_URI;
     return Response.json({
       id_token: issueIdToken(nonce, kind),
       refresh_token: "fixture-refresh-token-secret-value",
       scope: [
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
-        "https://www.googleapis.com/auth/forms.responses.readonly",
-        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        ...(isGmail
+          ? ["https://www.googleapis.com/auth/gmail.send"]
+          : ["https://www.googleapis.com/auth/forms.responses.readonly",
+            "https://www.googleapis.com/auth/spreadsheets.readonly"]),
       ].join(" "),
       token_type: "Bearer", expires_in: 3600,
     });
