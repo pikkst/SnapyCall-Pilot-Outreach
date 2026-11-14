@@ -99,6 +99,8 @@ function App() {
 
   const workspaceRequest = useRef(0);
   const partnerEvidenceRequest = useRef(0);
+  const partnerReviewRequest = useRef(0);
+  const [partnerReviewSaving, setPartnerReviewSaving] = useState(false);
   const [partnerEvidenceId, setPartnerEvidenceId] = useState<string | null>(null);
   const [partnerEvidenceRows, setPartnerEvidenceRows] = useState<Evidence[]>([]);
   const [partnerEvidenceState, setPartnerEvidenceState] =
@@ -189,6 +191,9 @@ function App() {
     // An earlier response must never render under a newly selected workspace.
     const generation = ++workspaceRequest.current;
     ++partnerEvidenceRequest.current;
+    ++partnerReviewRequest.current;
+    setPartnerReviewSaving(false);
+    setReviewId(null);
     setPartnerEvidenceId(null);
     setPartnerEvidenceRows([]);
     setPartnerEvidenceState("idle");
@@ -406,6 +411,9 @@ function App() {
       setPersonalAiStatus("loading");
 
       ++partnerEvidenceRequest.current;
+      ++partnerReviewRequest.current;
+      setPartnerReviewSaving(false);
+      setReviewId(null);
       setPartnerEvidenceId(null);
       setPartnerEvidenceRows([]);
       setPartnerEvidenceState("idle");
@@ -557,6 +565,37 @@ function App() {
     });
   }
 
+  async function savePartnerProfileReview(workspaceId: string, event: React.FormEvent) {
+    event.preventDefault();
+    if (!reviewId || workspaceId !== activeWorkspaceId || partnerReviewSaving) return;
+    const candidateId = reviewId;
+    const currentWorkspace = workspaceRequest.current;
+    const request = ++partnerReviewRequest.current;
+    setPartnerReviewSaving(true);
+    setError("");
+    try {
+      await api("/candidates/" + encodeURIComponent(candidateId) +
+        "/expert-review?workspaceId=" + encodeURIComponent(workspaceId), {
+        method: "PATCH",
+        body: JSON.stringify({
+          expertProfileUrl: reviewProfileUrl, region: reviewRegion || null,
+          onlineEnglish: reviewEnglish, profileReviewed: true,
+        }),
+      });
+      if (currentWorkspace !== workspaceRequest.current ||
+          request !== partnerReviewRequest.current) return;
+      setReviewId(null);
+      setNotice("Expert profile review saved. Original article evidence is preserved. No email sent.");
+      await viewWorkspace(workspaceId);
+    } catch (err) {
+      if (currentWorkspace !== workspaceRequest.current ||
+          request !== partnerReviewRequest.current) return;
+      setError(err instanceof Error ? err.message : "Expert profile review failed");
+    } finally {
+      if (request === partnerReviewRequest.current) setPartnerReviewSaving(false);
+    }
+  }
+
   async function scanSource() {
     await execute(async () => {
       const result = await api<{ entries: FeedEntry[] }>("/discovery/scan", {
@@ -686,11 +725,46 @@ function App() {
                         <td>{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td>
                         <td>{c.region ?? "Unconfirmed"}</td>
                         <td>{stageNames[c.qualification.stage] ?? c.qualification.stage}</td>
-                        <td><button type="button" className="secondary" disabled={busy}
-                          onClick={() => void openPartnerEvidence(p.id, c.id)}>Evidence</button></td>
+                        <td>
+                          <button type="button" className="secondary" disabled={busy}
+                            onClick={() => void openPartnerEvidence(p.id, c.id)}>Evidence</button>
+                          {c.discoveryKey && <button type="button" className="secondary"
+                            disabled={busy || partnerReviewSaving} onClick={() => beginProfileReview(c)}>
+                            Review profile
+                          </button>}
+                        </td>
                       </tr>)}
                       {!workspaceCandidates.length && <tr><td colSpan={5} className="empty">No candidates in this workspace.</td></tr>}
                     </tbody></table></div>
+                    {reviewId && <form className="form-grid review-panel"
+                      aria-label="Partner expert profile review"
+                      onSubmit={event => void savePartnerProfileReview(p.id, event)}>
+                      <h3 className="wide">Verify an independently sourced expert profile</h3>
+                      <p className="wide muted">Check the expert's independent profile. A blog byline is not
+                        evidence of online consulting, contact permission or outreach eligibility.</p>
+                      <label className="wide">Expert profile URL (not the article URL)
+                        <input type="url" required maxLength={2048} value={reviewProfileUrl}
+                          onChange={event => setReviewProfileUrl(event.target.value)} />
+                      </label>
+                      <label>Verified region
+                        <select value={reviewRegion} onChange={event => setReviewRegion(event.target.value)}>
+                          <option value="">Not confirmed</option>
+                          {regions.map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+                        </select>
+                      </label>
+                      <label className="checkbox-review"><input type="checkbox" checked={reviewEnglish}
+                        onChange={event => setReviewEnglish(event.target.checked)} />
+                        English online consultations explicitly confirmed
+                      </label>
+                      <button type="submit" disabled={partnerReviewSaving}>
+                        {partnerReviewSaving ? "Saving…" : "Save manual review"}
+                      </button>
+                      <button type="button" className="secondary" disabled={partnerReviewSaving}
+                        onClick={() => {
+                          ++partnerReviewRequest.current;
+                          setReviewId(null);
+                        }}>Cancel</button>
+                    </form>}
                     {partnerEvidenceId && <section className="review-panel" aria-label="Partner source evidence">
                       <h3>Candidate source evidence</h3>
                       <p className="muted">Review original source links. Evidence does not establish contact consent or authorize sending.</p>
