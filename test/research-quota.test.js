@@ -43,3 +43,40 @@ test("quota rejects client-controlled invalid identities without hitting databas
   }));
   assert.equal(called, false);
 });
+
+
+test("personal preferences respect server bounds and cannot be bypassed", async () => {
+  const { validateResearchPreferences, RESEARCH_MAX_USER_DAILY_LIMIT } =
+    await import("../server/research-quota.js");
+  assert.deepEqual(validateResearchPreferences({ dailyLimit: 20, maxCandidates: 12 }),
+    { dailyLimit: 20, maxCandidates: 12 });
+  for (const input of [
+    { dailyLimit: 0, maxCandidates: 10 },
+    { dailyLimit: RESEARCH_MAX_USER_DAILY_LIMIT + 1, maxCandidates: 10 },
+    { dailyLimit: 3.5, maxCandidates: 10 },
+    { dailyLimit: 3, maxCandidates: 21 },
+    { dailyLimit: 3, maxCandidates: "10" },
+  ]) assert.throws(() => validateResearchPreferences(input));
+});
+
+test("custom daily threshold is enforced without changing the workspace ceiling", async () => {
+  const counts = new Map();
+  const tx = { $queryRaw: async (_sql, key, _day, ceiling) => {
+    const current = counts.get(key) ?? 0;
+    if (current >= ceiling) return [];
+    counts.set(key, current + 1);
+    return [{ attempts: current + 1 }];
+  } };
+  for (let i = 1; i <= 4; i++) {
+    const data = await reserveResearchAttempt(tx, { workspaceId, userId, dailyLimit: 4 });
+    assert.equal(data.remaining.userWorkspace, 4 - i);
+    assert.equal(data.remaining.workspace, RESEARCH_DAILY_WORKSPACE_LIMIT - i);
+  }
+  await assert.rejects(() => reserveResearchAttempt(tx, {
+    workspaceId, userId, dailyLimit: 4,
+  }), ResearchQuotaExceeded);
+  // Lowering a limit below already-consumed attempts never restores capacity.
+  await assert.rejects(() => reserveResearchAttempt(tx, {
+    workspaceId, userId, dailyLimit: 1,
+  }), ResearchQuotaExceeded);
+});
