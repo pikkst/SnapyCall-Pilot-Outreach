@@ -405,10 +405,16 @@ try {
       });
     assert.equal(otherTenantSeed.status, 201,
       "The same public professional may be researched in a separate workspace");
-    assert.notEqual((await otherTenantSeed.json()).id, manualFirstBody.id);
+    const otherTenantSeedBody = await otherTenantSeed.json();
+    assert.notEqual(otherTenantSeedBody.id, manualFirstBody.id);
     assert.equal((await call("/candidates?workspaceId=" + firstWorkspace, {
       method: "POST", headers: protectedHeaders, body: manualBody,
     })).status, 403, "Admin cannot impersonate a partner workspace");
+    // Restore original test fixture cardinality; these integration assertions
+    // must not influence later tests that expect one candidate per workspace.
+    await partnerDb.candidate.deleteMany({
+      where: { id: { in: [manualFirstBody.id, otherTenantSeedBody.id] } },
+    });
     // Candidate identifiers are tenant-scoped; legacy admin still has
     // unique identifiers within the NULL workspace segment.
     const identityFields = {
