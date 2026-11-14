@@ -98,6 +98,7 @@ model PartnerUser {
   displayName String?
   memberships PartnerMembership[]
   googleConnections PartnerGoogleConnection[]
+  gmailConnection PartnerGmailConnection?
   createdAt DateTime @default(now())
 }
 
@@ -136,4 +137,15 @@ model PartnerGoogleConnection {
   user PartnerUser @relation(fields: [userId], references: [id], onDelete: Restrict)
   @@unique([partnerId, userId])
   @@index([userId])
+}
+
+model PartnerGmailConnection {
+  id String @id @default(cuid())
+  userId String @unique
+  googleSub String
+  encryptedRefreshToken String
+  scope String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user PartnerUser @relation(fields: [userId], references: [id], onDelete: Restrict)
 }
