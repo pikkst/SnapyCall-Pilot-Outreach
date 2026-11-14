@@ -619,6 +619,60 @@ try {
       headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
       body: keyPayload });
     assert.equal(savedOwn.status, 200);
+    // User-owned limits require the same verified partner BYOK identity;
+    // mutation without Origin, an admin cookie, or valid bounds must fail.
+    const defaultLimits = await call("/research-limits", { headers: { cookie: partnerCookie } });
+    assert.equal(defaultLimits.status, 200);
+    assert.deepEqual(await defaultLimits.json(), { dailyLimit: 2, maxCandidates: 10 });
+    const limitsBody = JSON.stringify({ dailyLimit: 4, maxCandidates: 5 });
+    assert.equal((await call("/research-limits", { method: "PUT",
+      headers: { cookie: partnerCookie, "content-type": "application/json" },
+      body: limitsBody })).status, 403, "Personal limit writes require Origin");
+    assert.equal((await call("/research-limits", { method: "PUT",
+      headers: protectedHeaders, body: limitsBody })).status, 403,
+      "Legacy admin cannot set partner's research budget");
+    assert.equal((await call("/research-limits", { method: "PUT",
+      headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ dailyLimit: 101, maxCandidates: 5 }),
+    })).status, 400, "A user cannot exceed the backend safety ceiling");
+    const storedLimits = await call("/research-limits", { method: "PUT",
+      headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: limitsBody });
+    assert.equal(storedLimits.status, 200);
+    assert.deepEqual(await storedLimits.json(), { dailyLimit: 4, maxCandidates: 5 });
+    assert.deepEqual(await (await call("/research-limits", {
+      headers: { cookie: partnerCookie },
+    })).json(), { dailyLimit: 4, maxCandidates: 5 });
+    assert.equal((await partnerDb.researchUserLimits.findUnique({
+      where: { ownerId: member.id },
+    })).dailyLimit, 4);
+    // A preference update is serialized with the existing atomic quota tx.
+    const { lockedResearchPreferences } = await import("../server/research-quota.js");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await partnerDb.$transaction(async tx => {
+        const preferences = await lockedResearchPreferences(tx, member.id);
+        assert.equal(preferences.dailyLimit, 4);
+        assert.equal(preferences.maxCandidates, 5);
+        await reserveResearchAttempt(tx, { workspaceId: secondWorkspace,
+          userId: member.id, now: quotaClock, dailyLimit: preferences.dailyLimit });
+      });
+    }
+    await assert.rejects(() => partnerDb.$transaction(async tx => {
+      const prefs = await lockedResearchPreferences(tx, member.id);
+      await reserveResearchAttempt(tx, {
+        workspaceId: secondWorkspace, userId: member.id,
+        now: quotaClock, dailyLimit: prefs.dailyLimit,
+      });
+    }), ResearchQuotaExceeded);
+    await partnerDb.researchUserLimits.update({ where: { ownerId: member.id },
+      data: { dailyLimit: 1 } });
+    await assert.rejects(() => partnerDb.$transaction(async tx => {
+      const prefs = await lockedResearchPreferences(tx, member.id);
+      await reserveResearchAttempt(tx, {
+        workspaceId: secondWorkspace, userId: member.id,
+        now: quotaClock, dailyLimit: prefs.dailyLimit,
+      });
+    }), ResearchQuotaExceeded, "Reducing a limit must not reset consumed quota");
     const ownMetadata = await call("/ai-settings", { headers: { cookie: partnerCookie } });
     const metadataText = await ownMetadata.text();
     assert.equal(JSON.parse(metadataText).keyConfigured, true);
