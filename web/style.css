@@ -8,3 +8,25 @@
 .review-panel .checkbox-review input{flex-shrink:0}
 td a{display:inline-block;max-width:220px;overflow-wrap:anywhere;white-space:normal}
 td button+button{margin-left:6px}
+
+
+/* Keep invitation controls visible without horizontal scrolling on phones. */
+@media (max-width: 680px) {
+  .invitation-table { overflow: visible; }
+  .invitation-table table,
+  .invitation-table tbody,
+  .invitation-table tr,
+  .invitation-table td { display: block; width: 100%; }
+  .invitation-table thead { position: absolute; width: 1px; height: 1px; padding: 0;
+    margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap;
+    border: 0; }
+  .invitation-table tr { margin: 12px 0; padding: 12px 14px;
+    border: 1px solid #d6dfec; border-radius: 10px; background: #fff; }
+  .invitation-table td { padding: 8px 0; border: 0; white-space: normal;
+    overflow-wrap: anywhere; }
+  .invitation-table td::before { content: attr(data-label); display: block;
+    margin-bottom: 3px; font-size: 11px; font-weight: 700;
+    color: #73829c; text-transform: uppercase; letter-spacing: .04em; }
+  .invitation-table td:last-child { padding-bottom: 0; }
+  .invitation-table td button { max-width: 100%; white-space: normal; }
+}
