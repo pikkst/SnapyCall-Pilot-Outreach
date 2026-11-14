@@ -22,6 +22,7 @@ import {
   reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded,
 } from "./research-quota.js";
 import { validateMonthlyBudgetCents } from "./research-budget.js";
+import { requireResearchPriceEnvelope, ResearchPricingUnavailable } from "./research-price-policy.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
@@ -681,6 +682,21 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
   if (setting.provider !== "anthropic") {
     try { assertWebResearchModel(setting.provider, setting.model); }
     catch { return res.status(409).json({ error: "Selected model does not support configured web search" }); }
+  }
+  // A feature flag, daily quota and saved monthly preference must never
+  // authorize provider charges without an approved cost ceiling. This
+  // preflight intentionally rejects every model until the owner-wide
+  // reserve/settle integration and verified prices land in #44.
+  try {
+    requireResearchPriceEnvelope({ provider: setting.provider, model: setting.model });
+  } catch (error) {
+    if (error instanceof ResearchPricingUnavailable) {
+      return res.status(503).json({
+        code: "RESEARCH_PRICING_UNAVAILABLE",
+        error: "Paid research cannot run until pricing and monetary controls are approved",
+      });
+    }
+    throw error;
   }
   let quota;
   try {
