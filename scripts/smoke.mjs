@@ -325,6 +325,37 @@ try {
     assert.deepEqual(await (await call("/drafts?workspaceId=" + firstWorkspace, {
       headers: { cookie: partnerCookie },
     })).json(), []);
+    // Candidate identifiers are tenant-scoped; legacy admin still has
+    // unique identifiers within the NULL workspace segment.
+    const identityFields = {
+      name: "Shared professional", category: "COACHING",
+      sourceUrl: "https://example.org/identity-check",
+      emailNormalized: "tenancy-identity@example.org",
+      discoveryKey: "e".repeat(64),
+    };
+    const scopedOne = await partnerDb.candidate.create({
+      data: { ...identityFields, workspaceId: firstWorkspace },
+    });
+    const scopedTwo = await partnerDb.candidate.create({
+      data: { ...identityFields, workspaceId: secondWorkspace },
+    });
+    assert.notEqual(scopedOne.id, scopedTwo.id,
+      "Different workspaces may import the same public professional");
+    await assert.rejects(() => partnerDb.candidate.create({
+      data: { ...identityFields, workspaceId: firstWorkspace },
+    }), error => error?.code === "P2002",
+    "Same-workspace duplicate must be rejected by PostgreSQL");
+    const legacyFirst = await partnerDb.candidate.create({
+      data: { ...identityFields, workspaceId: null },
+    });
+    assert.ok(legacyFirst.id);
+    await assert.rejects(() => partnerDb.candidate.create({
+      data: { ...identityFields, workspaceId: null },
+    }), error => error?.code === "P2002",
+    "Legacy admin NULL ownership retains identifier uniqueness");
+    await partnerDb.candidate.deleteMany({
+      where: { id: { in: [scopedOne.id, scopedTwo.id, legacyFirst.id] } },
+    });
     const legacyList = await call("/candidates", { headers: { cookie } });
     assert.equal(legacyList.status, 200);
     assert.equal((await legacyList.json()).some(row => row.id === privateLeadA.id), false,
