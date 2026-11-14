@@ -21,3 +21,5 @@ Per-user AI key contract:
 - AES-256-GCM encrypted at rest; only metadata/fingerprint to client.
 - No other user's key may be retrieved, modified, or used for drafts.
 - Tenant-aware candidate access must be enabled before partner draft generation.
+
+Confirmed technical operator: **EventNexus OÜ** (user-provided). This does not establish a data controller, contractual entity, legal/privacy contact or finalized retention schedule; those remain release gates.
