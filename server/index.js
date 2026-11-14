@@ -867,8 +867,11 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
   }).catch(async error => {
     if (error?.code !== "P2002") throw error;
     if (!manualSeed) return "DUPLICATE";
-    // Concurrent requests for the same manual seed are idempotent. Never
-    // resolve collisions outside the authenticated tenant segment.
+    // The initial membership lock ended when the failed transaction rolled
+    // back. Reauthorize before revealing a replay winner ID.
+    if (!await requireWorkspaceMembership(prisma, {
+      workspaceId: req.candidateScope, userId: actorId,
+    })) return null;
     const winner = await prisma.candidate.findFirst({ where: {
       workspaceId: req.candidateScope, discoveryKey: seed.discoveryKey,
     } });
