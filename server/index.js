@@ -396,6 +396,34 @@ app.get("/api/admin/partners/invitations", authenticated, safe(async (_req, res)
       errorCode: m.inviteErrorCode, attempt: m.inviteAttempt,
     })) });
 }));
+// Revocation is a soft-delete of workspace access. Keep membership history and
+// existing candidate ownership intact. Only the separate admin session may act.
+app.delete("/api/admin/partners/memberships/:id", authenticated, requireOrigin,
+  safe(async (req, res) => {
+    const parsed = z.string().cuid().safeParse(req.params.id);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid membership ID" });
+    const result = await prisma.$transaction(async tx => {
+      const member = await tx.partnerMembership.findUnique({
+        where: { id: parsed.data }, select: { id: true, partnerId: true, userId: true, revokedAt: true },
+      });
+      if (!member) return null;
+      if (member.revokedAt) return { workspaceId: member.partnerId, changed: false };
+      // CAS ensures concurrent administrative requests generate exactly one
+      // revocation event, and serializes with membership-locked writes.
+      const changed = await tx.partnerMembership.updateMany({
+        where: { id: member.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      if (changed.count) await tx.auditEvent.create({
+        data: { actorId: "admin", action: "partner.membership.revoked",
+          entityId: member.id,
+          metadata: { workspaceId: member.partnerId, userId: member.userId } },
+      });
+      return { workspaceId: member.partnerId, changed: changed.count === 1 };
+    });
+    if (!result) return res.status(404).json({ error: "Membership not found" });
+    return res.json({ revoked: true, ...result });
+  }));
 app.post("/api/admin/partners/invitations/:id/resend", authenticated, requireOrigin,
   safe(async (req, res) => {
     const input = z.object({ newAttempt: z.boolean().optional() }).strict().parse(req.body ?? {});
