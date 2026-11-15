@@ -53,7 +53,12 @@ function pinnedHttps(url, address, timeoutMs = TIMEOUT_MS) {
       agent: false, maxRedirects: 0,
       headers: { "user-agent": USER_AGENT, accept: "text/html,text/plain;q=0.9,*/*;q=0.1",
         "accept-encoding": "identity", connection: "close" },
-      lookup: (_hostname, _options, cb) => cb(null, address, 4),
+      lookup: (_hostname, options, cb) => {
+        // Node's autoSelectFamily path requests lookup({ all: true }).
+        // Preserve DNS pinning in both lookup callback contracts.
+        if (options?.all) cb(null, [{ address, family: 4 }]);
+        else cb(null, address, 4);
+      },
     }, response => {
       if (response.statusCode >= 300 && response.statusCode < 400) {
         response.resume();
