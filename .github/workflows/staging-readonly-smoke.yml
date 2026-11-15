@@ -20,3 +20,5 @@ jobs:
           node-version: '22'
       - name: Verify deployed staging health and anonymous access controls
         run: node scripts/staging-readonly-smoke.mjs
+      - name: Inspect project-owned public HTML using PR source adapter
+        run: node scripts/staging-public-page-smoke.mjs
