@@ -127,3 +127,27 @@ paid research works on staging. After an approved PR deployment,
 a separately authorized workspace-scoped staging smoke must verify
 revoked membership, source policy, real-world egress, outcome quality,
 and BYOK cost ceilings before feature activation.
+
+## Increment 5 — real public-source inspection smoke
+
+The GitHub Actions `Staging read-only smoke` workflow now runs
+`scripts/staging-public-page-smoke.mjs` after installing npm dependencies.
+This makes **real outbound HTTPS requests from the GitHub runner** using the
+unmerged PR's public-source inspector against a project-controlled public
+page (`https://pilot.eventnexus.eu/privacy.html`).
+
+The first real run exposed a Node 22 transport bug: the pinned DNS
+`lookup` hook did not implement the `{ all: true }` callback shape
+used by `autoSelectFamily`. The production adapter now supports both
+lookup callback contracts and still supplies only the previously validated
+pinned IPv4 address. No free-form DNS fallback was introduced.
+
+Verified on exact HEAD `cfe687261eb5ac792aefce43e674ce178f81cd83`:
+- Public staging health, readiness, anonymous auth denial and legal pages PASS.
+- The PR's DNS-pinned HTTPS + robots + text-bound source inspector PASS on a
+  project-controlled real page; no contacts were captured or imported.
+- CI and disposable PostgreSQL Pilot app CI PASS.
+
+This does **not** prove general third-party robots/TOS compliance,
+real-provider capability, contact ownership or authorization to send mail.
+Both paid AI research and page inspection remain OFF in staging.
