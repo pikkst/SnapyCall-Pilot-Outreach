@@ -3,7 +3,7 @@
 import { retrieveCitedPublicPage } from "./research-public-pages.js";
 import { observedPublicBusinessContacts } from "./research-contact-evidence.js";
 import { publicCitationUrl } from "./research-evidence.js";
-import { associateBusinessContactsWithCandidates, findCandidateIdentityCollisions } from "./research-contact-attribution.js";
+import { associateBusinessContactsWithCandidates, findCandidateIdentityCollisions, orderCandidatesForEvidenceReview } from "./research-contact-attribution.js";
 
 export async function inspectResearchPreview(preview, {
   retrieve = retrieveCitedPublicPage, maxPages = 2,
@@ -16,6 +16,7 @@ export async function inspectResearchPreview(preview, {
   const cited = new Set(preview.sources.map(item => publicCitationUrl(item?.url)).filter(Boolean));
   const visited = new Set();
   const contacts = [];
+  const inspectedUrls = [];
   const warnings = [];
   let inspected = 0;
   for (const candidate of preview.candidates) {
@@ -33,6 +34,7 @@ export async function inspectResearchPreview(preview, {
       const observations = observedPublicBusinessContacts({
         trustedPages: [page], citationUrls: [url],
       });
+      inspectedUrls.push(url);
       contacts.push(...observations);
     } catch {
       // Individual source failures cannot reveal internal DNS, keys or URLs
@@ -44,6 +46,7 @@ export async function inspectResearchPreview(preview, {
     publicBusinessContacts: contacts,
     contactAssociations: associateBusinessContactsWithCandidates(preview.candidates, contacts),
     identityCollisions: findCandidateIdentityCollisions(preview.candidates),
+    evidenceReviewOrder: orderCandidatesForEvidenceReview(preview.candidates, inspectedUrls, contacts),
     pagesInspected: inspected,
     contactReviewRequired: true,
     warnings: [...new Set(warnings)],
