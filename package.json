@@ -13,6 +13,7 @@
     "check": "node --check src/domain.js && node --check server/index.js && node --check server/security.js && node --check server/ai.js",
     "test": "node --test",
     "research:reconciliation-check": "node scripts/research-reconciliation-check.mjs",
+    "research:reconciliation-enqueue": "node scripts/research-reconciliation-enqueue.mjs",
     "db:validate": "prisma validate",
     "db:deploy": "prisma migrate deploy",
     "typecheck": "tsc --noEmit"
