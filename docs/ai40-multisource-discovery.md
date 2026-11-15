@@ -110,3 +110,20 @@ Remaining release gates include a complete IANA special-purpose IP
 classification strategy, independent provider pricing authorization,
 controlled real-network source tests and organization/person identity
 verification. Keep both paid research and public-source inspection OFF.
+
+## Real staging smoke — non-billable release cadence
+
+The repository now includes `scripts/staging-readonly-smoke.mjs` and the
+GitHub Actions `Staging read-only smoke` workflow. On pull requests, pushes
+to main and manual runs, a GitHub-hosted runner performs **real HTTPS GETs**
+against the currently deployed `https://pilot.eventnexus.eu` service:
+`/api/health`, `/api/ready`, anonymous `/api/session`,
+denial of anonymous `/api/candidates`, plus `/`, `/privacy.html`
+and `/terms.html`. It uses no credentials, writes, or paid AI calls.
+
+This smoke validates the **deployed main/staging binary**, not an
+unmerged PR. It is not evidence that the new inspection adapter or
+paid research works on staging. After an approved PR deployment,
+a separately authorized workspace-scoped staging smoke must verify
+revoked membership, source policy, real-world egress, outcome quality,
+and BYOK cost ceilings before feature activation.
