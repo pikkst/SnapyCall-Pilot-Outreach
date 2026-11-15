@@ -67,18 +67,12 @@ jobs:
           SQL
           DATABASE_URL="$UPGRADE_URL" DIRECT_URL="$UPGRADE_URL" \
             npx prisma migrate deploy --schema prisma/schema.prisma
-          psql "$UPGRADE_URL" -v ON_ERROR_STOP=1 <<'SQL'
-          DO $
-          BEGIN
-            IF to_regclass('public."ResearchReconciliationOutbox"') IS NULL
-              THEN RAISE EXCEPTION 'Upgrade did not create alert outbox'; END IF;
-            IF NOT EXISTS (
-              SELECT 1 FROM "ResearchOwnerBudget"
-              WHERE "ownerId" = 'caaaaaaaaaaaaaaaaaaaaaaaa'
-                AND "monthlyLimitCents" = 1000
-            ) THEN RAISE EXCEPTION 'Upgrade modified an existing owner budget'; END IF;
-          END $$;
-          SQL
+          outbox_exists="$(psql "$UPGRADE_URL" -At -v ON_ERROR_STOP=1 \
+            -c "SELECT to_regclass('public.\\\"ResearchReconciliationOutbox\\\"') IS NOT NULL")"
+          test "$outbox_exists" = "t"
+          preserved_budget="$(psql "$UPGRADE_URL" -At -v ON_ERROR_STOP=1 \
+            -c "SELECT \\"monthlyLimitCents\\" FROM \\"ResearchOwnerBudget\\" WHERE \\"ownerId\\" = 'caaaaaaaaaaaaaaaaaaaaaaaa'")"
+          test "$preserved_budget" = "1000"
       - run: npm run build
       - name: HTTP smoke against disposable PostgreSQL
         run: node scripts/smoke.mjs
