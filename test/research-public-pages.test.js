@@ -10,13 +10,17 @@ const source = "https://consultants.example.org/experts/abc";
 test("DNS pinning rejects private, metadata, loopback and mixed answers", async () => {
   for (const blocked of ["127.0.0.1", "10.0.0.1", "169.254.169.254",
     "172.31.255.255", "192.168.1.2", "100.100.100.200",
-    "192.0.2.1", "198.18.1.1", "203.0.113.4", "224.0.0.1"]) {
+    "192.0.0.7", "192.0.0.10", "192.0.0.255",
+    "192.88.99.9", "192.0.2.1", "198.18.1.1",
+    "203.0.113.4", "224.0.0.1"]) {
     assert.equal(isPublicIpv4(blocked), false, blocked);
     await assert.rejects(() => resolvePublicAddress("example.org", async () =>
       [{ address: "8.8.8.8", family: 4 }, { address: blocked, family: 4 }]),
     /DNS_REJECTED/);
   }
   assert.equal(isPublicIpv4("8.8.8.8"), true);
+  assert.equal(isPublicIpv4("1.1.1.1"), true);
+  assert.equal(isPublicIpv4("192.0.0.9"), false);
   assert.equal(await resolvePublicAddress("example.org", async () => [
     { address: "2606:4700:4700::1111", family: 6 },
     { address: "8.8.8.8", family: 4 },
