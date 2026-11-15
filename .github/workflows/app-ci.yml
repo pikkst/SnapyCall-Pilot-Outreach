@@ -77,7 +77,7 @@ jobs:
               WHERE "ownerId" = 'caaaaaaaaaaaaaaaaaaaaaaaa'
                 AND "monthlyLimitCents" = 1000
             ) THEN RAISE EXCEPTION 'Upgrade modified an existing owner budget'; END IF;
-          END $;
+          END $$;
           SQL
       - run: npm run build
       - name: HTTP smoke against disposable PostgreSQL
