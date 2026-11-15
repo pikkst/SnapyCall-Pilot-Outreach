@@ -967,6 +967,35 @@ try {
       state: "requires_review", enqueued: false,
     });
     assert.equal(await partnerDb.researchReconciliationOutbox.count(), 1);
+    // The delivery worker is a separate opt-in path. Mock Resend and verify
+    // duplicate operator runs cannot send the same incident twice.
+    const { dispatchResearchReconciliationAlert } =
+      await import("../server/research-reconciliation-delivery.js");
+    const deliveryConfig = {
+      RESEARCH_ALERT_DELIVERY_ENABLED: "true",
+      RESEND_API_KEY: "smoke-only",
+      RESEARCH_ALERT_FROM: "SnapyCall Alerts <alerts@example.test>",
+      RESEARCH_ALERT_TO: "operator@example.test",
+    };
+    const deliveries = [];
+    const fakeResend = async (_url, options) => {
+      deliveries.push({ key: options.headers["Idempotency-Key"],
+        payload: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ id: "test-mail-123" }) };
+    };
+    const dispatchResults = await Promise.all([
+      dispatchResearchReconciliationAlert(partnerDb, deliveryConfig, fakeResend),
+      dispatchResearchReconciliationAlert(partnerDb, deliveryConfig, fakeResend),
+    ]);
+    assert.equal(dispatchResults.filter(x => x.state === "sent").length, 1);
+    assert.equal(deliveries.length, 1, "Concurrent alert dispatches must send once");
+    assert.equal(deliveries[0].payload.to[0], "operator@example.test");
+    assert.equal(deliveries[0].key,
+      "snapycall-research-reconcile-" + savedAlert.dedupeKey);
+    assert.equal((await partnerDb.researchReconciliationOutbox.findFirst()).status, "SENT");
+    assert.deepEqual(await dispatchResearchReconciliationAlert(partnerDb,
+      deliveryConfig, fakeResend), { state: "empty" });
+    assert.equal(deliveries.length, 1, "Replayed dispatcher cannot resend");
     // Resolve the synthetic stale reservation; only explicit settlement changes money.
     await partnerDb.$transaction(tx => settleOwnerSpend(tx, {
       ownerId: member.id, workspaceId: firstWorkspace,
