@@ -141,6 +141,11 @@ try {
   assert.equal(emptyOverview.needsReview, false);
   assert.equal(emptyOverview.billingSource, "application-estimate");
   assert.equal(emptyOverview.action, "manual-review-only");
+  assert.deepEqual(emptyOverview.alert, {
+    requiresOperatorReview: false, severity: "none", staleCount: 0,
+    estimatedHeldCents: 0, oldestStaleAt: null,
+    currency: "USD", action: "none",
+  });
   assert.equal(JSON.stringify(emptyOverview).includes("ownerId"), false);
   const protectedHeaders = { origin, cookie, "content-type": "application/json" };
   // A source article never qualifies a discovered byline as an expert.
@@ -921,6 +926,11 @@ try {
     const adminLedger = await adminOverview.json();
     assert.equal(adminLedger.staleReservations, 1);
     assert.equal(adminLedger.staleCents, 25);
+    assert.deepEqual(adminLedger.alert, {
+      requiresOperatorReview: true, severity: "warning", staleCount: 1,
+      estimatedHeldCents: 25, oldestStaleAt: agedAt.toISOString(),
+      currency: "USD", action: "investigate-with-provider-evidence",
+    });
     assert.equal(adminLedger.needsReview, true);
     assert.equal(adminLedger.oldestStaleAt, agedAt.toISOString());
     assert.equal(JSON.stringify(adminLedger).includes(member.id), false,
@@ -936,6 +946,56 @@ try {
     assert.equal(previousMonth.ledger.pendingReservations, 0);
     assert.equal(previousMonth.reconciliation.staleReservations, 1,
       "Old unsettled reservations must remain visible across month rollover");
+    // Concurrent operator checks must create exactly one durable alert.
+    // A repeated check must never reset or duplicate an existing incident.
+    const { enqueueResearchReconciliationAlert } =
+      await import("../server/research-reconciliation-outbox.js");
+    const concurrentAlerts = await Promise.all([
+      enqueueResearchReconciliationAlert(partnerDb),
+      enqueueResearchReconciliationAlert(partnerDb),
+    ]);
+    assert.equal(concurrentAlerts.filter(item => item.enqueued).length, 1,
+      "Concurrent stale checks must enqueue exactly once");
+    assert.equal(await partnerDb.researchReconciliationOutbox.count(), 1);
+    const savedAlert = await partnerDb.researchReconciliationOutbox.findFirst();
+    assert.equal(savedAlert.status, "PENDING");
+    assert.equal(savedAlert.staleCount, 1);
+    assert.equal(savedAlert.estimatedHeldCents, 25);
+    assert.equal(savedAlert.dedupeKey.length, 64);
+    assert.equal(savedAlert.dedupeKey.includes(staleId), false);
+    assert.deepEqual(await enqueueResearchReconciliationAlert(partnerDb), {
+      state: "requires_review", enqueued: false,
+    });
+    assert.equal(await partnerDb.researchReconciliationOutbox.count(), 1);
+    // The delivery worker is a separate opt-in path. Mock Resend and verify
+    // duplicate operator runs cannot send the same incident twice.
+    const { dispatchResearchReconciliationAlert } =
+      await import("../server/research-reconciliation-delivery.js");
+    const deliveryConfig = {
+      RESEARCH_ALERT_DELIVERY_ENABLED: "true",
+      RESEND_API_KEY: "smoke-only",
+      RESEARCH_ALERT_FROM: "SnapyCall Alerts <alerts@example.test>",
+      RESEARCH_ALERT_TO: "operator@example.test",
+    };
+    const deliveries = [];
+    const fakeResend = async (_url, options) => {
+      deliveries.push({ key: options.headers["Idempotency-Key"],
+        payload: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ id: "test-mail-123" }) };
+    };
+    const dispatchResults = await Promise.all([
+      dispatchResearchReconciliationAlert(partnerDb, deliveryConfig, fakeResend),
+      dispatchResearchReconciliationAlert(partnerDb, deliveryConfig, fakeResend),
+    ]);
+    assert.equal(dispatchResults.filter(x => x.state === "sent").length, 1);
+    assert.equal(deliveries.length, 1, "Concurrent alert dispatches must send once");
+    assert.equal(deliveries[0].payload.to[0], "operator@example.test");
+    assert.equal(deliveries[0].key,
+      "snapycall-research-reconcile-" + savedAlert.dedupeKey);
+    assert.equal((await partnerDb.researchReconciliationOutbox.findFirst()).status, "SENT");
+    assert.deepEqual(await dispatchResearchReconciliationAlert(partnerDb,
+      deliveryConfig, fakeResend), { state: "empty" });
+    assert.equal(deliveries.length, 1, "Replayed dispatcher cannot resend");
     // Resolve the synthetic stale reservation; only explicit settlement changes money.
     await partnerDb.$transaction(tx => settleOwnerSpend(tx, {
       ownerId: member.id, workspaceId: firstWorkspace,
@@ -943,6 +1003,11 @@ try {
     }));
     assert.equal((await readOwnerBudgetSnapshot(partnerDb, member.id))
       .reconciliation.staleReservations, 0);
+    assert.deepEqual(await enqueueResearchReconciliationAlert(partnerDb), {
+      state: "clear", enqueued: false,
+    });
+    assert.equal(await partnerDb.researchReconciliationOutbox.count(), 1,
+      "Cleared reservations must not generate another notification");
     await partnerDb.researchOwnerBudget.update({ where: { ownerId: member.id },
       data: { monthlyLimitCents: 100 } });
     await assert.rejects(() => partnerDb.$transaction(tx => reserveOwnerSpend(tx, {

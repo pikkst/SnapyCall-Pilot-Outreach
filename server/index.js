@@ -25,6 +25,7 @@ import {
 import { validateMonthlyBudgetCents, reserveOwnerSpend, settleOwnerSpend,
   ResearchBudgetExceeded, readOwnerBudgetSnapshot,
   readResearchReconciliationOverview } from "./research-budget.js";
+import { evaluateResearchReconciliationAlert } from "./research-reconciliation-alert.js";
 import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
   calculateVerifiedSpendCents } from "./research-price-policy.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
@@ -593,7 +594,10 @@ const researchLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders:
 // individual ledger records or mutation paths to the browser.
 app.get("/api/admin/research-reconciliation", authenticated, safe(async (_req, res) => {
   res.set("Cache-Control", "no-store");
-  return res.json(await readResearchReconciliationOverview(prisma));
+  const overview = await readResearchReconciliationOverview(prisma);
+  return res.json({ ...overview,
+    alert: evaluateResearchReconciliationAlert(overview),
+  });
 }));
 app.get("/api/research-budget", aiOwnerAuthenticated, safe(async (req, res) => {
   const identity = await partnerIdentity(req);

@@ -1131,7 +1131,9 @@ function App() {
               <p className="muted">Server safety ceilings: 100 attempts per
                 workspace/day and five concurrent workspace searches. Active-run
                 slots recover automatically after process failures.
-                Monthly currency budgets are not yet enforced.</p>
+                Daily attempt limits are active. Monetary ledger controls are implemented,
+                but paid web research remains disabled until provider prices and
+                actual billable usage can be fully verified.</p>
               <button type="submit" disabled={busy || !personalAi.keyConfigured}>
                 Save my research limits
               </button>
@@ -1140,9 +1142,10 @@ function App() {
         <section aria-label="Personal AI monthly budget" className="review-panel">
           <h2>Monthly research budget</h2>
           <p className="muted">Optional USD limit for your personal API key across
-            every workspace. This preference is stored but not yet applied to
-            billable provider requests. Paid research remains disabled pending
-            accurate provider pricing and spend reconciliation.</p>
+            every workspace. Your owner-wide USD preference is saved and the monetary ledger is
+            integrated with the search route. Paid research remains disabled
+            until each provider has verified hard cost bounds and complete
+            usage reconciliation. This is not an external billing cap.</p>
           {budgetStatus === "loading" ? <p className="muted">Loading budget…</p>
             : budgetStatus === "error" ?
               <button type="button" className="secondary"
@@ -1161,7 +1164,7 @@ function App() {
                 <p>Estimated settled: ${(researchBudget.ledger.settledCents / 100).toFixed(2)} USD
                   · Reserved: ${(researchBudget.ledger.reservedCents / 100).toFixed(2)} USD</p>
                 <p>Pending reservations: {researchBudget.ledger.pendingReservations}
-                  · Available in application ledger: {researchBudget.ledger.availableCents === null ?
+                  · Estimated remaining application budget: {researchBudget.ledger.availableCents === null ?
                     "Not configured" : (researchBudget.ledger.availableCents / 100).toFixed(2) + " USD"}</p>
                 {researchBudget.reconciliation?.needsReview && <p role="status">
                   Manual reconciliation required: {researchBudget.reconciliation.staleReservations}
