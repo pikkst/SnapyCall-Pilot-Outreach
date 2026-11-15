@@ -87,3 +87,26 @@ Current deployment has `AI_WEB_RESEARCH_ENABLED=false`; keep it OFF.
 Next focus: stronger independent identity/organization evidence and
 cross-provider relevance ranking, along with a hard price-reviewed
 search-tool budget and controlled real-provider staging testing.
+
+## Increment 4 — security hardening and deterministic review triage
+
+- The public IPv4 egress check rejects the **entire** 192.0.0.0/24
+  special-use range, plus 192.88.99.0/24. The pinned IPv4 connection
+  mechanism remains unchanged. Regression tests include these previously
+  underfiltered addresses.
+- `orderCandidatesForEvidenceReview` returns a stable evidence-triage
+  order with three discrete, descriptive states:
+  `PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX`,
+  `PUBLIC_SOURCE_INSPECTED_NO_CONTACT`, and
+  `PROVIDER_CITATION_ONLY`. Source-inspection failures do not get
+  promoted. It does **not** compute an invented confidence number or
+  claim professional qualification, affiliation or personal-email
+  verification.
+- The partner preview shows review priority separately from the original
+  provider candidate ordering. No candidate is merged or promoted to
+  an outreach-eligible status through this ranking.
+
+Remaining release gates include a complete IANA special-purpose IP
+classification strategy, independent provider pricing authorization,
+controlled real-network source tests and organization/person identity
+verification. Keep both paid research and public-source inspection OFF.
