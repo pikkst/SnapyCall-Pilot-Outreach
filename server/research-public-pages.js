@@ -16,8 +16,10 @@ export function isPublicIpv4(address) {
       (a === 100 && b >= 64 && b <= 127) ||
       (a === 169 && b === 254) ||
       (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && (b === 168 || (b === 0 && c === 0) ||
-        (b === 0 && c === 2) || b === 88 && c === 99)) ||
+      // IANA special-purpose blocks are excluded even if some addresses
+    // are globally reachable; public page inspection must fail closed.
+    (a === 192 && (b === 168 || b === 0 ||
+        (b === 88 && c === 99))) ||
       (a === 198 && (b === 18 || b === 19 || b === 51 && c === 100)) ||
       (a === 203 && b === 0 && c === 113)) return false;
   return true;
