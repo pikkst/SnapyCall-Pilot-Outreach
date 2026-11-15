@@ -129,3 +129,33 @@ verify concurrent enqueue and process replay, then deploy with enqueue
 disabled. Enable operator jobs only after a scoped DB credential and
 deployment-specific access controls are approved. Keep provider research
 and automatic outreach disabled.
+
+## Operator-only email delivery (explicit gate, not enabled)
+
+The private CLI `npm run research:reconciliation-deliver` requires
+`RESEARCH_ALERT_DELIVERY_ENABLED=true`, a database connection, and a
+separately configured `RESEARCH_ALERT_FROM`, `RESEARCH_ALERT_TO`, and
+`RESEND_API_KEY`. It never shares or reuses a partner's BYOK key, never
+sends candidate outreach, and must not be run with production credentials
+from public CI. No scheduled trigger or public HTTP endpoint exists.
+
+The dispatcher uses a 120-second persistent lease and compare-and-swap
+updates. Immediately before contacting Resend it rechecks that the oldest
+stale reservation still corresponds to the incident. Each attempt uses
+exactly one fixed Resend Idempotency-Key per incident. A timeout or
+ambiguous provider response becomes FAILED and may retry the same key
+only inside the 23-hour local safety window; after the window or three
+attempts, it requires MANUAL_REVIEW. A confirmed Resend response means
+provider acceptance, not inbox delivery. No automatic refund occurs.
+
+The outbox records `PENDING`, `SENDING`, `FAILED`, `SKIPPED`,
+`MANUAL_REVIEW` and `SENT` states. Sending stays disabled by default.
+The migration remains unapplied outside disposable CI until reviewed,
+merged and deployed with the two explicit opt-in flags OFF.
+
+**Known boundary:** the final stale check and external network call
+cannot be a single atomic transaction. If the reservation resolves
+immediately after the check, a warning can still be accepted. No
+financial mutation results from that warning. A later scheduler needs
+runbook/recipient owner, provider reconciliation, notification
+observability and negative-path smoke before activation.
