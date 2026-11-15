@@ -46,6 +46,8 @@ function pinnedHttps(url, address, timeoutMs = TIMEOUT_MS) {
     let bytes = 0;
     const req = httpsRequest(url, {
       method: "GET", timeout: timeoutMs,
+      // A wall-clock deadline also bounds slow-trickle responses.
+      signal: AbortSignal.timeout(timeoutMs),
       agent: false, maxRedirects: 0,
       headers: { "user-agent": USER_AGENT, accept: "text/html,text/plain;q=0.9,*/*;q=0.1",
         "accept-encoding": "identity", connection: "close" },
