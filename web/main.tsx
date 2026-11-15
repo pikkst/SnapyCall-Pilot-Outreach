@@ -42,6 +42,10 @@ type ResearchPreview = {
     reviewRequired: true }>;
   identityCollisions?: Array<{ name: string; sourceUrls: string[];
     status: "IDENTITY_REVIEW_REQUIRED"; automaticMergeAllowed: false }>;
+  evidenceReviewOrder?: Array<{ name: string; sourceUrl: string;
+    evidenceLevel: "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX" |
+      "PUBLIC_SOURCE_INSPECTED_NO_CONTACT" | "PROVIDER_CITATION_ONLY";
+    manualReviewRequired: true; individualEmailVerified: false }>;
 };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
 type ResearchLimits = { dailyLimit: number; maxCandidates: number; maxConcurrent: number };
@@ -930,6 +934,19 @@ function App() {
                             collision.sourceUrls.length} cited pages.
                           These records have not been automatically merged.
                         </li>)}</ul>
+                    </> : null}
+                    {researchResult.evidenceReviewOrder?.length ? <>
+                      <h4>Evidence review priority (not an expertise score)</h4>
+                      <ol>{researchResult.evidenceReviewOrder.map(item =>
+                        <li key={item.sourceUrl + item.name}>
+                          <strong>{item.name}</strong> — {
+                            item.evidenceLevel === "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX"
+                              ? "Public business inbox found, person not verified"
+                              : item.evidenceLevel === "PUBLIC_SOURCE_INSPECTED_NO_CONTACT"
+                              ? "Public source inspected, no confirmed contact"
+                              : "Provider citation only"
+                          }
+                        </li>)}</ol>
                     </> : null}
                     <ul>{researchResult.candidates.map(item =>
                       <li key={item.sourceUrl + item.name}>
