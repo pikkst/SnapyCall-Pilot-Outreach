@@ -35,6 +35,14 @@ type ResearchPreview = {
 };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
 type ResearchLimits = { dailyLimit: number; maxCandidates: number; maxConcurrent: number };
+type ResearchReconciliationOverview = {
+  checkedAt: string; staleAfterMinutes: number; pendingReservations: number;
+  pendingCents: number; staleReservations: number; staleCents: number;
+  oldestStaleAt: string | null; needsReview: boolean;
+  currency: "USD"; billingSource: "application-estimate";
+  action: "manual-review-only";
+};
+
 type ResearchBudget = { monthlyLimitCents: number | null; currency: "USD";
   enforcedForPaidSearch: boolean; ledger?: {
     monthUtc: string; reservedCents: number; settledCents: number;
@@ -95,6 +103,9 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [operatorResearch, setOperatorResearch] = useState<ResearchReconciliationOverview | null>(null);
+  const [operatorResearchStatus, setOperatorResearchStatus] =
+    useState<"idle" | "loading" | "ready" | "error">("idle");
   const [partnerTab, setPartnerTab] = useState<"candidates" | "discovery" | "drafts" | "settings">("candidates");
   const [partnerSession, setPartnerSession] = useState<PartnerSession | null>(null);
   const [googleConnections, setGoogleConnections] = useState<GoogleConnection[]>([]);
@@ -175,6 +186,18 @@ function App() {
     name: "", email: "", category: "AI_AUTOMATION", region: "US", sourceUrl: "",
     onlineEnglish: false, legalBasis: "", contactReviewed: false,
   });
+
+  async function loadResearchReconciliation() {
+    setOperatorResearchStatus("loading");
+    try {
+      const overview = await api<ResearchReconciliationOverview>("/admin/research-reconciliation");
+      setOperatorResearch(overview);
+      setOperatorResearchStatus("ready");
+    } catch {
+      setOperatorResearch(null);
+      setOperatorResearchStatus("error");
+    }
+  }
 
   async function load() {
     const [c, d, s, workspaces, invitations] = await Promise.all([
@@ -1343,6 +1366,30 @@ function App() {
       </section>}
       {tab === "drafts" && <section className="panel"><h2>Saved AI drafts</h2><p className="muted">These are review-only drafts. The system cannot send email.</p>{drafts.map(d => <article className="draft" key={d.id}><div className="draft-top"><strong>{d.candidate.name}</strong><small>{d.provider} / {d.model}</small></div><h3>{d.subject}</h3><pre>{d.body}</pre><button className="secondary" onClick={() => navigator.clipboard.writeText(d.subject + "\n\n" + d.body)}>Copy draft</button></article>)}{!drafts.length && <p className="empty">No generated drafts yet.</p>}</section>}
       {tab === "settings" && <section className="panel setting-panel">
+        <section aria-label="Research reconciliation diagnostics" className="review-panel">
+          <h2>Research charge diagnostics</h2>
+          <p className="muted">Read-only application ledger across all partner workspaces.
+            No identifiers, API keys or external provider invoice data are shown.
+            Paid AI web research remains disabled.</p>
+          <button type="button" className="secondary"
+            disabled={operatorResearchStatus === "loading"}
+            onClick={() => void loadResearchReconciliation()}>
+            {operatorResearchStatus === "loading" ? "Checking…" : "Check pending charges"}
+          </button>
+          {operatorResearchStatus === "error" && <p role="alert">
+            Unable to load charge diagnostics. No financial records were changed.</p>}
+          {operatorResearchStatus === "ready" && operatorResearch && <>
+            <p role="status">{operatorResearch.needsReview ? "Manual review required" :
+              "No aged reservations detected"} · {operatorResearch.staleReservations}
+              {" "}aged claim(s), {operatorResearch.pendingReservations} total pending</p>
+            <p>Estimated outstanding: {(operatorResearch.pendingCents / 100).toFixed(2)}
+              {" "}USD · Aged: {(operatorResearch.staleCents / 100).toFixed(2)} USD</p>
+            {operatorResearch.oldestStaleAt && <p>
+              Oldest aged claim: {operatorResearch.oldestStaleAt}</p>}
+            <p className="muted">Application estimates only · last checked:
+              {" "}{operatorResearch.checkedAt}. No automatic refunds or provider calls.</p>
+          </>}
+        </section>
         <h2>Bring your own AI</h2>
         <p className="muted">Choose your provider, enter the model ID and optionally save your API key. Calls are made server-side; the key is encrypted at rest and never returned to the browser.</p>
         <form onSubmit={saveSettings}>
