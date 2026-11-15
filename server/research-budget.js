@@ -176,3 +176,43 @@ export async function readOwnerBudgetSnapshot(db, ownerId, now = new Date()) {
     },
   };
 }
+
+
+// Aggregate operational diagnostics across all owners. Never return owner IDs,
+// workspace IDs, API credentials, provider metadata or reservation identifiers.
+// Only the already privileged admin route may call this function.
+export async function readResearchReconciliationOverview(db, now = new Date()) {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
+    throw new TypeError("Invalid diagnostics clock");
+  }
+  const cutoff = new Date(now.getTime() - 5 * 60_000);
+  const [pending, stale] = await Promise.all([
+    db.researchSpendReservation.aggregate({
+      where: { status: "RESERVED" },
+      _count: { _all: true }, _sum: { reservedCents: true },
+    }),
+    db.researchSpendReservation.aggregate({
+      where: { status: "RESERVED", createdAt: { lte: cutoff } },
+      _count: { _all: true }, _sum: { reservedCents: true },
+      _min: { createdAt: true },
+    }),
+  ]);
+  const pendingCount = pending._count._all;
+  const staleCount = stale._count._all;
+  const pendingCents = pending._sum.reservedCents ?? 0;
+  const staleCents = stale._sum.reservedCents ?? 0;
+  if ([pendingCount, staleCount, pendingCents, staleCents].some(
+    value => !Number.isSafeInteger(value) || value < 0) ||
+    staleCount > pendingCount || staleCents > pendingCents) {
+    throw new TypeError("Invalid aggregate research ledger");
+  }
+  return {
+    checkedAt: now.toISOString(), staleAfterMinutes: 5,
+    pendingReservations: pendingCount, pendingCents,
+    staleReservations: staleCount, staleCents,
+    oldestStaleAt: stale._min.createdAt?.toISOString() ?? null,
+    needsReview: staleCount > 0,
+    currency: "USD", billingSource: "application-estimate",
+    action: "manual-review-only",
+  };
+}
