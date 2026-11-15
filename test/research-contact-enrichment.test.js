@@ -25,6 +25,13 @@ test("bounded source inspection preserves separate unverified business-inbox evi
   assert.equal(output.pagesInspected, 2);
   assert.equal(output.publicBusinessContacts.length, 2);
   assert.equal(output.contactReviewRequired, true);
+  assert.deepEqual(output.evidenceReviewOrder.map(x => x.name),
+    ["Expert 0", "Expert 1", "Expert 2"]);
+  assert.deepEqual(output.evidenceReviewOrder.map(x => x.evidenceLevel), [
+    "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX",
+    "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX",
+    "PROVIDER_CITATION_ONLY",
+  ]);
   assert.deepEqual(output.publicBusinessContacts.map(c => c.identityVerified), [false, false]);
   assert.deepEqual(output.publicBusinessContacts.map(c => c.contactPermission), [false, false]);
   assert.deepEqual(output.warnings, []);
@@ -54,6 +61,8 @@ test("source inspection failure is sanitized; redirect mismatch never becomes co
     },
   });
   assert.deepEqual(output.publicBusinessContacts, []);
+  assert.ok(output.evidenceReviewOrder.every(x =>
+    x.evidenceLevel === "PROVIDER_CITATION_ONLY"));
   assert.equal(output.warnings.length, 1);
   assert.doesNotMatch(JSON.stringify(output), /Authorization secret/);
   await assert.rejects(() => inspectResearchPreview(preview, { maxPages: 4 }), TypeError);
