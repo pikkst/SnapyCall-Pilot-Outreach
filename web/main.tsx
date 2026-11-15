@@ -532,6 +532,7 @@ function App() {
     await execute(async () => {
       await api("/session", { method: "DELETE" });
       setLoggedIn(false); setCandidates([]); setDrafts([]); setApiKey("");
+      setOperatorResearch(null); setOperatorResearchStatus("idle");
     });
   }
 
@@ -543,6 +544,7 @@ function App() {
       setCandidates([]);
       setDrafts([]);
       setApiKey("");
+      setOperatorResearch(null); setOperatorResearchStatus("idle");
       setPassword("");
       window.location.assign("/api/auth/google/start");
     });
