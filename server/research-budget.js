@@ -118,3 +118,101 @@ export async function settleOwnerSpend(tx, {
   });
   return { id: reservationId, status: "SETTLED", chargedCents };
 }
+
+
+// Read-only, owner-scoped application ledger snapshot. This reports internal
+// estimates/reservations, NOT provider invoices or guaranteed external caps.
+export async function readOwnerBudgetSnapshot(db, ownerId, now = new Date()) {
+  if (typeof ownerId !== "string" || !/^c[a-z0-9]{10,40}$/.test(ownerId)) {
+    throw new TypeError("Authenticated owner required");
+  }
+  const monthUtc = utcBudgetMonth(now);
+  // Count unresolved claims across all UTC months: a previous month's
+  // possibly billed reservation must not disappear from diagnostics.
+  const staleBefore = new Date(now.getTime() - 5 * 60_000);
+  const [budget, month, pendingReservations, staleReservations, oldestPending] = await Promise.all([
+    db.researchOwnerBudget.findUnique({
+      where: { ownerId }, select: { monthlyLimitCents: true },
+    }),
+    db.researchSpendMonth.findUnique({
+      where: { ownerId_monthUtc: { ownerId, monthUtc } },
+      select: { reservedCents: true, settledCents: true },
+    }),
+    db.researchSpendReservation.count({
+      where: { ownerId, monthUtc, status: "RESERVED" },
+    }),
+    db.researchSpendReservation.count({
+      where: { ownerId, status: "RESERVED", createdAt: { lte: staleBefore } },
+    }),
+    db.researchSpendReservation.findFirst({
+      where: { ownerId, status: "RESERVED" },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
+  ]);
+  const reservedCents = month?.reservedCents ?? 0;
+  const settledCents = month?.settledCents ?? 0;
+  const monthlyLimitCents = budget?.monthlyLimitCents ?? null;
+  if (![reservedCents, settledCents, pendingReservations, staleReservations].every(
+    value => Number.isSafeInteger(value) && value >= 0)) {
+    throw new TypeError("Invalid persisted spend ledger totals");
+  }
+  return {
+    monthlyLimitCents, currency: "USD", enforcedForPaidSearch: false,
+    ledger: {
+      monthUtc: monthUtc.toISOString().slice(0, 10),
+      reservedCents, settledCents, pendingReservations,
+      availableCents: monthlyLimitCents === null ? null :
+        Math.max(0, monthlyLimitCents - reservedCents - settledCents),
+      // Values represent app-side budget accounting, never provider invoices.
+      billingSource: "application-estimate",
+    },
+    reconciliation: {
+      // Alerts must be read-only. Never auto-refund uncertain provider costs.
+      staleAfterMinutes: 5,
+      staleReservations,
+      oldestPendingAt: oldestPending?.createdAt?.toISOString() ?? null,
+      needsReview: staleReservations > 0,
+    },
+  };
+}
+
+
+// Aggregate operational diagnostics across all owners. Never return owner IDs,
+// workspace IDs, API credentials, provider metadata or reservation identifiers.
+// Only the already privileged admin route may call this function.
+export async function readResearchReconciliationOverview(db, now = new Date()) {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
+    throw new TypeError("Invalid diagnostics clock");
+  }
+  const cutoff = new Date(now.getTime() - 5 * 60_000);
+  const [pending, stale] = await Promise.all([
+    db.researchSpendReservation.aggregate({
+      where: { status: "RESERVED" },
+      _count: { _all: true }, _sum: { reservedCents: true },
+    }),
+    db.researchSpendReservation.aggregate({
+      where: { status: "RESERVED", createdAt: { lte: cutoff } },
+      _count: { _all: true }, _sum: { reservedCents: true },
+      _min: { createdAt: true },
+    }),
+  ]);
+  const pendingCount = pending._count._all;
+  const staleCount = stale._count._all;
+  const pendingCents = pending._sum.reservedCents ?? 0;
+  const staleCents = stale._sum.reservedCents ?? 0;
+  if ([pendingCount, staleCount, pendingCents, staleCents].some(
+    value => !Number.isSafeInteger(value) || value < 0) ||
+    staleCount > pendingCount || staleCents > pendingCents) {
+    throw new TypeError("Invalid aggregate research ledger");
+  }
+  return {
+    checkedAt: now.toISOString(), staleAfterMinutes: 5,
+    pendingReservations: pendingCount, pendingCents,
+    staleReservations: staleCount, staleCents,
+    oldestStaleAt: stale._min.createdAt?.toISOString() ?? null,
+    needsReview: staleCount > 0,
+    currency: "USD", billingSource: "application-estimate",
+    action: "manual-review-only",
+  };
+}

@@ -128,6 +128,20 @@ try {
   });
   assert.equal(unauthorizedImport.status, 403);
 
+  assert.equal((await call("/admin/research-reconciliation")).status, 401,
+    "Global financial diagnostics require administrator authentication");
+  const emptyReconciliation = await call("/admin/research-reconciliation", {
+    headers: { cookie },
+  });
+  assert.equal(emptyReconciliation.status, 200);
+  assert.equal(emptyReconciliation.headers.get("cache-control"), "no-store");
+  const emptyOverview = await emptyReconciliation.json();
+  assert.equal(emptyOverview.pendingReservations, 0);
+  assert.equal(emptyOverview.staleReservations, 0);
+  assert.equal(emptyOverview.needsReview, false);
+  assert.equal(emptyOverview.billingSource, "application-estimate");
+  assert.equal(emptyOverview.action, "manual-review-only");
+  assert.equal(JSON.stringify(emptyOverview).includes("ownerId"), false);
   const protectedHeaders = { origin, cookie, "content-type": "application/json" };
   // A source article never qualifies a discovered byline as an expert.
   // Exercise real Prisma persistence, access controls, provenance and audit.
@@ -303,6 +317,9 @@ try {
     const firstRetry = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
       body: JSON.stringify({ partnerId: firstWorkspace, email: "partner@example.org" }) });
     assert.equal(firstRetry.status, 200);
+    assert.equal((await call("/admin/research-reconciliation", {
+      headers: { cookie: partnerCookie },
+    })).status, 401, "Partner session cannot access global monetary diagnostics");
     assert.equal((await call("/candidates", { headers: { cookie: partnerCookie } })).status, 403,
       "Partner must select a workspace before reading candidate data");
     // Default-disabled research can never incur provider charges in staging.
@@ -777,7 +794,14 @@ try {
     // and Origin. Its ledger scopes spending globally across all workspaces.
     assert.deepEqual(await (await call("/research-budget", {
       headers: { cookie: partnerCookie },
-    })).json(), { monthlyLimitCents: null, currency: "USD", enforcedForPaidSearch: false });
+    })).json(), {
+      monthlyLimitCents: null, currency: "USD", enforcedForPaidSearch: false,
+      ledger: { monthUtc: new Date().toISOString().slice(0, 7) + "-01",
+        reservedCents: 0, settledCents: 0, pendingReservations: 0,
+        availableCents: null, billingSource: "application-estimate" },
+      reconciliation: { staleAfterMinutes: 5, staleReservations: 0,
+        oldestPendingAt: null, needsReview: false },
+    });
     const budgetBody = JSON.stringify({ monthlyLimitCents: 500 });
     assert.equal((await call("/research-budget", { method: "PUT",
       headers: { cookie: partnerCookie, "content-type": "application/json" },
@@ -795,6 +819,11 @@ try {
     assert.equal(budgetSaved.status, 200);
     assert.deepEqual(await budgetSaved.json(), {
       monthlyLimitCents: 500, currency: "USD", enforcedForPaidSearch: false,
+      ledger: { monthUtc: new Date().toISOString().slice(0, 7) + "-01",
+        reservedCents: 0, settledCents: 0, pendingReservations: 0,
+        availableCents: 500, billingSource: "application-estimate" },
+      reconciliation: { staleAfterMinutes: 5, staleReservations: 0,
+        oldestPendingAt: null, needsReview: false },
     });
     const { reserveOwnerSpend, settleOwnerSpend, ResearchBudgetExceeded } =
       await import("../server/research-budget.js");
@@ -859,6 +888,61 @@ try {
     assert.equal(afterUnknown.settledCents, 450,
       "Unknown provider usage must settle conservatively at full reservation");
     assert.equal(afterUnknown.reservedCents, 0);
+    // Snapshot must expose owner-scoped totals, not cross-user data or a
+    // fabricated provider invoice. Historic fixture month differs from now.
+    const { readOwnerBudgetSnapshot } = await import("../server/research-budget.js");
+    const snapshot = await readOwnerBudgetSnapshot(partnerDb, member.id, budgetClock);
+    assert.deepEqual(snapshot.ledger, {
+      monthUtc: "2026-11-01", reservedCents: 0, settledCents: 450,
+      pendingReservations: 0, availableCents: 50,
+      billingSource: "application-estimate",
+    });
+    const otherOwner = await readOwnerBudgetSnapshot(partnerDb,
+      "c" + "f".repeat(24), budgetClock);
+    assert.equal(otherOwner.ledger.settledCents, 0);
+    assert.equal(otherOwner.monthlyLimitCents, null);
+    const staleId = "07dcc5e1-9e62-4f8a-83a7-3ea8363b9271";
+    await partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: firstWorkspace,
+      reservationId: staleId, worstCaseCents: 25, now: budgetClock,
+    }));
+    const agedAt = new Date(Date.now() - 15 * 60_000);
+    await partnerDb.researchSpendReservation.update({
+      where: { id: staleId }, data: { createdAt: agedAt },
+    });
+    const aged = await readOwnerBudgetSnapshot(partnerDb, member.id);
+    assert.equal(aged.reconciliation.staleReservations, 1);
+    assert.equal(aged.reconciliation.needsReview, true);
+    assert.equal(aged.reconciliation.oldestPendingAt, agedAt.toISOString());
+    const adminOverview = await call("/admin/research-reconciliation", {
+      headers: { cookie },
+    });
+    assert.equal(adminOverview.status, 200);
+    const adminLedger = await adminOverview.json();
+    assert.equal(adminLedger.staleReservations, 1);
+    assert.equal(adminLedger.staleCents, 25);
+    assert.equal(adminLedger.needsReview, true);
+    assert.equal(adminLedger.oldestStaleAt, agedAt.toISOString());
+    assert.equal(JSON.stringify(adminLedger).includes(member.id), false,
+      "Global diagnostics may not leak partner identity");
+    assert.equal(JSON.stringify(adminLedger).includes(firstWorkspace), false,
+      "Global diagnostics may not leak workspace identifiers");
+
+    assert.equal((await readOwnerBudgetSnapshot(partnerDb,
+      "c" + "f".repeat(24))).reconciliation.staleReservations, 0,
+    "Stale reservation diagnostics must never cross owner scope");
+    const previousMonth = await readOwnerBudgetSnapshot(partnerDb, member.id,
+      new Date("2027-01-02T00:00:00Z"));
+    assert.equal(previousMonth.ledger.pendingReservations, 0);
+    assert.equal(previousMonth.reconciliation.staleReservations, 1,
+      "Old unsettled reservations must remain visible across month rollover");
+    // Resolve the synthetic stale reservation; only explicit settlement changes money.
+    await partnerDb.$transaction(tx => settleOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: firstWorkspace,
+      reservationId: staleId, actualCents: null,
+    }));
+    assert.equal((await readOwnerBudgetSnapshot(partnerDb, member.id))
+      .reconciliation.staleReservations, 0);
     await partnerDb.researchOwnerBudget.update({ where: { ownerId: member.id },
       data: { monthlyLimitCents: 100 } });
     await assert.rejects(() => partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
@@ -866,6 +950,69 @@ try {
       reservationId: "04dcc5e1-9e62-4f8a-83a7-3ea8363b9271",
       worstCaseCents: 1, now: budgetClock,
     })), ResearchBudgetExceeded, "Lowering budget cannot erase spent amount");
+    // Integration contract: the same transaction must claim an owner-wide
+    // currency reservation and daily quota; a budget rejection must not leave
+    // a lease, quota count or spend record behind. No provider call is made.
+    const futureClock = new Date("2026-12-02T10:00:00Z");
+    const futureDay = new Date("2026-12-02T00:00:00Z");
+    const rejectedReservation = "05dcc5e1-9e62-4f8a-83a7-3ea8363b9271";
+    const leasesBefore = await partnerDb.researchRunLease.count();
+    await assert.rejects(() => partnerDb.$transaction(async tx => {
+      const lease = await reserveResearchLease(tx, {
+        workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
+      });
+      assert.ok(lease);
+      await reserveOwnerSpend(tx, {
+        ownerId: member.id, workspaceId: firstWorkspace,
+        reservationId: rejectedReservation, worstCaseCents: 101,
+        now: futureClock,
+      });
+      await reserveResearchAttempt(tx, {
+        workspaceId: firstWorkspace, userId: member.id, now: futureClock,
+      });
+    }), ResearchBudgetExceeded, "No owner funds means zero research claims");
+    assert.equal(await partnerDb.researchRunLease.count(), leasesBefore,
+      "Currency denial rolls back the concurrency lease");
+    assert.equal(await partnerDb.researchSpendReservation.count({
+      where: { id: rejectedReservation },
+    }), 0, "Rejected request must not persist a spend reservation");
+    assert.equal(await partnerDb.researchDailyQuota.count({
+      where: { dayUtc: futureDay, scopeKey: {
+        in: ["workspace:" + firstWorkspace,
+          "workspace-user:" + firstWorkspace + ":" + member.id],
+      } },
+    }), 0, "Currency denial must not consume either daily quota");
+
+    // A bounded reservation is stored before the simulated chargeable call;
+    // with unknown provider billing it settles conservatively at the maximum.
+    const allowedReservation = "06dcc5e1-9e62-4f8a-83a7-3ea8363b9271";
+    const allocated = await partnerDb.$transaction(async tx => {
+      const leaseId = await reserveResearchLease(tx, {
+        workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
+      });
+      await reserveOwnerSpend(tx, {
+        ownerId: member.id, workspaceId: firstWorkspace,
+        reservationId: allowedReservation, worstCaseCents: 80,
+        now: futureClock,
+      });
+      const count = await reserveResearchAttempt(tx, {
+        workspaceId: firstWorkspace, userId: member.id, now: futureClock,
+      });
+      return { leaseId, count };
+    });
+    assert.equal(allocated.count.remaining.userWorkspace, 1);
+    assert.equal((await partnerDb.researchSpendReservation.findUnique({
+      where: { id: allowedReservation },
+    })).status, "RESERVED");
+    await partnerDb.$transaction(tx => settleOwnerSpend(tx, {
+      ownerId: member.id, workspaceId: firstWorkspace,
+      reservationId: allowedReservation, actualCents: null,
+    }));
+    assert.equal((await partnerDb.researchSpendReservation.findUnique({
+      where: { id: allowedReservation },
+    })).chargedCents, 80);
+    assert.equal((await releaseResearchLease(partnerDb, allocated.leaseId,
+      firstWorkspace, member.id)).count, 1);
     const ownMetadata = await call("/ai-settings", { headers: { cookie: partnerCookie } });
     const metadataText = await ownMetadata.text();
     assert.equal(JSON.parse(metadataText).keyConfigured, true);

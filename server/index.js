@@ -4,6 +4,7 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
@@ -21,7 +22,11 @@ import {
   validateResearchPreferences, RESEARCH_DAILY_USER_WORKSPACE_LIMIT,
   reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded,
 } from "./research-quota.js";
-import { validateMonthlyBudgetCents } from "./research-budget.js";
+import { validateMonthlyBudgetCents, reserveOwnerSpend, settleOwnerSpend,
+  ResearchBudgetExceeded, readOwnerBudgetSnapshot,
+  readResearchReconciliationOverview } from "./research-budget.js";
+import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
+  calculateVerifiedSpendCents } from "./research-price-policy.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
@@ -584,17 +589,18 @@ const researchLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders:
 // Personal BYOK budget is denominated in USD, the providers' billing
 // currency. It is NOT yet wired to provider calls: missing price bounds must
 // keep AI web research disabled instead of silently promising enforcement.
+// Admin-only global anomaly counts. Never expose owner/workspace identifiers,
+// individual ledger records or mutation paths to the browser.
+app.get("/api/admin/research-reconciliation", authenticated, safe(async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  return res.json(await readResearchReconciliationOverview(prisma));
+}));
 app.get("/api/research-budget", aiOwnerAuthenticated, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
   if (!identity || identity.id !== req.aiOwnerId) {
     return res.status(403).json({ error: "Google partner session required" });
   }
-  const budget = await prisma.researchOwnerBudget.findUnique({
-    where: { ownerId: identity.id },
-    select: { monthlyLimitCents: true },
-  });
-  return res.json({ monthlyLimitCents: budget?.monthlyLimitCents ?? null,
-    currency: "USD", enforcedForPaidSearch: false });
+  return res.json(await readOwnerBudgetSnapshot(prisma, identity.id));
 }));
 app.put("/api/research-budget", aiOwnerAuthenticated, requireOrigin, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
@@ -621,7 +627,7 @@ app.put("/api/research-budget", aiOwnerAuthenticated, requireOrigin, safe(async 
       entityId: identity.id, metadata: { currency: "USD", ...input },
     } });
   });
-  return res.json({ ...input, currency: "USD", enforcedForPaidSearch: false });
+  return res.json(await readOwnerBudgetSnapshot(prisma, identity.id));
 }));
 app.get("/api/research-limits", aiOwnerAuthenticated, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
@@ -682,6 +688,22 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
     try { assertWebResearchModel(setting.provider, setting.model); }
     catch { return res.status(409).json({ error: "Selected model does not support configured web search" }); }
   }
+  // A feature flag, daily quota and saved monthly preference must never
+  // authorize provider charges without an approved cost ceiling. This
+  // preflight intentionally rejects every model until the owner-wide
+  // reserve/settle integration and verified prices land in #44.
+  let priceEnvelope;
+  try {
+    priceEnvelope = requireResearchPriceEnvelope({ provider: setting.provider, model: setting.model });
+  } catch (error) {
+    if (error instanceof ResearchPricingUnavailable) {
+      return res.status(503).json({
+        code: "RESEARCH_PRICING_UNAVAILABLE",
+        error: "Paid research cannot run until pricing and monetary controls are approved",
+      });
+    }
+    throw error;
+  }
   let quota;
   try {
     quota = await prisma.$transaction(async tx => {
@@ -700,11 +722,26 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
         workspaceId: req.candidateScope, userId: identity.id,
         maxConcurrent: preferences.maxConcurrent,
       });
+      // Reserve the owner-wide currency budget in the same transaction as
+      // the workspace lease and daily quota. A failed monetary reservation
+      // rolls back the lease and never consumes a daily attempt.
+      const reservationId = randomUUID();
+      await reserveOwnerSpend(tx, {
+        ownerId: identity.id, workspaceId: req.candidateScope, reservationId,
+        worstCaseCents: priceEnvelope.worstCaseCents,
+      });
       const quota = await reserveResearchAttempt(tx, {
         workspaceId: req.candidateScope, userId: identity.id,
         dailyLimit: preferences.dailyLimit,
       });
-      return { ...quota, preferences, leaseId };
+      await tx.auditEvent.create({ data: {
+        actorId: identity.id, action: "ai.research-spend.reserved",
+        entityId: reservationId,
+        metadata: { workspaceId: req.candidateScope, provider: setting.provider,
+          model: setting.model, priceVersion: priceEnvelope.priceVersion,
+          worstCaseCents: priceEnvelope.worstCaseCents, currency: "USD" },
+      } });
+      return { ...quota, preferences, leaseId, reservationId };
     });
   } catch (error) {
     if (error instanceof ResearchQuotaExceeded) {
@@ -715,6 +752,10 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
       return res.status(429).json({ error: "Active research concurrency limit reached",
         code: "RESEARCH_CONCURRENCY_EXCEEDED" });
     }
+    if (error instanceof ResearchBudgetExceeded) {
+      return res.status(429).json({ error: "Monthly research budget unavailable or exhausted",
+        code: "RESEARCH_BUDGET_EXCEEDED" });
+    }
     throw error;
   }
   if (!quota) return res.status(403).json({ error: "Workspace membership revoked" });
@@ -724,21 +765,52 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
   });
   // Membership can be revoked after the quota transaction commits. Recheck
   // immediately before making a chargeable external provider request.
+  let settled = false;
+  const settle = async actualCents => {
+    await prisma.$transaction(async tx => {
+      await settleOwnerSpend(tx, {
+        ownerId: identity.id, workspaceId: req.candidateScope,
+        reservationId: quota.reservationId, actualCents,
+      });
+      await tx.auditEvent.create({ data: {
+        actorId: identity.id, action: "ai.research-spend.settled",
+        entityId: quota.reservationId,
+        metadata: { workspaceId: req.candidateScope, currency: "USD",
+          chargedCents: actualCents ?? priceEnvelope.worstCaseCents,
+          conservative: actualCents === null },
+      } });
+    });
+    settled = true;
+  };
   try {
     if (!await requireWorkspaceMembership(prisma, {
       workspaceId: req.candidateScope, userId: identity.id,
-    })) return res.status(403).json({ error: "Workspace membership revoked" });
-    // An attempt is counted conservatively even if the provider fails.
-    // Monetary spend enforcement remains a separate, required rollout gate.
+    })) {
+      // No chargeable call has occurred: release the money, not the attempt.
+      await settle(0);
+      return res.status(403).json({ error: "Workspace membership revoked" });
+    }
     const apiKey = decryptKey(setting.encryptedApiKey, env.AI_ENCRYPTION_KEY);
     const output = await researchCandidates({
       ...input, provider: setting.provider, model: setting.model, apiKey,
     });
+    // Only server-side provider usage with a reviewed exact-model tariff can
+    // reduce the reservation. Missing or unsupported usage keeps the entire
+    // worst-case amount charged; browser numbers are never accepted.
+    const verifiedCents = calculateVerifiedSpendCents(priceEnvelope, output.usage);
+    await settle(verifiedCents);
     return res.json({ ...output, workspaceId: req.candidateScope,
       quota: { dayUtc: quota.dayUtc, remaining: quota.remaining } });
   } finally {
-    // A failed provider call or revoked membership must also release the slot.
-    // A crashed process eventually frees it via database-time expiry.
+    if (!settled) {
+      try {
+        // The provider may have billed before a timeout or network failure.
+        // If DB settlement fails, preserve the reservation for reconciliation.
+        await settle(null);
+      } catch {
+        console.error("[research] Monetary settlement failed; funds remain reserved");
+      }
+    }
     try {
       await releaseResearchLease(prisma, quota.leaseId, req.candidateScope, identity.id);
     } catch {
