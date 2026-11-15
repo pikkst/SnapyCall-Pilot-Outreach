@@ -67,3 +67,27 @@ test("source inspection failure is sanitized; redirect mismatch never becomes co
   assert.doesNotMatch(JSON.stringify(output), /Authorization secret/);
   await assert.rejects(() => inspectResearchPreview(preview, { maxPages: 4 }), TypeError);
 });
+
+
+test("review preview corroborates full name from inspected cited page without claiming affiliation", async () => {
+  const source = "https://coach.example.org/team";
+  const result = await inspectResearchPreview({
+    candidates: [{ name: "Morgan Field", sourceUrl: source }],
+    sources: [{ url: source, title: "Team profile" }],
+  }, {
+    retrieve: async url => ({
+      url, text: "Meet Morgan Field, consultant. Business inquiries: info@coach.example.org",
+    }),
+  });
+  assert.deepEqual(result.profileObservations, [{
+    name: "Morgan Field", sourceUrl: source,
+    observation: "EXACT_NAME_ON_INSPECTED_SOURCE",
+    profileIdentityVerified: false,
+    organizationAffiliationVerified: false,
+    contactOwnershipVerified: false,
+    reviewRequired: true,
+  }]);
+  assert.equal(result.publicBusinessContacts.length, 1);
+  assert.equal(result.contactAssociations[0].identityVerified, false);
+  assert.equal(result.contactAssociations[0].organizationVerified, false);
+});
