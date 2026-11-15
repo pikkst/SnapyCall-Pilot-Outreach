@@ -946,6 +946,27 @@ try {
     assert.equal(previousMonth.ledger.pendingReservations, 0);
     assert.equal(previousMonth.reconciliation.staleReservations, 1,
       "Old unsettled reservations must remain visible across month rollover");
+    // Concurrent operator checks must create exactly one durable alert.
+    // A repeated check must never reset or duplicate an existing incident.
+    const { enqueueResearchReconciliationAlert } =
+      await import("../server/research-reconciliation-outbox.js");
+    const concurrentAlerts = await Promise.all([
+      enqueueResearchReconciliationAlert(partnerDb),
+      enqueueResearchReconciliationAlert(partnerDb),
+    ]);
+    assert.equal(concurrentAlerts.filter(item => item.enqueued).length, 1,
+      "Concurrent stale checks must enqueue exactly once");
+    assert.equal(await partnerDb.researchReconciliationOutbox.count(), 1);
+    const savedAlert = await partnerDb.researchReconciliationOutbox.findFirst();
+    assert.equal(savedAlert.status, "PENDING");
+    assert.equal(savedAlert.staleCount, 1);
+    assert.equal(savedAlert.estimatedHeldCents, 25);
+    assert.equal(savedAlert.dedupeKey.length, 64);
+    assert.equal(savedAlert.dedupeKey.includes(staleId), false);
+    assert.deepEqual(await enqueueResearchReconciliationAlert(partnerDb), {
+      state: "requires_review", enqueued: false,
+    });
+    assert.equal(await partnerDb.researchReconciliationOutbox.count(), 1);
     // Resolve the synthetic stale reservation; only explicit settlement changes money.
     await partnerDb.$transaction(tx => settleOwnerSpend(tx, {
       ownerId: member.id, workspaceId: firstWorkspace,
@@ -953,6 +974,11 @@ try {
     }));
     assert.equal((await readOwnerBudgetSnapshot(partnerDb, member.id))
       .reconciliation.staleReservations, 0);
+    assert.deepEqual(await enqueueResearchReconciliationAlert(partnerDb), {
+      state: "clear", enqueued: false,
+    });
+    assert.equal(await partnerDb.researchReconciliationOutbox.count(), 1,
+      "Cleared reservations must not generate another notification");
     await partnerDb.researchOwnerBudget.update({ where: { ownerId: member.id },
       data: { monthlyLimitCents: 100 } });
     await assert.rejects(() => partnerDb.$transaction(tx => reserveOwnerSpend(tx, {
