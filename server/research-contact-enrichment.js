@@ -3,6 +3,7 @@
 import { retrieveCitedPublicPage } from "./research-public-pages.js";
 import { observedPublicBusinessContacts } from "./research-contact-evidence.js";
 import { publicCitationUrl } from "./research-evidence.js";
+import { associateBusinessContactsWithCandidates, findCandidateIdentityCollisions } from "./research-contact-attribution.js";
 
 export async function inspectResearchPreview(preview, {
   retrieve = retrieveCitedPublicPage, maxPages = 2,
@@ -41,6 +42,8 @@ export async function inspectResearchPreview(preview, {
   }
   return {
     publicBusinessContacts: contacts,
+    contactAssociations: associateBusinessContactsWithCandidates(preview.candidates, contacts),
+    identityCollisions: findCandidateIdentityCollisions(preview.candidates),
     pagesInspected: inspected,
     contactReviewRequired: true,
     warnings: [...new Set(warnings)],
