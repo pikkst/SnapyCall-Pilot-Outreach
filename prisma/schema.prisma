@@ -235,7 +235,13 @@ model ResearchReconciliationOutbox {
   staleCount Int
   estimatedHeldCents Int
   // No recipient, raw reservation ID, API key or email stored in the outbox.
+  // A leased send uses the same provider idempotency key on every retry.
+  // Never reset the attempt timestamp after an ambiguous provider timeout.
+  attemptAt DateTime?
+  leaseUntil DateTime?
+  attempts Int @default(0)
   sentAt DateTime?
   providerId String?
+  errorCode String?
   @@index([status, firstDetectedAt])
 }
