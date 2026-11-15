@@ -89,3 +89,43 @@ internal reserve/settle ledger remains distinct from provider billing.
 
 The partner UI now labels remaining funds as an *estimated application
 budget* rather than a guaranteed provider cap.
+
+## Durable outbox (no delivery)
+
+The `ResearchReconciliationOutbox` table records pending incidents across
+process restarts. No user IDs, workspace IDs, reservation IDs, API credentials,
+recipient addresses or contact data are stored in the outbox.
+
+For explicitly authorized operator jobs only, execute:
+
+```sh
+RESEARCH_ALERT_ENQUEUE_ENABLED=true npm run research:reconciliation-enqueue
+```
+
+Without the flag it returns `{"status":"disabled"}` and accesses no
+database. The command does **not** send any email, change financial records
+or schedule itself. Its output is aggregate operational metadata only.
+
+The enqueue function reads the oldest stale reservation and an aggregate
+snapshot in a serializable PostgreSQL transaction, derives a SHA-256
+incident key from that reservation's internal ID, and inserts with a
+unique conflict fence. Repeated or concurrent checks of the same unresolved
+incident do not create duplicate rows. Transient serialization conflicts
+have a bounded retry. Already-existing `PENDING`, `SENT` and
+`MANUAL_REVIEW` states are never reset by re-enqueueing.
+
+**Important:** an outbox row is a record of an earlier observation. The
+underlying reservation could be settled before a future dispatcher runs.
+Any dispatcher MUST re-check that the incident still needs review before
+sending. An actual email dispatcher will also need an explicit recipient,
+signed provider idempotency key, durable lease/attempt state, retry window,
+provider receipt, and a manual-review fallback for ambiguous sends.
+Do not activate sending or schedules based solely on this migration.
+
+## Required rollout
+
+Use clean-start and upgrade migrations against disposable PostgreSQL,
+verify concurrent enqueue and process replay, then deploy with enqueue
+disabled. Enable operator jobs only after a scoped DB credential and
+deployment-specific access controls are approved. Keep provider research
+and automatic outreach disabled.
