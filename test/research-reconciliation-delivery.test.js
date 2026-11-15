@@ -86,9 +86,12 @@ function fixtureDb(overrides = {}, reservationIsActive = true) {
       },
       async updateMany({ where, data }) {
         if (item.status !== where.status ||
-            item.attempts !== where.attempts && where.attempts !== undefined ||
-            item.leaseUntil?.getTime() !== where.leaseUntil?.getTime() ||
-            item.attemptAt?.getTime() !== where.attemptAt?.getTime()) return { count: 0 };
+            (where.attempts !== undefined && item.attempts !== where.attempts) ||
+            (where.leaseUntil !== undefined &&
+              item.leaseUntil?.getTime() !== (where.leaseUntil instanceof Date ?
+                where.leaseUntil.getTime() : where.leaseUntil?.lte?.getTime())) ||
+            (where.attemptAt !== undefined &&
+              item.attemptAt?.getTime() !== where.attemptAt?.getTime())) return { count: 0 };
         Object.assign(item, data);
         if (data.attempts && typeof data.attempts === "object") {
           item.attempts = where.attempts + data.attempts.increment;
