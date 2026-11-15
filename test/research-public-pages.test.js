@@ -1,0 +1,84 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  isPublicIpv4, resolvePublicAddress, robotsAllows,
+  retrieveCitedPublicPage,
+} from "../server/research-public-pages.js";
+
+const source = "https://consultants.example.org/experts/abc";
+
+test("DNS pinning rejects private, metadata, loopback and mixed answers", async () => {
+  for (const blocked of ["127.0.0.1", "10.0.0.1", "169.254.169.254",
+    "172.31.255.255", "192.168.1.2", "100.100.100.200",
+    "192.0.2.1", "198.18.1.1", "203.0.113.4", "224.0.0.1"]) {
+    assert.equal(isPublicIpv4(blocked), false, blocked);
+    await assert.rejects(() => resolvePublicAddress("example.org", async () =>
+      [{ address: "8.8.8.8", family: 4 }, { address: blocked, family: 4 }]),
+    /DNS_REJECTED/);
+  }
+  assert.equal(isPublicIpv4("8.8.8.8"), true);
+  assert.equal(await resolvePublicAddress("example.org", async () => [
+    { address: "2606:4700:4700::1111", family: 6 },
+    { address: "8.8.8.8", family: 4 },
+  ]), "8.8.8.8");
+  await assert.rejects(() => resolvePublicAddress("example.org", async () =>
+    [{ address: "2606:4700:4700::1111", family: 6 }]), /NO_VALID_IPV4/);
+});
+
+test("robots exclusions and unsupported wildcard syntax fail closed", () => {
+  const rules = "User-agent: *\nDisallow: /private\nAllow: /private/public\n";
+  assert.equal(robotsAllows(rules, "/public"), true);
+  assert.equal(robotsAllows(rules, "/private/info"), false);
+  assert.equal(robotsAllows(rules, "/private/public/contact"), true);
+  assert.equal(robotsAllows("User-agent: SnapyCallResearchPreview\nDisallow: /", "/"), false);
+  assert.equal(robotsAllows("User-agent: *\nDisallow: /*/secret", "/a/secret"), false);
+});
+
+test("inspector validates HTTPS source, robots, pinned IP and safe HTML text", async () => {
+  const requests = [];
+  const retrieve = await retrieveCitedPublicPage(source, {
+    resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+    request: async (url, address) => {
+      requests.push({ url: String(url), address });
+      if (String(url).endsWith("/robots.txt")) return {
+        status: 200, contentType: "text/plain", contentEncoding: "",
+        body: "User-agent: *\nDisallow: /private",
+      };
+      return {
+        status: 200, contentType: "text/html; charset=utf-8",
+        contentEncoding: "", body:
+          "<html><script>info@evil.example.org</script><p>Contact &amp; info@consultants.example.org</p></html>",
+      };
+    },
+  });
+  assert.deepEqual(retrieve, {
+    url: source, text: "Contact & info@consultants.example.org",
+  });
+  assert.deepEqual(requests.map(x => x.address), ["8.8.8.8", "8.8.8.8"]);
+  assert.ok(requests[0].url.endsWith("/robots.txt"));
+  assert.equal(requests[1].url, source);
+});
+
+test("inspector blocks disallowed robots, invalid MIME, redirect and oversized body", async () => {
+  const base = {
+    resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+  };
+  await assert.rejects(() => retrieveCitedPublicPage(source, {
+    ...base, request: async () => ({
+      status: 200, contentType: "text/plain", contentEncoding: "",
+      body: "User-agent: *\nDisallow: /experts",
+    }),
+  }), /ROBOTS_REJECTED/);
+  for (const bad of [
+    { status: 302, contentType: "text/html", contentEncoding: "", body: "" },
+    { status: 200, contentType: "application/pdf", contentEncoding: "", body: "" },
+    { status: 200, contentType: "text/html", contentEncoding: "gzip", body: "" },
+    { status: 200, contentType: "text/html", contentEncoding: "", body: "x".repeat(65537) },
+  ]) await assert.rejects(() => retrieveCitedPublicPage(source, {
+    ...base, request: async url => String(url).endsWith("/robots.txt")
+      ? { status: 404, contentType: "text/plain", contentEncoding: "", body: "" }
+      : bad,
+  }));
+  await assert.rejects(() => retrieveCitedPublicPage("https://127.0.0.1/x"),
+    /URL_REJECTED/);
+});
