@@ -73,3 +73,33 @@ test("unbounded attribution and malformed inputs fail closed", () => {
   ), TypeError);
   assert.throws(() => findCandidateIdentityCollisions(Array(21).fill(person("X"))), TypeError);
 });
+
+
+test("evidence completeness ranking is stable and never certifies individual identity", async () => {
+  const { orderCandidatesForEvidenceReview } =
+    await import("../server/research-contact-attribution.js");
+  const base = [
+    { name: "Citation only", sourceUrl: "https://third.example.org/profile" },
+    { name: "Inspected empty", sourceUrl: "https://second.example.org/profile" },
+    { name: "Observed company", sourceUrl: url },
+    { name: "Also observed", sourceUrl: url },
+  ];
+  const ranked = orderCandidatesForEvidenceReview(base,
+    ["https://second.example.org/profile", url], [businessContact]);
+  assert.deepEqual(ranked.map(x => x.name),
+    ["Observed company", "Also observed", "Inspected empty", "Citation only"]);
+  assert.deepEqual(ranked.map(x => x.evidenceLevel),
+    ["PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX",
+      "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX",
+      "PUBLIC_SOURCE_INSPECTED_NO_CONTACT", "PROVIDER_CITATION_ONLY"]);
+  assert.ok(ranked.every(x => x.manualReviewRequired && !x.individualEmailVerified));
+  assert.equal(base[0].name, "Citation only", "Ranking must not mutate candidate order");
+});
+
+test("forged model business-inbox claims do not improve evidence ranking", async () => {
+  const { orderCandidatesForEvidenceReview } =
+    await import("../server/research-contact-attribution.js");
+  const forged = { ...businessContact, provenance: "MODEL_GENERATED" };
+  const ranked = orderCandidatesForEvidenceReview([person("Example")], [url], [forged]);
+  assert.equal(ranked[0].evidenceLevel, "PUBLIC_SOURCE_INSPECTED_NO_CONTACT");
+});
