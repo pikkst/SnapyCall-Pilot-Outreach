@@ -141,6 +141,11 @@ try {
   assert.equal(emptyOverview.needsReview, false);
   assert.equal(emptyOverview.billingSource, "application-estimate");
   assert.equal(emptyOverview.action, "manual-review-only");
+  assert.deepEqual(emptyOverview.alert, {
+    requiresOperatorReview: false, severity: "none", staleCount: 0,
+    estimatedHeldCents: 0, oldestStaleAt: null,
+    currency: "USD", action: "none",
+  });
   assert.equal(JSON.stringify(emptyOverview).includes("ownerId"), false);
   const protectedHeaders = { origin, cookie, "content-type": "application/json" };
   // A source article never qualifies a discovered byline as an expert.
@@ -921,6 +926,11 @@ try {
     const adminLedger = await adminOverview.json();
     assert.equal(adminLedger.staleReservations, 1);
     assert.equal(adminLedger.staleCents, 25);
+    assert.deepEqual(adminLedger.alert, {
+      requiresOperatorReview: true, severity: "warning", staleCount: 1,
+      estimatedHeldCents: 25, oldestStaleAt: agedAt.toISOString(),
+      currency: "USD", action: "investigate-with-provider-evidence",
+    });
     assert.equal(adminLedger.needsReview, true);
     assert.equal(adminLedger.oldestStaleAt, agedAt.toISOString());
     assert.equal(JSON.stringify(adminLedger).includes(member.id), false,
