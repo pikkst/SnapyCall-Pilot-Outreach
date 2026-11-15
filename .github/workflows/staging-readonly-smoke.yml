@@ -18,6 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install source-inspection runtime dependencies
+        run: npm ci
       - name: Verify deployed staging health and anonymous access controls
         run: node scripts/staging-readonly-smoke.mjs
       - name: Inspect project-owned public HTML using PR source adapter
