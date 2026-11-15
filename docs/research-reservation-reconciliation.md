@@ -70,3 +70,22 @@ A future proactive alert should use a separately approved scheduler and
 authenticated operator notification transport, plus deduplication,
 thresholds and tests. Never send raw financial identifiers, API credentials
 or partner contact information in alert payloads.
+
+## Opt-in machine-readable monitor (not a notification sender)
+
+For an operator-managed runtime with a restricted database read credential,
+`RESEARCH_ALERT_CHECK_ENABLED=true npm run research:reconciliation-check`
+checks the global, read-only aggregate. Outputs sanitized JSON with no
+tenant identifiers or secrets. Exit codes: `0` clear or disabled,
+`2` aged reservations require review, `1` configuration/query failure.
+An absent enable flag performs **no database query**.
+
+This command is not scheduled by default, does not send emails, and does not
+change monetary balances. To enable proactive delivery later, first implement
+and validate a persistent idempotent outbox, authenticated operator recipient,
+independent scheduler and retry-safe provider delivery. Do not run it with a
+production write-enabled database URL from a public CI job. The current
+internal reserve/settle ledger remains distinct from provider billing.
+
+The partner UI now labels remaining funds as an *estimated application
+budget* rather than a guaranteed provider cap.
