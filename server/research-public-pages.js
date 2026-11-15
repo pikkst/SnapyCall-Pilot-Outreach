@@ -26,13 +26,18 @@ export function isPublicIpv4(address) {
 export async function resolvePublicAddress(host, resolve = dnsLookup) {
   // DNS rebinding is prevented by pinning a validated IP in HTTPS's lookup.
   const records = await resolve(host, { all: true, verbatim: true });
-  if (!Array.isArray(records) || records.length < 1 ||
-      records.length > 16 || records.some(r =>
-        typeof r?.address !== "string" || !isPublicIpv4(r.address) ||
-        (r.family !== undefined && r.family !== 4))) {
+  if (!Array.isArray(records) || records.length < 1 || records.length > 16 ||
+      records.some(r => typeof r?.address !== "string" ||
+        (isIP(r.address) !== 4 && isIP(r.address) !== 6) ||
+        (isIP(r.address) === 4 && !isPublicIpv4(r.address)) ||
+        (r.family !== undefined && r.family !== isIP(r.address)))) {
     throw new Error("PUBLIC_PAGE_DNS_REJECTED");
   }
-  return records[0].address;
+  // Dual-stack public sites are supported by pinning a validated IPv4 record.
+  // IPv6-only sites fail closed until complete IPv6 egress classification exists.
+  const ipv4 = records.find(r => isIP(r.address) === 4);
+  if (!ipv4) throw new Error("PUBLIC_PAGE_NO_VALID_IPV4");
+  return ipv4.address;
 }
 
 function pinnedHttps(url, address, timeoutMs = TIMEOUT_MS) {
@@ -96,6 +101,10 @@ export function robotsAllows(text, pathname) {
     if (!match) continue;
     const directive = match[1].toLowerCase();
     const value = match[2].trim();
+    // Unsupported robots pattern operators cannot be interpreted safely.
+    if ((directive === "disallow" || directive === "allow") && /[*$]/.test(value)) {
+      return false;
+    }
     if (directive === "user-agent") {
       if (hadRule) flush();
       agents.push(value.toLowerCase());
