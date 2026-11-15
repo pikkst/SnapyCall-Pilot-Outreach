@@ -223,3 +223,19 @@ model ResearchSpendReservation {
   settledAt DateTime?
   @@index([ownerId, monthUtc, status])
 }
+
+
+model ResearchReconciliationOutbox {
+  // One row per distinct oldest-unresolved reservation incident. The key is
+  // a server-side SHA-256 digest; no tenant or reservation identifier is sent.
+  dedupeKey String @id
+  status String @default("PENDING")
+  firstDetectedAt DateTime @default(now())
+  lastDetectedAt DateTime @default(now())
+  staleCount Int
+  estimatedHeldCents Int
+  // No recipient, raw reservation ID, API key or email stored in the outbox.
+  sentAt DateTime?
+  providerId String?
+  @@index([status, firstDetectedAt])
+}
