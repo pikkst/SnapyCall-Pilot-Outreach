@@ -32,6 +32,10 @@ type ResearchPreview = {
   warnings: string[]; usage: { inputTokens: number | null;
     outputTokens: number | null; searchRequests: number | null };
   imported: false; reviewRequired: true; sendingEnabled: false;
+  publicBusinessContacts?: Array<{ type: "PUBLIC_BUSINESS_INBOX";
+    observedEmail: string; sourceUrl: string; provenance: "SERVER_INSPECTED_PAGE";
+    status: "REVIEW_REQUIRED"; identityVerified: false; contactPermission: false }>;
+  pagesInspected?: number; contactReviewRequired?: true;
 };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
 type ResearchLimits = { dailyLimit: number; maxCandidates: number; maxConcurrent: number };
@@ -885,6 +889,20 @@ function App() {
                       personal / {researchResult.quota.remaining.workspace} workspace.
                       No candidates were imported.</p>
                     {researchResult.warnings.map(message => <p key={message} className="muted">{message}</p>)}
+                    {researchResult.publicBusinessContacts && <>
+                      <p className="muted">Public business inbox observations:
+                        {researchResult.publicBusinessContacts.length}.
+                        These contacts are not verified as belonging to any
+                        specific expert. Review the source before using one.</p>
+                      <ul>{researchResult.publicBusinessContacts.map(contact =>
+                        <li key={contact.sourceUrl + contact.observedEmail}>
+                          <strong>{contact.observedEmail}</strong> — Review required
+                          <p>Business inbox observed on a cited page;
+                            identity and contact permission are not verified.</p>
+                          <a href={contact.sourceUrl} target="_blank" rel="noopener noreferrer">
+                            Inspected public source</a>
+                        </li>)}</ul>
+                    </>}
                     <ul>{researchResult.candidates.map(item =>
                       <li key={item.sourceUrl + item.name}>
                         <strong>{item.name}</strong> — {item.category}
