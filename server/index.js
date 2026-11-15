@@ -23,7 +23,8 @@ import {
   reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded,
 } from "./research-quota.js";
 import { validateMonthlyBudgetCents, reserveOwnerSpend, settleOwnerSpend,
-  ResearchBudgetExceeded, readOwnerBudgetSnapshot } from "./research-budget.js";
+  ResearchBudgetExceeded, readOwnerBudgetSnapshot,
+  readResearchReconciliationOverview } from "./research-budget.js";
 import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
   calculateVerifiedSpendCents } from "./research-price-policy.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
@@ -588,6 +589,12 @@ const researchLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders:
 // Personal BYOK budget is denominated in USD, the providers' billing
 // currency. It is NOT yet wired to provider calls: missing price bounds must
 // keep AI web research disabled instead of silently promising enforcement.
+// Admin-only global anomaly counts. Never expose owner/workspace identifiers,
+// individual ledger records or mutation paths to the browser.
+app.get("/api/admin/research-reconciliation", authenticated, safe(async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  return res.json(await readResearchReconciliationOverview(prisma));
+}));
 app.get("/api/research-budget", aiOwnerAuthenticated, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
   if (!identity || identity.id !== req.aiOwnerId) {
