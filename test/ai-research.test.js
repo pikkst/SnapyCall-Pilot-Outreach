@@ -26,6 +26,7 @@ test("Claude research uses fixed endpoint, bounded search and own key", async ()
     assert.equal(url, "https://api.anthropic.com/v1/messages");
     assert.equal(headers["x-api-key"], args.apiKey);
     assert.equal(payload.tools[0].max_uses, 3);
+    assert.match(payload.messages[0].content[0].text, /public internet broadly/);
     assert.equal(payload.model, args.model);
     return cited("https://profile.example.org/consultant");
   } });
