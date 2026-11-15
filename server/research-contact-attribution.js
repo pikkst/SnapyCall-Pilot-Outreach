@@ -73,3 +73,40 @@ export function findCandidateIdentityCollisions(candidates) {
       automaticMergeAllowed: false,
     }));
 }
+
+
+// Deterministic triage order based on observable evidence completeness, not
+// guessed expertise, employability, identity or deliverability. The original
+// candidate list is never modified. Unknown identities remain review-only.
+export function orderCandidatesForEvidenceReview(candidates, inspectedUrls, contacts) {
+  if (!Array.isArray(candidates) || candidates.length > 20 ||
+      !Array.isArray(inspectedUrls) || inspectedUrls.length > 3 ||
+      !Array.isArray(contacts) || contacts.length > 20) {
+    throw new TypeError("Invalid candidate review evidence");
+  }
+  const inspected = new Set(inspectedUrls.map(publicCitationUrl).filter(Boolean));
+  const contactUrls = new Set(contacts.filter(item =>
+    item?.status === "REVIEW_REQUIRED" &&
+    item?.type === "PUBLIC_BUSINESS_INBOX" &&
+    item?.provenance === "SERVER_INSPECTED_PAGE" &&
+    item?.identityVerified === false &&
+    item?.contactPermission === false
+  ).map(item => publicCitationUrl(item.sourceUrl)).filter(Boolean));
+  return candidates.map((candidate, index) => {
+    const url = publicCitationUrl(candidate?.sourceUrl);
+    if (!url || typeof candidate?.name !== "string") return null;
+    const sourceInspected = inspected.has(url);
+    const hasBusinessInbox = sourceInspected && contactUrls.has(url);
+    const evidenceLevel = hasBusinessInbox
+      ? "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX"
+      : sourceInspected ? "PUBLIC_SOURCE_INSPECTED_NO_CONTACT"
+      : "PROVIDER_CITATION_ONLY";
+    return {
+      name: candidate.name, sourceUrl: url, evidenceLevel,
+      manualReviewRequired: true, individualEmailVerified: false,
+      rank: hasBusinessInbox ? 0 : sourceInspected ? 1 : 2, originalIndex: index,
+    };
+  }).filter(Boolean).sort((a, b) =>
+    a.rank - b.rank || a.originalIndex - b.originalIndex
+  ).map(({ rank, originalIndex, ...item }) => item);
+}
