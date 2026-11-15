@@ -28,20 +28,43 @@ another privileged search endpoint or enable email sending.
   from the paid research endpoint, auto-import candidates, send outreach
   or enable billable provider requests.
 
+## Increment 2 (this PR)
+
+- `retrieveCitedPublicPage` is an **opt-in** HTTPS source inspector with
+  DNS resolution and connection-time IPv4 pinning; private/mixed IPv4
+  answers are rejected. Dual-stack addresses may use a validated public
+  IPv4; IPv6-only hosts fail closed pending a complete egress policy.
+- Robots exclusion is checked before each document fetch; a missing
+  robots policy (HTTP 404) permits inspection, while robots fetch failure,
+  unsupported wildcard patterns, redirects and disallow rules reject it.
+- Content is strictly limited to text/html or text/plain, UTF-8, 64 KiB
+  per request, 4 seconds per request, and **no redirects**.
+  HTML scripts/styles are discarded; no JavaScript is executed.
+- A bounded post-provider, post-settlement enrichment stage may inspect
+  at most two provider-cited candidate pages. Failed inspections result
+  in sanitized, non-fatal warnings and never authorize a second AI call.
+- The integration is disabled by default unless both
+  `AI_WEB_RESEARCH_ENABLED=true` and the separate
+  `AI_PUBLIC_CONTACT_INSPECTION_ENABLED=true` are configured.
+  The latter must **remain OFF** until deployment-specific source policy,
+  legal access review, live security smoke and logging controls pass.
+- The UI renders observed general business inboxes in a separate
+  review-only section, never as an individual's email.
+
 ## Next required increments
 
-1. Implement an authorized, tightly bounded public-page retrieval adapter:
-   respect publisher terms and robots policy where applicable; block private
-   DNS resolutions, DNS rebinding, redirects to non-public addresses,
-   oversized responses and non-HTML; cap page count, time and bytes.
-   Only its inspected text may be passed to the contact evidence contract.
-2. Bind observed business-role contacts to a candidate only with explicit,
-   reviewable source and organization evidence. Do not infer personal
-   ownership, deliverability, opt-in or lawful outreach basis.
-3. Rank reviewed results by evidence and topical relevance, not an invented
-   confidence score; preserve namesake ambiguity and cite independent domains.
-4. Add workspace-isolation tests, exact-provider fixtures, empty/invalid/
-   unavailable source cases, import review tests, and a bounded financial
-   envelope for provider tool costs before any paid staging smoke.
+1. Validate live egress and DNS policy against public/blocked domains,
+   robots variants, redirect attacks, slow streams and mixed DNS answers.
+   Obtain publisher-specific access approval where required.
+2. Associate organization-level contacts with an expert only after a
+   separately reviewable identity and organization evidence step.
+3. Rank evidence-linked results for usefulness and reduce duplicates
+   across independent domains, without inventing confidence scores.
+4. Add workspace-isolation and permission-revocation smoke to the
+   disabled-by-default inspection stage; maintain provider pricing
+   gates before any billable search activation.
 
-Current deployment has `AI_WEB_RESEARCH_ENABLED=false`. Keep it OFF.
+The feature's server-side contact evidence does **not** assert
+deliverability, lawful basis, consent or permission to send outreach.
+Current deployment has `AI_WEB_RESEARCH_ENABLED=false`; keep it OFF.
+
