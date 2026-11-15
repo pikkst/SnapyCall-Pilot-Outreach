@@ -32,6 +32,24 @@ type ResearchPreview = {
   warnings: string[]; usage: { inputTokens: number | null;
     outputTokens: number | null; searchRequests: number | null };
   imported: false; reviewRequired: true; sendingEnabled: false;
+  publicBusinessContacts?: Array<{ type: "PUBLIC_BUSINESS_INBOX";
+    observedEmail: string; sourceUrl: string; provenance: "SERVER_INSPECTED_PAGE";
+    status: "REVIEW_REQUIRED"; identityVerified: false; contactPermission: false }>;
+  pagesInspected?: number; contactReviewRequired?: true;
+  contactAssociations?: Array<{ sourceUrl: string; observedEmail: string;
+    candidateNames: string[]; relationship: "SAME_CITED_PAGE_UNVERIFIED" | "SHARED_SOURCE_AMBIGUOUS";
+    organizationVerified: false; identityVerified: false; contactPermission: false;
+    reviewRequired: true }>;
+  identityCollisions?: Array<{ name: string; sourceUrls: string[];
+    status: "IDENTITY_REVIEW_REQUIRED"; automaticMergeAllowed: false }>;
+  profileObservations?: Array<{ name: string; sourceUrl: string;
+    observation: "EXACT_NAME_ON_INSPECTED_SOURCE" | "NAME_NOT_OBSERVED";
+    profileIdentityVerified: false; organizationAffiliationVerified: false;
+    contactOwnershipVerified: false; reviewRequired: true }>;
+  evidenceReviewOrder?: Array<{ name: string; sourceUrl: string;
+    evidenceLevel: "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX" |
+      "PUBLIC_SOURCE_INSPECTED_NO_CONTACT" | "PROVIDER_CITATION_ONLY";
+    manualReviewRequired: true; individualEmailVerified: false }>;
 };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
 type ResearchLimits = { dailyLimit: number; maxCandidates: number; maxConcurrent: number };
@@ -885,6 +903,66 @@ function App() {
                       personal / {researchResult.quota.remaining.workspace} workspace.
                       No candidates were imported.</p>
                     {researchResult.warnings.map(message => <p key={message} className="muted">{message}</p>)}
+                    {researchResult.publicBusinessContacts && <>
+                      <p className="muted">Public business inbox observations:
+                        {researchResult.publicBusinessContacts.length}.
+                        These contacts are not verified as belonging to any
+                        specific expert. Review the source before using one.</p>
+                      <ul>{researchResult.publicBusinessContacts.map(contact =>
+                        <li key={contact.sourceUrl + contact.observedEmail}>
+                          <strong>{contact.observedEmail}</strong> — Review required
+                          <p>Business inbox observed on a cited page;
+                            identity and contact permission are not verified.</p>
+                          <a href={contact.sourceUrl} target="_blank" rel="noopener noreferrer">
+                            Inspected public source</a>
+                        </li>)}</ul>
+                    </>}
+                    {researchResult.contactAssociations?.length ? <>
+                      <h4>Source associations (unverified)</h4>
+                      <ul>{researchResult.contactAssociations.map(association =>
+                        <li key={association.sourceUrl + association.observedEmail}>
+                          <strong>{association.observedEmail}</strong> — {
+                            association.relationship === "SHARED_SOURCE_AMBIGUOUS"
+                              ? "Shared page: multiple people, attribution ambiguous"
+                              : "Same cited page only; no person-level verification"
+                          }
+                          <p>Cited people: {association.candidateNames.join(", ") || "unknown"}.
+                            Organization, individual identity and permission are unverified.</p>
+                        </li>)}</ul>
+                    </> : null}
+                    {researchResult.profileObservations?.length ? <>
+                      <h4>Expert name observations on inspected sources</h4>
+                      <ul>{researchResult.profileObservations.map(profile =>
+                        <li key={profile.sourceUrl + profile.name}>
+                          <strong>{profile.name}</strong> — {
+                            profile.observation === "EXACT_NAME_ON_INSPECTED_SOURCE"
+                              ? "Full name observed on cited page; identity and affiliation not verified"
+                              : "Name not observed in inspected page"
+                          }
+                        </li>)}</ul>
+                    </> : null}
+                    {researchResult.identityCollisions?.length ? <>
+                      <h4>Possible namesakes — manual identity review</h4>
+                      <ul>{researchResult.identityCollisions.map(collision =>
+                        <li key={collision.name}>
+                          <strong>{collision.name}</strong> appears across {
+                            collision.sourceUrls.length} cited pages.
+                          These records have not been automatically merged.
+                        </li>)}</ul>
+                    </> : null}
+                    {researchResult.evidenceReviewOrder?.length ? <>
+                      <h4>Evidence review priority (not an expertise score)</h4>
+                      <ol>{researchResult.evidenceReviewOrder.map(item =>
+                        <li key={item.sourceUrl + item.name}>
+                          <strong>{item.name}</strong> — {
+                            item.evidenceLevel === "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX"
+                              ? "Public business inbox found, person not verified"
+                              : item.evidenceLevel === "PUBLIC_SOURCE_INSPECTED_NO_CONTACT"
+                              ? "Public source inspected, no confirmed contact"
+                              : "Provider citation only"
+                          }
+                        </li>)}</ol>
+                    </> : null}
                     <ul>{researchResult.candidates.map(item =>
                       <li key={item.sourceUrl + item.name}>
                         <strong>{item.name}</strong> — {item.category}

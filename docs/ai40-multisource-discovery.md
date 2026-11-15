@@ -1,0 +1,173 @@
+# AI40 — Broad public-web expert discovery and contact evidence
+
+## Goal
+
+Gary can search for professionals on the **public internet as a whole**,
+not only a supplied list of websites. A website supplied by Gary is a
+starting point or optional search criterion, never an implicit allow-list.
+
+Use the existing `POST /api/discovery/ai-research`, Google workspace
+membership, personal encrypted BYOK credentials, source normalization,
+owner-wide spend reservations and explicit activation gate. Do not build
+another privileged search endpoint or enable email sending.
+
+## Increment 1 (this PR)
+
+- Shared bounded discovery guidance for Anthropic, OpenAI and Gemini
+  encourages official sites, professional profiles, speaker bios,
+  articles and multiple independently cited domains.
+- `observedPublicBusinessContacts` is a **pure server-side contract** for
+  future vetted document retrieval. It only accepts actually inspected page
+  text and an exact HTTPS URL also present in provider-authoritative citations.
+- Only generic business-role inboxes on a domain compatible with the
+  inspected page can be proposed. Personal mailboxes, ungrounded email
+  strings, unrelated domains and unsafely formed URLs are rejected.
+- Every proposal is `REVIEW_REQUIRED`, with
+  `identityVerified:false` and `contactPermission:false`.
+- This PR does **not** scrape, fetch websites, return new email fields
+  from the paid research endpoint, auto-import candidates, send outreach
+  or enable billable provider requests.
+
+## Increment 2 (this PR)
+
+- `retrieveCitedPublicPage` is an **opt-in** HTTPS source inspector with
+  DNS resolution and connection-time IPv4 pinning; private/mixed IPv4
+  answers are rejected. Dual-stack addresses may use a validated public
+  IPv4; IPv6-only hosts fail closed pending a complete egress policy.
+- Robots exclusion is checked before each document fetch; a missing
+  robots policy (HTTP 404) permits inspection, while robots fetch failure,
+  unsupported wildcard patterns, redirects and disallow rules reject it.
+- Content is strictly limited to text/html or text/plain, UTF-8, 64 KiB
+  per request, 4 seconds per request, and **no redirects**.
+  HTML scripts/styles are discarded; no JavaScript is executed.
+- A bounded post-provider, post-settlement enrichment stage may inspect
+  at most two provider-cited candidate pages. Failed inspections result
+  in sanitized, non-fatal warnings and never authorize a second AI call.
+- The integration is disabled by default unless both
+  `AI_WEB_RESEARCH_ENABLED=true` and the separate
+  `AI_PUBLIC_CONTACT_INSPECTION_ENABLED=true` are configured.
+  The latter must **remain OFF** until deployment-specific source policy,
+  legal access review, live security smoke and logging controls pass.
+- The UI renders observed general business inboxes in a separate
+  review-only section, never as an individual's email.
+
+## Next required increments
+
+1. Validate live egress and DNS policy against public/blocked domains,
+   robots variants, redirect attacks, slow streams and mixed DNS answers.
+   Obtain publisher-specific access approval where required.
+2. Associate organization-level contacts with an expert only after a
+   separately reviewable identity and organization evidence step.
+3. Rank evidence-linked results for usefulness and reduce duplicates
+   across independent domains, without inventing confidence scores.
+4. Add workspace-isolation and permission-revocation smoke to the
+   disabled-by-default inspection stage; maintain provider pricing
+   gates before any billable search activation.
+
+The feature's server-side contact evidence does **not** assert
+deliverability, lawful basis, consent or permission to send outreach.
+Current deployment has `AI_WEB_RESEARCH_ENABLED=false`; keep it OFF.
+
+
+## Increment 3 — attributed source evidence and identity collision review
+
+- `associateBusinessContactsWithCandidates` conservatively binds a
+  server-observed general business inbox to candidate names only through the
+  exact same provider-cited page URL. It does **not** verify employer,
+  affiliation, control of an address, outreach permission or deliverability.
+- When multiple experts share one source page, the association is labeled
+  `SHARED_SOURCE_AMBIGUOUS`. A single name receives only
+  `SAME_CITED_PAGE_UNVERIFIED`, never a verified-person association.
+- `findCandidateIdentityCollisions` flags normalized name collisions across
+  distinct provider-cited URLs for human review and never automatically
+  merges or discards profiles based on name spelling.
+- The partner preview displays these explicit review signals, with no change
+  to candidate import, persisted contacts, permissions or email sending.
+
+Next focus: stronger independent identity/organization evidence and
+cross-provider relevance ranking, along with a hard price-reviewed
+search-tool budget and controlled real-provider staging testing.
+
+## Increment 4 — security hardening and deterministic review triage
+
+- The public IPv4 egress check rejects the **entire** 192.0.0.0/24
+  special-use range, plus 192.88.99.0/24. The pinned IPv4 connection
+  mechanism remains unchanged. Regression tests include these previously
+  underfiltered addresses.
+- `orderCandidatesForEvidenceReview` returns a stable evidence-triage
+  order with three discrete, descriptive states:
+  `PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX`,
+  `PUBLIC_SOURCE_INSPECTED_NO_CONTACT`, and
+  `PROVIDER_CITATION_ONLY`. Source-inspection failures do not get
+  promoted. It does **not** compute an invented confidence number or
+  claim professional qualification, affiliation or personal-email
+  verification.
+- The partner preview shows review priority separately from the original
+  provider candidate ordering. No candidate is merged or promoted to
+  an outreach-eligible status through this ranking.
+
+Remaining release gates include a complete IANA special-purpose IP
+classification strategy, independent provider pricing authorization,
+controlled real-network source tests and organization/person identity
+verification. Keep both paid research and public-source inspection OFF.
+
+## Real staging smoke — non-billable release cadence
+
+The repository now includes `scripts/staging-readonly-smoke.mjs` and the
+GitHub Actions `Staging read-only smoke` workflow. On pull requests, pushes
+to main and manual runs, a GitHub-hosted runner performs **real HTTPS GETs**
+against the currently deployed `https://pilot.eventnexus.eu` service:
+`/api/health`, `/api/ready`, anonymous `/api/session`,
+denial of anonymous `/api/candidates`, plus `/`, `/privacy.html`
+and `/terms.html`. It uses no credentials, writes, or paid AI calls.
+
+This smoke validates the **deployed main/staging binary**, not an
+unmerged PR. It is not evidence that the new inspection adapter or
+paid research works on staging. After an approved PR deployment,
+a separately authorized workspace-scoped staging smoke must verify
+revoked membership, source policy, real-world egress, outcome quality,
+and BYOK cost ceilings before feature activation.
+
+## Increment 5 — real public-source inspection smoke
+
+The GitHub Actions `Staging read-only smoke` workflow now runs
+`scripts/staging-public-page-smoke.mjs` after installing npm dependencies.
+This makes **real outbound HTTPS requests from the GitHub runner** using the
+unmerged PR's public-source inspector against a project-controlled public
+page (`https://pilot.eventnexus.eu/privacy.html`).
+
+The first real run exposed a Node 22 transport bug: the pinned DNS
+`lookup` hook did not implement the `{ all: true }` callback shape
+used by `autoSelectFamily`. The production adapter now supports both
+lookup callback contracts and still supplies only the previously validated
+pinned IPv4 address. No free-form DNS fallback was introduced.
+
+Verified on exact HEAD `cfe687261eb5ac792aefce43e674ce178f81cd83`:
+- Public staging health, readiness, anonymous auth denial and legal pages PASS.
+- The PR's DNS-pinned HTTPS + robots + text-bound source inspector PASS on a
+  project-controlled real page; no contacts were captured or imported.
+- CI and disposable PostgreSQL Pilot app CI PASS.
+
+This does **not** prove general third-party robots/TOS compliance,
+real-provider capability, contact ownership or authorization to send mail.
+Both paid AI research and page inspection remain OFF in staging.
+
+## Increment 6 — inspected-source expert name corroboration
+
+- `corroborateCandidateNames()` verifies whether a full, bounded multi-token
+  professional name appears as a standalone name in the already inspected,
+  exact provider-cited page text. It does not perform additional requests.
+- Names seen only in AI output, on unrelated pages, in email usernames,
+  or as prefixes of a longer name do not qualify. Unicode and multi-space
+  name spellings are supported by deterministic tests.
+- Results remain `EXACT_NAME_ON_INSPECTED_SOURCE` or
+  `NAME_NOT_OBSERVED`, always with affiliation, identity and contact
+  ownership explicitly **unverified**. This is a triage signal, not a
+  verification certificate or a reason to allow outreach.
+- The existing partner preview displays observations separately from generic
+  business inboxes. Neither provider result, candidate database record nor
+  sending authority is mutated.
+
+Next meaningful gain requires independent publisher-authorized organizational
+affiliation evidence and business-contact channel checks, followed by live
+source coverage benchmarking. No spending or source inspection flags changed.

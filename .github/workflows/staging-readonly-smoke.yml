@@ -1,0 +1,26 @@
+name: Staging read-only smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install source-inspection runtime dependencies
+        run: npm ci
+      - name: Verify deployed staging health and anonymous access controls
+        run: node scripts/staging-readonly-smoke.mjs
+      - name: Inspect project-owned public HTML using PR source adapter
+        run: node scripts/staging-public-page-smoke.mjs

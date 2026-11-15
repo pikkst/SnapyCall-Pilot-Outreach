@@ -15,6 +15,7 @@ import { canonicalEvidenceUrl, EVIDENCE_KINDS, sameIdentityHints } from "../src/
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput } from "./ai-research.js";
+import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { assertWebResearchModel } from "./research-provider-adapters.js";
 import {
@@ -803,7 +804,19 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
     // worst-case amount charged; browser numbers are never accepted.
     const verifiedCents = calculateVerifiedSpendCents(priceEnvelope, output.usage);
     await settle(verifiedCents);
-    return res.json({ ...output, workspaceId: req.candidateScope,
+    // Public-page inspection is optional and distinct from billable provider
+    // research. It cannot import candidates or authorize email sending.
+    let inspection = null;
+    if (env.AI_PUBLIC_CONTACT_INSPECTION_ENABLED === "true") {
+      if (!await requireWorkspaceMembership(prisma, {
+        workspaceId: req.candidateScope, userId: identity.id,
+      })) {
+        return res.status(403).json({ error: "Workspace membership revoked" });
+      }
+      inspection = await inspectResearchPreview(output);
+    }
+    return res.json({ ...output, ...(inspection ?? {}),
+      workspaceId: req.candidateScope,
       quota: { dayUtc: quota.dayUtc, remaining: quota.remaining } });
   } finally {
     if (!settled) {

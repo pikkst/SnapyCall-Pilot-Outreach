@@ -19,6 +19,8 @@ test("OpenAI Responses search uses own BYOK, native search and trusted citation 
     assert.equal(headers.authorization, "Bearer openai-test-user-key");
     assert.deepEqual(payload.tools, [{ type: "web_search", search_context_size: "low" }]);
     assert.equal(payload.max_output_tokens, 3200);
+    assert.match(payload.input, /public internet broadly/);
+    assert.match(payload.input, /manual review/);
     return { status: "completed", usage: { input_tokens: 120, output_tokens: 90 },
       output: [
         { type: "web_search_call", status: "completed" },
@@ -44,6 +46,7 @@ test("Gemini Search Grounding only accepts provider grounding chunks", async () 
     assert.equal(url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
     assert.equal(headers["x-goog-api-key"], "gemini-test-user-key");
     assert.deepEqual(payload.tools, [{ google_search: {} }]);
+    assert.match(payload.contents[0].parts[0].text, /public internet broadly/);
     return {
       candidates: [{
         finishReason: "STOP",
