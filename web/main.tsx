@@ -36,6 +36,12 @@ type ResearchPreview = {
     observedEmail: string; sourceUrl: string; provenance: "SERVER_INSPECTED_PAGE";
     status: "REVIEW_REQUIRED"; identityVerified: false; contactPermission: false }>;
   pagesInspected?: number; contactReviewRequired?: true;
+  contactAssociations?: Array<{ sourceUrl: string; observedEmail: string;
+    candidateNames: string[]; relationship: "SAME_CITED_PAGE_UNVERIFIED" | "SHARED_SOURCE_AMBIGUOUS";
+    organizationVerified: false; identityVerified: false; contactPermission: false;
+    reviewRequired: true }>;
+  identityCollisions?: Array<{ name: string; sourceUrls: string[];
+    status: "IDENTITY_REVIEW_REQUIRED"; automaticMergeAllowed: false }>;
 };
 type AiSetting = { provider: string; model: string; keyConfigured: boolean; fingerprint?: string };
 type ResearchLimits = { dailyLimit: number; maxCandidates: number; maxConcurrent: number };
@@ -903,6 +909,28 @@ function App() {
                             Inspected public source</a>
                         </li>)}</ul>
                     </>}
+                    {researchResult.contactAssociations?.length ? <>
+                      <h4>Source associations (unverified)</h4>
+                      <ul>{researchResult.contactAssociations.map(association =>
+                        <li key={association.sourceUrl + association.observedEmail}>
+                          <strong>{association.observedEmail}</strong> — {
+                            association.relationship === "SHARED_SOURCE_AMBIGUOUS"
+                              ? "Shared page: multiple people, attribution ambiguous"
+                              : "Same cited page only; no person-level verification"
+                          }
+                          <p>Cited people: {association.candidateNames.join(", ") || "unknown"}.
+                            Organization, individual identity and permission are unverified.</p>
+                        </li>)}</ul>
+                    </> : null}
+                    {researchResult.identityCollisions?.length ? <>
+                      <h4>Possible namesakes — manual identity review</h4>
+                      <ul>{researchResult.identityCollisions.map(collision =>
+                        <li key={collision.name}>
+                          <strong>{collision.name}</strong> appears across {
+                            collision.sourceUrls.length} cited pages.
+                          These records have not been automatically merged.
+                        </li>)}</ul>
+                    </> : null}
                     <ul>{researchResult.candidates.map(item =>
                       <li key={item.sourceUrl + item.name}>
                         <strong>{item.name}</strong> — {item.category}
