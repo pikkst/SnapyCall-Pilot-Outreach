@@ -151,3 +151,23 @@ Verified on exact HEAD `cfe687261eb5ac792aefce43e674ce178f81cd83`:
 This does **not** prove general third-party robots/TOS compliance,
 real-provider capability, contact ownership or authorization to send mail.
 Both paid AI research and page inspection remain OFF in staging.
+
+## Increment 6 — inspected-source expert name corroboration
+
+- `corroborateCandidateNames()` verifies whether a full, bounded multi-token
+  professional name appears as a standalone name in the already inspected,
+  exact provider-cited page text. It does not perform additional requests.
+- Names seen only in AI output, on unrelated pages, in email usernames,
+  or as prefixes of a longer name do not qualify. Unicode and multi-space
+  name spellings are supported by deterministic tests.
+- Results remain `EXACT_NAME_ON_INSPECTED_SOURCE` or
+  `NAME_NOT_OBSERVED`, always with affiliation, identity and contact
+  ownership explicitly **unverified**. This is a triage signal, not a
+  verification certificate or a reason to allow outreach.
+- The existing partner preview displays observations separately from generic
+  business inboxes. Neither provider result, candidate database record nor
+  sending authority is mutated.
+
+Next meaningful gain requires independent publisher-authorized organizational
+affiliation evidence and business-contact channel checks, followed by live
+source coverage benchmarking. No spending or source inspection flags changed.
