@@ -68,3 +68,22 @@ The feature's server-side contact evidence does **not** assert
 deliverability, lawful basis, consent or permission to send outreach.
 Current deployment has `AI_WEB_RESEARCH_ENABLED=false`; keep it OFF.
 
+
+## Increment 3 — attributed source evidence and identity collision review
+
+- `associateBusinessContactsWithCandidates` conservatively binds a
+  server-observed general business inbox to candidate names only through the
+  exact same provider-cited page URL. It does **not** verify employer,
+  affiliation, control of an address, outreach permission or deliverability.
+- When multiple experts share one source page, the association is labeled
+  `SHARED_SOURCE_AMBIGUOUS`. A single name receives only
+  `SAME_CITED_PAGE_UNVERIFIED`, never a verified-person association.
+- `findCandidateIdentityCollisions` flags normalized name collisions across
+  distinct provider-cited URLs for human review and never automatically
+  merges or discards profiles based on name spelling.
+- The partner preview displays these explicit review signals, with no change
+  to candidate import, persisted contacts, permissions or email sending.
+
+Next focus: stronger independent identity/organization evidence and
+cross-provider relevance ranking, along with a hard price-reviewed
+search-tool budget and controlled real-provider staging testing.
