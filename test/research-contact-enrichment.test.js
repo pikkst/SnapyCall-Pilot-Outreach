@@ -56,5 +56,5 @@ test("source inspection failure is sanitized; redirect mismatch never becomes co
   assert.deepEqual(output.publicBusinessContacts, []);
   assert.equal(output.warnings.length, 1);
   assert.doesNotMatch(JSON.stringify(output), /Authorization secret/);
-  assert.throws(() => inspectResearchPreview(preview, { maxPages: 4 }), TypeError);
+  await assert.rejects(() => inspectResearchPreview(preview, { maxPages: 4 }), TypeError);
 });
