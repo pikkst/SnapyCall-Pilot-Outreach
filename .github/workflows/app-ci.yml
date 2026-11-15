@@ -42,6 +42,43 @@ jobs:
       - run: npm run db:validate
       - run: npm run db:deploy
       - run: npx prisma migrate status
+      - name: Verify upgrade from prior migrations preserves owner budgets
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE pilot_upgrade'
+          UPGRADE_URL="${DATABASE_URL%/*}/pilot_upgrade"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          cp prisma/schema.prisma "$tmp/schema.prisma"
+          mkdir -p "$tmp/migrations"
+          cp prisma/migrations/migration_lock.toml "$tmp/migrations/"
+          for directory in prisma/migrations/*/; do
+            case "$directory" in
+              *20261115040000_reconciliation_alert_outbox/) continue ;;
+            esac
+            cp -R "$directory" "$tmp/migrations/"
+          done
+          DATABASE_URL="$UPGRADE_URL" DIRECT_URL="$UPGRADE_URL" \
+            npx prisma migrate deploy --schema "$tmp/schema.prisma"
+          psql "$UPGRADE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO "ResearchOwnerBudget" ("ownerId", "monthlyLimitCents")
+          VALUES ('caaaaaaaaaaaaaaaaaaaaaaaa', 1000);
+          SQL
+          DATABASE_URL="$UPGRADE_URL" DIRECT_URL="$UPGRADE_URL" \
+            npx prisma migrate deploy --schema prisma/schema.prisma
+          psql "$UPGRADE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $
+          BEGIN
+            IF to_regclass('public."ResearchReconciliationOutbox"') IS NULL
+              THEN RAISE EXCEPTION 'Upgrade did not create alert outbox'; END IF;
+            IF NOT EXISTS (
+              SELECT 1 FROM "ResearchOwnerBudget"
+              WHERE "ownerId" = 'caaaaaaaaaaaaaaaaaaaaaaaa'
+                AND "monthlyLimitCents" = 1000
+            ) THEN RAISE EXCEPTION 'Upgrade modified an existing owner budget'; END IF;
+          END $;
+          SQL
       - run: npm run build
       - name: HTTP smoke against disposable PostgreSQL
         run: node scripts/smoke.mjs
