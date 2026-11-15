@@ -42,6 +42,10 @@ type ResearchPreview = {
     reviewRequired: true }>;
   identityCollisions?: Array<{ name: string; sourceUrls: string[];
     status: "IDENTITY_REVIEW_REQUIRED"; automaticMergeAllowed: false }>;
+  profileObservations?: Array<{ name: string; sourceUrl: string;
+    observation: "EXACT_NAME_ON_INSPECTED_SOURCE" | "NAME_NOT_OBSERVED";
+    profileIdentityVerified: false; organizationAffiliationVerified: false;
+    contactOwnershipVerified: false; reviewRequired: true }>;
   evidenceReviewOrder?: Array<{ name: string; sourceUrl: string;
     evidenceLevel: "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX" |
       "PUBLIC_SOURCE_INSPECTED_NO_CONTACT" | "PROVIDER_CITATION_ONLY";
@@ -924,6 +928,17 @@ function App() {
                           }
                           <p>Cited people: {association.candidateNames.join(", ") || "unknown"}.
                             Organization, individual identity and permission are unverified.</p>
+                        </li>)}</ul>
+                    </> : null}
+                    {researchResult.profileObservations?.length ? <>
+                      <h4>Expert name observations on inspected sources</h4>
+                      <ul>{researchResult.profileObservations.map(profile =>
+                        <li key={profile.sourceUrl + profile.name}>
+                          <strong>{profile.name}</strong> — {
+                            profile.observation === "EXACT_NAME_ON_INSPECTED_SOURCE"
+                              ? "Full name observed on cited page; identity and affiliation not verified"
+                              : "Name not observed in inspected page"
+                          }
                         </li>)}</ul>
                     </> : null}
                     {researchResult.identityCollisions?.length ? <>
