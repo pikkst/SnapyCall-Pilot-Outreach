@@ -128,6 +128,20 @@ try {
   });
   assert.equal(unauthorizedImport.status, 403);
 
+  assert.equal((await call("/admin/research-reconciliation")).status, 401,
+    "Global financial diagnostics require administrator authentication");
+  const emptyReconciliation = await call("/admin/research-reconciliation", {
+    headers: { cookie },
+  });
+  assert.equal(emptyReconciliation.status, 200);
+  assert.equal(emptyReconciliation.headers.get("cache-control"), "no-store");
+  const emptyOverview = await emptyReconciliation.json();
+  assert.equal(emptyOverview.pendingReservations, 0);
+  assert.equal(emptyOverview.staleReservations, 0);
+  assert.equal(emptyOverview.needsReview, false);
+  assert.equal(emptyOverview.billingSource, "application-estimate");
+  assert.equal(emptyOverview.action, "manual-review-only");
+  assert.equal(JSON.stringify(emptyOverview).includes("ownerId"), false);
   const protectedHeaders = { origin, cookie, "content-type": "application/json" };
   // A source article never qualifies a discovered byline as an expert.
   // Exercise real Prisma persistence, access controls, provenance and audit.
@@ -303,6 +317,9 @@ try {
     const firstRetry = await call(inviteUrl, { method: "POST", headers: protectedHeaders,
       body: JSON.stringify({ partnerId: firstWorkspace, email: "partner@example.org" }) });
     assert.equal(firstRetry.status, 200);
+    assert.equal((await call("/admin/research-reconciliation", {
+      headers: { cookie: partnerCookie },
+    })).status, 401, "Partner session cannot access global monetary diagnostics");
     assert.equal((await call("/candidates", { headers: { cookie: partnerCookie } })).status, 403,
       "Partner must select a workspace before reading candidate data");
     // Default-disabled research can never incur provider charges in staging.
@@ -897,6 +914,20 @@ try {
     assert.equal(aged.reconciliation.staleReservations, 1);
     assert.equal(aged.reconciliation.needsReview, true);
     assert.equal(aged.reconciliation.oldestPendingAt, agedAt.toISOString());
+    const adminOverview = await call("/admin/research-reconciliation", {
+      headers: { cookie },
+    });
+    assert.equal(adminOverview.status, 200);
+    const adminLedger = await adminOverview.json();
+    assert.equal(adminLedger.staleReservations, 1);
+    assert.equal(adminLedger.staleCents, 25);
+    assert.equal(adminLedger.needsReview, true);
+    assert.equal(adminLedger.oldestStaleAt, agedAt.toISOString());
+    assert.equal(JSON.stringify(adminLedger).includes(member.id), false,
+      "Global diagnostics may not leak partner identity");
+    assert.equal(JSON.stringify(adminLedger).includes(firstWorkspace), false,
+      "Global diagnostics may not leak workspace identifiers");
+
     assert.equal((await readOwnerBudgetSnapshot(partnerDb,
       "c" + "f".repeat(24))).reconciliation.staleReservations, 0,
     "Stale reservation diagnostics must never cross owner scope");
