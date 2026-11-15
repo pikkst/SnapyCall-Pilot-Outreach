@@ -49,3 +49,24 @@ notifications for stale reservations, idempotent reconciliation operation
 with operator authorization and evidence, crash/timeout simulations, and
 provider-specific actual billing reconciliation. The current stale counter
 is only an early warning, not a complete system.
+
+## Admin diagnostics (read-only)
+
+The existing admin-authenticated session can request
+`GET /api/admin/research-reconciliation`. It reports the **aggregate**
+pending/aged counts and USD-cent reservations for all owners and all months,
+the oldest aged timestamp, and a manual-review status. It intentionally
+returns no owner IDs, workspace IDs, candidate details or reservation IDs.
+The response is `Cache-Control: no-store`; partner-only and unauthenticated
+sessions must receive HTTP 401. Admin AI configuration does not grant
+authority to spend a partner's BYOK balance.
+
+The admin Settings screen provides a manual `Check pending charges`
+control. This is a pull-based diagnostic and **does not** schedule scans,
+automatically notify operators or change any ledger value. Clearing the
+admin session also clears cached diagnostics in the browser.
+
+A future proactive alert should use a separately approved scheduler and
+authenticated operator notification transport, plus deduplication,
+thresholds and tests. Never send raw financial identifiers, API credentials
+or partner contact information in alert payloads.
