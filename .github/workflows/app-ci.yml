@@ -68,10 +68,13 @@ jobs:
           DATABASE_URL="$UPGRADE_URL" DIRECT_URL="$UPGRADE_URL" \
             npx prisma migrate deploy --schema prisma/schema.prisma
           outbox_exists="$(psql "$UPGRADE_URL" -At -v ON_ERROR_STOP=1 \
-            -c "SELECT to_regclass('public.\\\"ResearchReconciliationOutbox\\\"') IS NOT NULL")"
-          test "$outbox_exists" = "t"
-          preserved_budget="$(psql "$UPGRADE_URL" -At -v ON_ERROR_STOP=1 \
-            -c "SELECT \\"monthlyLimitCents\\" FROM \\"ResearchOwnerBudget\\" WHERE \\"ownerId\\" = 'caaaaaaaaaaaaaaaaaaaaaaaa'")"
+            -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='ResearchReconciliationOutbox'")"
+          test "$outbox_exists" = "1"
+          preserved_budget="$(psql "$UPGRADE_URL" -At -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT "monthlyLimitCents" FROM "ResearchOwnerBudget"
+          WHERE "ownerId" = 'caaaaaaaaaaaaaaaaaaaaaaaa';
+          SQL
+          )"
           test "$preserved_budget" = "1000"
       - run: npm run build
       - name: HTTP smoke against disposable PostgreSQL
