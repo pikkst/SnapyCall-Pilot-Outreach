@@ -1099,8 +1099,12 @@ try {
       "Concurrent admin and partner sessions must not fall back to admin AI key");
     assert.equal((await call("/admin/partners", { headers: { cookie: dualCookie } })).status, 409,
       "Dual cookies must not authorize any admin-only route");
-    const adminState = await (await call("/session", { headers: { cookie: dualCookie } })).json();
-    const partnerState = await (await call("/partner/session", { headers: { cookie: dualCookie } })).json();
+    const adminStateResponse = await call("/session", { headers: { cookie: dualCookie } });
+    const partnerStateResponse = await call("/partner/session", { headers: { cookie: dualCookie } });
+    assert.equal(adminStateResponse.headers.get("cache-control"), "no-store");
+    assert.equal(partnerStateResponse.headers.get("cache-control"), "no-store");
+    const adminState = await adminStateResponse.json();
+    const partnerState = await partnerStateResponse.json();
     assert.deepEqual(adminState, { authenticated: false, conflict: true });
     assert.deepEqual(partnerState, { authenticated: false, conflict: true });
     const adminSwitch = await call("/session", {
