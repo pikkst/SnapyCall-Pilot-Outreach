@@ -28,17 +28,59 @@ const approvedResearchPrices = Object.freeze({
       maxSearchRequests: 3,
     }),
   }),
+  "openai:gpt-4.1-mini": Object.freeze({
+    provider: "openai",
+    enforcementReady: true,
+    priceVersion: "openai-gpt-4.1-mini-web-search-2026-11-16",
+    expiresAt: new Date("2026-12-01T00:00:00Z"),
+    billingContractVersion: "openai-web-search-responses-v1",
+    worstCaseCents: 150,
+    pricing: Object.freeze({
+      billingUnit: "search_requests",
+      inputCentsPerMillion: 40,
+      outputCentsPerMillion: 160,
+      searchCentsPerThousand: 1000,
+    }),
+    usageLimits: Object.freeze({
+      // One million context tokens plus 8k fixed web-search content
+      // tokens per search (up to three) for gpt-4.1-mini.
+      maxInputTokens: 1_024_000,
+      maxOutputTokens: 3200,
+      maxSearchRequests: 3,
+    }),
+  }),
+  "gemini:gemini-2.5-flash": Object.freeze({
+    provider: "gemini",
+    enforcementReady: true,
+    priceVersion: "gemini-2.5-flash-grounded-prompt-2026-11-16",
+    expiresAt: new Date("2026-12-01T00:00:00Z"),
+    billingContractVersion: "gemini-2.5-google-search-grounded-prompt-v1",
+    worstCaseCents: 200,
+    pricing: Object.freeze({
+      billingUnit: "grounded_prompts",
+      inputCentsPerMillion: 30,
+      outputCentsPerMillion: 250,
+      searchCentsPerThousand: 3500,
+    }),
+    usageLimits: Object.freeze({
+      maxInputTokens: 1_000_000,
+      maxOutputTokens: 3200,
+      maxGroundedPrompts: 1,
+    }),
+  }),
 });
 
 // Compute a strictly conservative ceiling for the only currently modeled
 // billing shape. Other provider tool billing units require their own reviewed
 // capability contracts; we never reinterpret them as search requests.
 export function calculateBoundedWorstCaseCents(pricing, limits) {
-  if (pricing?.billingUnit !== "search_requests" || !limits) return null;
+  if (!["search_requests", "grounded_prompts"].includes(pricing?.billingUnit) ||
+      !limits) return null;
   const rates = [pricing.inputCentsPerMillion, pricing.outputCentsPerMillion,
     pricing.searchCentsPerThousand];
   const max = [limits.maxInputTokens, limits.maxOutputTokens,
-    limits.maxSearchRequests];
+    pricing.billingUnit === "grounded_prompts" ? limits.maxGroundedPrompts
+      : limits.maxSearchRequests];
   if (rates.some(x => !Number.isSafeInteger(x) || x <= 0) ||
       max.some(x => !Number.isSafeInteger(x) || x <= 0)) return null;
   const costUnits = BigInt(max[0]) * BigInt(rates[0]) +
