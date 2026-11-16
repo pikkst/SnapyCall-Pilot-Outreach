@@ -120,11 +120,13 @@ export function qualificationDecision(candidate, contactEvidence = {}) {
   if (!c.contactReviewed) contact.push("contact_review_pending");
   // Sender evidence is an independent, server-derived argument: never trust
   // Candidate.contactReviewed or a client-supplied address as identity proof.
-  if (contactEvidence.personEmailLinked !== true) {
-    contact.push("person_email_link_unverified");
-  }
-  if (contactEvidence.mailboxVerificationStatus !== "VALID") {
-    contact.push("mailbox_deliverability_unconfirmed");
+  if (c.email) {
+    if (contactEvidence.personEmailLinked !== true) {
+      contact.push("person_email_link_unverified");
+    }
+    if (contactEvidence.mailboxVerificationStatus !== "VALID") {
+      contact.push("mailbox_deliverability_unconfirmed");
+    }
   }
   const stage = !c.email ? QUALIFICATION_STAGES.QUALIFIED :
     contact.length ? QUALIFICATION_STAGES.CONTACT_REVIEW : QUALIFICATION_STAGES.DRAFT_READY;
