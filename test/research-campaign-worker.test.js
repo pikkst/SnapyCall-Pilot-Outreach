@@ -38,14 +38,18 @@ function fakeDatabase({ queued = true, member = true,
     },
     $executeRaw: async () => { events.push("concurrency-reserved"); return 1; },
     researchCampaignTask: {
-      count: async () => 0,
+      // Claim sees no uncertain tasks; after commit one queued task remains.
+      count: async ({ where }) => where.status === "QUEUED" ? 1 : 0,
       update: async () => { events.push("task-claimed"); },
       updateMany: async ({ data }) => {
         events.push("task-" + data.status.toLowerCase());
         return { count: failedCAS && data.status === "PAUSED" ? 0 : 1 };
       },
     },
-    researchCampaign: { updateMany: async () => ({ count: 1 }) },
+    researchCampaign: {
+      findFirst: async () => ({ targetCount: 100 }),
+      updateMany: async () => ({ count: 1 }),
+    },
     researchOwnerBudget: {},
     researchSpendReservation: {
       findUnique: async () => reservation ?? null,
@@ -66,7 +70,9 @@ function fakeDatabase({ queued = true, member = true,
       update: async () => ({}),
     },
     auditEvent: { create: async () => ({ id: "audit" }) },
-    researchCampaignObservation: { createMany: async ({ data }) => {
+    researchCampaignObservation: {
+      count: async () => 1,
+      createMany: async ({ data }) => {
       events.push("evidence-saved");
       assert.equal(data[0].status, "UNVERIFIED");
       return { count: data.length };

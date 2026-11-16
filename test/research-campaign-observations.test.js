@@ -49,11 +49,17 @@ test("task completion and evidence writing share a transaction and dedupe", asyn
   const calls = [];
   const db = { $transaction: async callback => callback({
     $queryRaw: async () => [{ id: "campaign-1" }],
-    researchCampaignTask: { updateMany: async input => {
-      calls.push(["fence", input.where.leaseToken, input.data.status]);
-      return { count: 1 };
-    } },
-    researchCampaignObservation: { createMany: async input => {
+    researchCampaign: { findFirst: async () => ({ targetCount: 100 }) },
+    researchCampaignTask: {
+      count: async input => input.where.status === "QUEUED" ? 1 : 0,
+      updateMany: async input => {
+        calls.push(["fence", input.where.leaseToken, input.data.status]);
+        return { count: 1 };
+      },
+    },
+    researchCampaignObservation: {
+      count: async () => 1,
+      createMany: async input => {
       calls.push(["insert", input.data.length, input.skipDuplicates]);
       assert.equal(input.data[0].campaignId, "campaign-1");
       assert.equal(input.data[0].taskId, "task-1");
