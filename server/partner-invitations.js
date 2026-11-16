@@ -13,7 +13,7 @@ export function invitationEmailConfig(env = process.env) {
       redirect.search || redirect.hash || redirect.pathname !== "/api/auth/google/callback") {
     throw new Error("Invalid partner invitation login origin");
   }
-  return { apiKey, from, loginUrl: new URL("/", redirect.origin).toString() };
+  return { apiKey, from, loginUrl: new URL("/api/auth/google/start", redirect.origin).toString() };
 }
 
 function escapeHtml(value) {
@@ -28,7 +28,7 @@ export function createInvitationEmail({ from, loginUrl }, { email, workspace }) 
     "Workspace: " + workspace,
     "Invited Google account: " + email,
     "",
-    "Sign in using the invited Google account:",
+    "Activate your workspace access by signing in with the invited Google account:",
     loginUrl,
     "",
     "If you were not expecting this invitation, you can ignore this email.",
@@ -36,7 +36,7 @@ export function createInvitationEmail({ from, loginUrl }, { email, workspace }) 
   const html = `<p>You have been invited to <strong>SnapyCall Pilot Outreach</strong>.</p>
 <p>Workspace: <strong>${escapeHtml(workspace)}</strong></p>
 <p>Invited Google account: ${escapeHtml(email)}</p>
-<p><a href="${escapeHtml(loginUrl)}">Sign in with Google</a> using the invited account.</p>
+<p><a href="${escapeHtml(loginUrl)}">Activate workspace access with Google</a> using the invited account.</p>
 <p>If you were not expecting this invitation, you can ignore this email.</p>`;
   return { from, to: [email], subject: "Invitation to SnapyCall Pilot Outreach", html, text };
 }
