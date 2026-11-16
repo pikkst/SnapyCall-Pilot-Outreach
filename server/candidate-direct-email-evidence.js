@@ -136,7 +136,7 @@ export async function inspectAndStoreDirectEmailObservation(db, {
 }
 
 // Reads must never trust a snapshot for a later changed address or profile.
-export function visibleDirectEmailObservation(candidate, observation) {
+export function visibleDirectEmailObservation(candidate, observation, now = new Date()) {
   if (!candidate || !observation ||
       normalizedEmail(candidate.email) !== observation.emailNormalized ||
       candidate.name !== observation.personName ||
@@ -147,7 +147,8 @@ export function visibleDirectEmailObservation(candidate, observation) {
   const reviewed = observation.status === "PERSON_EMAIL_REVIEWED" &&
     observation.reviewedAt instanceof Date &&
     observation.reviewedAt >= observation.inspectedAt &&
-    observation.reviewedAt.getTime() <= Date.now() &&
+    now instanceof Date && Number.isFinite(now.getTime()) &&
+    observation.reviewedAt <= now &&
     typeof observation.reviewedBy === "string";
   return Object.freeze({ status: observation.status,
     sourceUrl: observation.profileUrl, inspectedAt: observation.inspectedAt,
