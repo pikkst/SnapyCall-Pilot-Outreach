@@ -85,6 +85,54 @@ export async function commitCampaignResearchResult(db, claim, preview,
   });
 }
 
+// Presentation-only state derivation. Never mutate a campaign based on a
+// dashboard read; the paid executor must persist authoritative transitions.
+export function deriveCampaignOperationalState(campaign, now = new Date()) {
+  if (!campaign || !Array.isArray(campaign.tasks) ||
+      !Number.isInteger(campaign.targetCount) || campaign.targetCount < 1 ||
+      !Number.isInteger(campaign._count?.observations) ||
+      campaign._count.observations < 0 ||
+      !(now instanceof Date) || !Number.isFinite(now.getTime())) {
+    throw new TypeError("Invalid campaign state snapshot");
+  }
+  const allowed = new Set(["QUEUED", "RUNNING", "COMPLETED", "PAUSED",
+    "FAILED", "CANCELLED"]);
+  if (campaign.tasks.some(task => !allowed.has(task.status))) {
+    throw new TypeError("Invalid campaign task state");
+  }
+  const pending = campaign.tasks.filter(task => task.status === "QUEUED");
+  const running = campaign.tasks.filter(task => task.status === "RUNNING");
+  const unresolved = campaign.tasks.filter(task => task.status === "PAUSED" ||
+    task.status === "FAILED");
+  const expired = running.filter(task => !task.leaseUntil ||
+    !(task.leaseUntil instanceof Date) || task.leaseUntil.getTime() <= now.getTime());
+  const targetReached = campaign._count.observations >= campaign.targetCount;
+  if (campaign.status === "CANCELLED") {
+    return { operationalState: "CANCELLED", nextAction: "NONE",
+      expiredLeases: expired.length, needsReconciliation: expired.length > 0 };
+  }
+  // A paid provider call can already have been billed after an expired lease.
+  // A campaign must never silently replay this work or report it as complete.
+  if (expired.length) return { operationalState: "RECOVERY_REQUIRED",
+    nextAction: "RECONCILE_EXPIRED_LEASES", expiredLeases: expired.length,
+    needsReconciliation: true };
+  if (unresolved.length) return { operationalState: "PAUSED_REVIEW",
+    nextAction: "REVIEW_FAILED_TASKS", expiredLeases: 0,
+    needsReconciliation: true };
+  if (running.length) return { operationalState: "RUNNING",
+    nextAction: "CHECK_PROGRESS", expiredLeases: 0,
+    needsReconciliation: false };
+  if (targetReached) return { operationalState: "TARGET_REACHED",
+    nextAction: pending.length ? "STOP_REMAINING_TASKS" : "FINALIZE_CAMPAIGN",
+    expiredLeases: 0, needsReconciliation: false };
+  if (!pending.length) return { operationalState: "PARTIAL",
+    nextAction: "FINALIZE_CAMPAIGN", expiredLeases: 0,
+    needsReconciliation: false };
+  return { operationalState: "READY",
+    nextAction: "EXECUTE_BOUNDED_TASK", expiredLeases: 0,
+    needsReconciliation: false };
+}
+
 export function summarizeCampaignProgress(campaign) {
   if (!campaign || !Array.isArray(campaign.tasks) ||
       !Number.isInteger(campaign.targetCount) || campaign.targetCount < 1 ||
@@ -108,6 +156,7 @@ export function summarizeCampaignProgress(campaign) {
   const unique = campaign._count.observations;
   return Object.freeze({
     id: campaign.id, status: campaign.status, targetCount: campaign.targetCount,
+    ...deriveCampaignOperationalState(campaign),
     uniqueSourcedCandidates: unique,
     targetReached: unique >= campaign.targetCount,
     rawCandidateObservations: rawObservations,
