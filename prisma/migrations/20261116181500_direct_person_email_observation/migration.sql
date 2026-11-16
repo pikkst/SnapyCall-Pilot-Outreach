@@ -4,6 +4,7 @@ CREATE TABLE "CandidateDirectEmailObservation" (
   "id" TEXT NOT NULL,
   "workspaceId" TEXT NOT NULL,
   "candidateId" TEXT NOT NULL,
+  "personName" TEXT NOT NULL,
   "emailNormalized" TEXT NOT NULL,
   "profileUrl" TEXT NOT NULL,
   "evidenceDigest" TEXT NOT NULL,
