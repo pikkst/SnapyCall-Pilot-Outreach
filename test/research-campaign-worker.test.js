@@ -91,6 +91,15 @@ function fakeDatabase({ queued = true, member = true,
     researchRunLease: { updateMany: async () => {
       events.push("concurrency-released"); return { count: 1 };
     } },
+    auditEvent: { create: async ({ data }) => {
+      events.push("diagnostic-audited");
+      assert.equal(data.action, "research.campaign.evidence.rejected");
+      assert.deepEqual(data.metadata, {
+        workspaceId, campaignId, phase: "EVIDENCE_VALIDATION",
+        code: "NO_VERIFIABLE_GROUNDING", provider: "gemini",
+        billedCallPossible: true, automaticRetryAllowed: false,
+      });
+    } },
   };
   const search = async ({ query, limit, provider, model, apiKey }) => {
     events.push("provider-called");
@@ -100,6 +109,11 @@ function fakeDatabase({ queued = true, member = true,
     assert.equal(model, "gemini-2.5-flash");
     assert.equal(apiKey, "test-only-provider-key");
     if (providerResult === "fails") throw new Error("Provider request timed out");
+    if (providerResult === "no-grounding") {
+      throw Object.assign(new Error("Sanitized no-grounding failure"), {
+        code: "NO_VERIFIABLE_GROUNDING", phase: "EVIDENCE_VALIDATION",
+      });
+    }
     const url = "https://example.org/people/ada";
     return {
       candidates: [{ name: "Ada Expert", category: "AI_AUTOMATION",
@@ -213,4 +227,24 @@ test("failed settlement never claims successful or safely paused execution", asy
   assert.equal(output.status, "RECONCILIATION_REQUIRED");
   assert.equal(output.code, "RESEARCH_SPEND_RECONCILIATION_REQUIRED");
   assert.equal(getReservation().status, "RESERVED");
+});
+
+test("paid but uncited Gemini response pauses, audits reason and never repeats", async () => {
+  const { db, events, search, getReservation } =
+    fakeDatabase({ providerResult: "no-grounding" });
+  const output = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.deepEqual({
+    status: output.status, code: output.code,
+    diagnosticCode: output.diagnosticCode, attempted: output.attempted,
+  }, {
+    status: "PAUSED", code: "BILLING_UNCERTAIN",
+    diagnosticCode: "NO_VERIFIABLE_GROUNDING", attempted: true,
+  });
+  assert.equal(getReservation().chargedCents, 200);
+  assert.equal(events.filter(x => x === "provider-called").length, 1);
+  assert.equal(events.filter(x => x === "diagnostic-audited").length, 1);
+  assert.ok(events.includes("task-paused"));
+  assert.ok(!events.includes("evidence-saved"));
 });
