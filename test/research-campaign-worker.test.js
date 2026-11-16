@@ -9,14 +9,19 @@ const ownerId = "cmabcdefghijklmnopqrstw";
 const now = new Date("2026-11-16T15:00:00.000Z");
 const input = { campaignId, workspaceId, ownerId, encryptionKey: "test-only-encryption-key" };
 
-function fakeDatabase({ queued = true, member = true, providerResult = "ok" } = {}) {
+function fakeDatabase({ queued = true, member = true,
+  memberAtCommit = true, providerResult = "ok" } = {}) {
   const events = [];
   let reservation;
+  let membershipLocks = 0;
   const tx = {
     $queryRaw: async (strings) => {
       const sql = strings.join("?");
-      if (sql.includes('SELECT "revokedAt" FROM "PartnerMembership"')) return member ?
-        [{ revokedAt: null }] : [];
+      if (sql.includes('SELECT "revokedAt" FROM "PartnerMembership"')) {
+        membershipLocks++;
+        return member && (membershipLocks === 1 || memberAtCommit) ?
+          [{ revokedAt: null }] : [];
+      }
       if (sql.includes('FROM "ResearchCampaign"')) return [{ id: campaignId }];
       if (sql.includes('FROM "ResearchCampaignTask"')) return queued ?
         [{ id: "task-1", attempts: 0, query: "AI workflow consultants", resultLimit: 10 }] : [];
@@ -153,4 +158,26 @@ test("missing BYOK settings fail before any charge", async () => {
   }), error => error instanceof ResearchWorkerPreflightError &&
     error.code === "RESEARCH_AI_SETTINGS_REQUIRED");
   assert.ok(!events.includes("money-reserved"));
+});
+
+test("revocation during provider call cannot commit evidence or refund uncertain usage", async () => {
+  const { db, events, search, getReservation } = fakeDatabase({
+    memberAtCommit: false,
+  });
+  const outcome = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(outcome.status, "PAUSED");
+  assert.equal(outcome.code, "BILLING_UNCERTAIN");
+  assert.equal(getReservation().chargedCents, 200);
+  assert.ok(!events.includes("evidence-saved"));
+  assert.ok(events.includes("task-paused"));
+});
+
+test("explicit task claim does not permit unverified workspace or owner input", async () => {
+  const { db, search } = fakeDatabase();
+  await assert.rejects(() => runOneCampaignTask(db, {
+    ...input, workspaceId: "attacker-controlled",
+  }, { search, decrypt: () => "test-only-provider-key", now: () => now }),
+  TypeError);
 });
