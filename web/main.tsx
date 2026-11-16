@@ -440,7 +440,9 @@ function App() {
         body: JSON.stringify({ monthlyLimitCents: researchBudget.monthlyLimitCents }),
       });
       setResearchBudget(budget);
-      setNotice("Monthly budget preference saved. Paid AI search is still disabled.");
+      setNotice(budget.enforcedForPaidSearch
+        ? "Monthly budget saved. Approved web research is available within your application spending limit."
+        : "Monthly budget saved. Research requires an approved model and enabled feature.");
     });
   }
 
@@ -1219,11 +1221,13 @@ function App() {
         </section>
         <section aria-label="Personal AI monthly budget" className="review-panel">
           <h2>Monthly research budget</h2>
-          <p className="muted">Optional USD limit for your personal API key across
-            every workspace. Your owner-wide USD preference is saved and the monetary ledger is
-            integrated with the search route. Paid research remains disabled
-            until each provider has verified hard cost bounds and complete
-            usage reconciliation. This is not an external billing cap.</p>
+          <p className="muted">Required USD application spending limit for your personal API key across
+            every workspace. The initial pilot allows only an explicitly priced Claude Sonnet 4.6
+            search, reserving up to $4.00 USD per attempt; other model/tool combinations remain blocked.
+            The application ledger is conservative, not a provider invoice or external billing cap.</p>
+          <p role="status">{researchBudget.enforcedForPaidSearch
+            ? "Approved web research is enabled within your saved application budget."
+            : "Web research is not yet available for this model, budget or environment."}</p>
           {budgetStatus === "loading" ? <p className="muted">Loading budget…</p>
             : budgetStatus === "error" ?
               <button type="button" className="secondary"
@@ -1251,8 +1255,9 @@ function App() {
                   Possible provider charges remain reserved. Contact an operator to
                   investigate; no automatic refund is performed.
                 </p>}
-                <p className="muted">These are internal estimates, not verified provider charges.
-                  They do not cap your external provider invoice. Paid research remains disabled.</p>
+                <p className="muted">These are conservative application estimates,
+                  not verified provider charges. They do not cap your external provider invoice.
+                  Uncertain usage retains its entire reserved amount.</p>
               </div>}
               <p className="muted">Provider invoices can differ from estimated usage.
                 No guaranteed billing cap is offered until provider-side
