@@ -650,6 +650,18 @@ const researchLimiter = rateLimit({
     error: "Research allows at most 2 requests per 60 seconds. Wait a minute before retrying. The daily attempt setting does not change this rate limit.",
   }),
 });
+// Campaign execution has its own abuse window. The original research limiter
+// also protects profile and mailbox inspections; unrelated manual reads must
+// not consume the campaign execution budget. Quota/spend checks remain
+// authoritative inside the database transaction for every paid call.
+const campaignExecutionLimiter = rateLimit({
+  windowMs: 60_000, limit: 10,
+  standardHeaders: "draft-7", legacyHeaders: false,
+  handler: (_req, res) => res.status(429).json({
+    code: "CAMPAIGN_EXECUTION_RATE_LIMIT",
+    error: "Campaign execution is temporarily rate limited. No provider call was started. Check progress before trying again.",
+  }),
+});
 // Preferences can be set only by the Google partner who owns the BYOK key.
 // An admin's separate AI setting never grants tenant research authorization.
 // Personal BYOK budget is denominated in USD, the providers' billing
@@ -1414,7 +1426,7 @@ app.get("/api/research-campaigns/:id/observations", candidateReadScope,
 // Explicitly invoked one-task executor. Both flags are OFF by default;
 // nothing schedules background work or permits autonomous paid requests.
 app.post("/api/research-campaigns/:id/execute-next",
-  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+  candidateReadScope, requireOrigin, campaignExecutionLimiter, safe(async (req, res) => {
     if (env.AI_AGENT_RESEARCH_ENABLED !== "true" ||
         env.AI_AGENT_EXECUTOR_ENABLED !== "true") {
       return res.status(503).json({ code: "RESEARCH_EXECUTOR_DISABLED",
