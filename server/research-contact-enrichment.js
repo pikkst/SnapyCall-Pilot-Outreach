@@ -1,7 +1,7 @@
 // Bounded, optional enrichment stage for a provider-cited expert preview.
 // Independent page inspection is never proof of an individual person's email.
 import { retrieveCitedPublicPage } from "./research-public-pages.js";
-import { observedPublicBusinessContacts } from "./research-contact-evidence.js";
+import { observedPublicBusinessContacts, observedPublicNamedContacts } from "./research-contact-evidence.js";
 import { publicCitationUrl } from "./research-evidence.js";
 import { corroborateCandidateNames } from "./research-profile-corroboration.js";
 import { associateBusinessContactsWithCandidates, findCandidateIdentityCollisions, orderCandidatesForEvidenceReview } from "./research-contact-attribution.js";
@@ -47,6 +47,10 @@ export async function inspectResearchPreview(preview, {
   }
   return {
     publicBusinessContacts: contacts,
+    publicNamedContactObservations: observedPublicNamedContacts({
+      trustedPages: inspectedPages, citationUrls: inspectedUrls,
+      candidates: preview.candidates,
+    }),
     contactAssociations: associateBusinessContactsWithCandidates(preview.candidates, contacts),
     identityCollisions: findCandidateIdentityCollisions(preview.candidates),
     profileObservations: corroborateCandidateNames(preview.candidates, inspectedPages),
