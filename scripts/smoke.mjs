@@ -89,8 +89,11 @@ try {
     body: JSON.stringify({ email: env.ADMIN_EMAIL, password: "integration-only-strong-password" }),
   });
   assert.equal(login.status, 200);
-  cookie = login.headers.get("set-cookie")?.split(";")[0];
+  const loginCookies = login.headers.getSetCookie();
+  cookie = loginCookies.find(entry => entry.startsWith("pilot_session="))?.split(";")[0];
   assert.ok(cookie?.startsWith("pilot_session="));
+  assert.ok(loginCookies.some(entry => /^pilot_partner_session=;/.test(entry)),
+    "Admin login must clear any previous partner cookie, not depend on Set-Cookie ordering");
 
   // Bootstrap persists a hash and never exposes the plaintext password.
   const { PrismaClient } = await import("@prisma/client");
@@ -1087,11 +1090,30 @@ try {
     assert.notEqual(ownKeyRow.encryptedApiKey, "partner-personal-api-key-for-ci");
     const legacyAdminSettings = await call("/ai-settings", { headers: { cookie } });
     assert.equal((await legacyAdminSettings.json()).keyConfigured, false);
+    const dualCookie = cookie + "; " + partnerCookie;
     const ambiguousCookies = await call("/ai-settings", {
-      headers: { cookie: cookie + "; " + partnerCookie },
+      headers: { cookie: dualCookie },
     });
     assert.equal(ambiguousCookies.status, 409,
       "Concurrent admin and partner sessions must not fall back to admin AI key");
+    assert.equal((await call("/admin/partners", { headers: { cookie: dualCookie } })).status, 409,
+      "Dual cookies must not authorize any admin-only route");
+    const adminState = await (await call("/session", { headers: { cookie: dualCookie } })).json();
+    const partnerState = await (await call("/partner/session", { headers: { cookie: dualCookie } })).json();
+    assert.deepEqual(adminState, { authenticated: false, conflict: true });
+    assert.deepEqual(partnerState, { authenticated: false, conflict: true });
+    const adminSwitch = await call("/session", {
+      method: "POST",
+      headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD }),
+    });
+    assert.equal(adminSwitch.status, 200);
+    const switchCookies = adminSwitch.headers.getSetCookie();
+    assert.ok(switchCookies.some(entry => /^pilot_partner_session=;/.test(entry)),
+      "Successful admin sign-in must revoke the partner browser cookie");
+    assert.ok(switchCookies.some(entry => /^pilot_session=[^.]+\./.test(entry)),
+      "Successful admin sign-in must issue a new admin session");
+
 
 
     assert.equal((await call("/partner/google/connections")).status, 401,
