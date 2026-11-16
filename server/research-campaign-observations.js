@@ -136,9 +136,11 @@ export function deriveCampaignOperationalState(campaign, now = new Date()) {
   if (expired.length) return { operationalState: "RECOVERY_REQUIRED",
     action: "RECONCILE_EXPIRED_LEASES",
     expiredLeases: expired.length, needsReconciliation: true };
-  if (unresolved.length) return { operationalState: "PAUSED_REVIEW",
-    action: "REVIEW_FAILED_TASKS", expiredLeases: 0,
-    needsReconciliation: true };
+  if (unresolved.length || campaign.status === "PAUSED") {
+    return { operationalState: "PAUSED_REVIEW",
+      action: "REVIEW_FAILED_TASKS", expiredLeases: 0,
+      needsReconciliation: true };
+  }
   if (running.length) return { operationalState: "RUNNING",
     action: "CHECK_PROGRESS", expiredLeases: 0,
     needsReconciliation: false };
@@ -147,6 +149,11 @@ export function deriveCampaignOperationalState(campaign, now = new Date()) {
     needsReconciliation: false };
   if (!queued.length) return { operationalState: "PARTIAL",
     action: "FINALIZE_CAMPAIGN", expiredLeases: 0,
+    needsReconciliation: false };
+  const ready = queued.some(task => task.nextAttemptAt == null ||
+    (task.nextAttemptAt instanceof Date && task.nextAttemptAt <= now));
+  if (!ready) return { operationalState: "WAITING_RETRY",
+    action: "WAIT_FOR_NEXT_ELIGIBLE_TASK", expiredLeases: 0,
     needsReconciliation: false };
   return { operationalState: "READY",
     action: "EXECUTE_EXPLICIT_BOUNDED_SLICE", expiredLeases: 0,
