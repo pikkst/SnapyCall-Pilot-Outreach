@@ -10,3 +10,6 @@ export function reviewedSeedBatch(
   reviewedUrls: Record<string, string>,
   savedKeys: string[],
 ): ReviewedSeed[];
+
+export type DiscoverySeed = Pick<ReviewCandidate, "name" | "category"> & { key: string; discoverySeed: true; citationUrl: string };
+export function selectedDiscoverySeedBatch(candidates: ReviewCandidate[], selectedKeys: string[], savedKeys: string[]): DiscoverySeed[];
