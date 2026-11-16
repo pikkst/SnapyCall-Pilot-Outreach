@@ -22,6 +22,8 @@ model Candidate {
   region String?
   onlineEnglish Boolean @default(false)
   sourceUrl String?
+  // Unverified provider citation is not an identity or contact proof.
+  researchCitationUrl String?
   sourceCollectedAt DateTime @default(now())
   legalBasis String?
   contactReviewed Boolean @default(false)
