@@ -91,7 +91,7 @@ export const QUALIFICATION_STAGES = Object.freeze({
   REJECTED: "REJECTED",
 });
 
-export function qualificationDecision(candidate) {
+export function qualificationDecision(candidate, contactEvidence = {}) {
   const c = normalizeCandidate(candidate);
   const discovered = Boolean(candidate.discoveryKey);
   const rejected = ["REJECTED", "DISQUALIFIED"].includes(candidate.status);
@@ -118,6 +118,16 @@ export function qualificationDecision(candidate) {
   if (!c.email) contact.push("email_missing");
   if (!c.legalBasis) contact.push("legal_basis_missing");
   if (!c.contactReviewed) contact.push("contact_review_pending");
+  // Sender evidence is an independent, server-derived argument: never trust
+  // Candidate.contactReviewed or a client-supplied address as identity proof.
+  if (c.email) {
+    if (contactEvidence.personEmailLinked !== true) {
+      contact.push("person_email_link_unverified");
+    }
+    if (contactEvidence.mailboxVerificationStatus !== "VALID") {
+      contact.push("mailbox_deliverability_unconfirmed");
+    }
+  }
   const stage = !c.email ? QUALIFICATION_STAGES.QUALIFIED :
     contact.length ? QUALIFICATION_STAGES.CONTACT_REVIEW : QUALIFICATION_STAGES.DRAFT_READY;
   return Object.freeze({ stage, qualified: true, score: null,
@@ -132,8 +142,8 @@ export function scoreCandidate(candidate) {
 }
 
 // Drafting is a separate, stricter step; email sending is not implemented.
-export function outreachDecision(candidate) {
-  const decision = qualificationDecision(candidate);
+export function outreachDecision(candidate, contactEvidence = {}) {
+  const decision = qualificationDecision(candidate, contactEvidence);
   return Object.freeze({
     canDraft: decision.stage === QUALIFICATION_STAGES.DRAFT_READY,
     canSend: false,

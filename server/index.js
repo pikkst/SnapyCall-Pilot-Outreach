@@ -20,6 +20,8 @@ import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
+import { inspectAndStoreDirectEmailObservation } from "./candidate-direct-email-evidence.js";
+import { reviewCandidateDirectEmailEvidence, directEmailReviewSnapshot } from "./candidate-direct-email-review.js";
 import { inspectEmailDomain, onboardingEmailEligibility } from "./email-deliverability.js";
 import { inspectAndPersistCandidateDns, visibleCandidateDnsSnapshot } from "./candidate-email-dns.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
@@ -1121,6 +1123,75 @@ app.post("/api/candidates/:id/evidence", candidateReadScope, requireOrigin, safe
   });
   return res.status(result.status).json(result.body);
 }));
+// Independently inspect the candidate's existing public individual profile.
+// Only an explicit published Name + Email pair becomes REVIEW_REQUIRED evidence.
+// Client input cannot supply names, URLs, addresses, or inspection results.
+app.post("/api/candidates/:id/direct-email-evidence", candidateReadScope,
+  requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    z.object({}).strict().parse(req.body ?? {});
+    const outcome = await inspectAndStoreDirectEmailObservation(prisma, {
+      candidateId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(outcome.status).json(outcome.status === 200 ?
+      outcome : { code: outcome.code, error: "Person-email evidence unavailable" });
+  }));
+
+app.get("/api/candidates/:id/direct-email-evidence", candidateReadScope,
+  safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const row = await prisma.candidate.findFirst({
+      where: { id: req.params.id, workspaceId: req.candidateScope },
+      select: { id: true, name: true, email: true, expertProfileUrl: true },
+    });
+    if (!row) return res.status(404).json({ error: "Candidate not found" });
+    const stored = await prisma.candidateDirectEmailObservation.findUnique({
+      where: { candidateId: row.id },
+    });
+    res.set("Cache-Control", "no-store");
+    const snapshot = directEmailReviewSnapshot(row, stored);
+    return res.json({
+      candidateId: row.id,
+      observation: snapshot,
+      personEmailLinked: snapshot?.personEmailLinked === true,
+      usableAsContact: false,
+      onboardingEligible: false,
+      sendingEnabled: false,
+    });
+  }));
+
+// A reviewer confirms ONLY one immutable, independently inspected
+// Name + Email evidence snapshot; this never authorizes mailing.
+app.post("/api/candidates/:id/direct-email-evidence/review",
+  candidateReadScope, requireOrigin, safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const input = z.object({
+      expectedDigest: z.string().regex(/^[a-f0-9]{64}$/),
+      confirmsExactPersonEmailPair: z.literal(true),
+    }).strict().parse(req.body);
+    const result = await reviewCandidateDirectEmailEvidence(prisma, {
+      candidateId: req.params.id,
+      workspaceId: req.candidateScope, ownerId: identity.id,
+      expectedDigest: input.expectedDigest,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
 // Exact matches are review hints, not automatic identity merges. No name-only matches.
 // Scoped read-only preflight: DNS routing is not mailbox verification.
 // Never accepts arbitrary email input and never sends a probe or stores PII.
