@@ -20,7 +20,7 @@ test("partner invitations cannot send without configured sender and exact HTTPS 
   assert.deepEqual(invitationEmailConfig(env), {
     apiKey: env.RESEND_API_KEY,
     from: env.PARTNER_INVITE_FROM,
-    loginUrl: "https://staging.example.org/",
+    loginUrl: "https://staging.example.org/api/auth/google/start",
   });
   assert.throws(() => invitationEmailConfig({
     ...env, GOOGLE_REDIRECT_URI: "http://staging.example.org/api/auth/google/callback",
@@ -36,7 +36,9 @@ test("invitation content is bound to the invited account and HTML escaped", () =
   assert.match(message.text, /Workspace <research> & friends/);
   assert.match(message.html, /Workspace &lt;research&gt; &amp; friends/);
   assert.doesNotMatch(message.html, /<research>/);
-  assert.match(message.html, /https:\/\/staging.example.org\//);
+  assert.match(message.html, /https:\/\/staging.example.org\/api\/auth\/google\/start/);
+  assert.match(message.text, /Activate your workspace access/);
+  assert.match(message.html, /Activate workspace access with Google/);
 });
 
 test("transactional Resend send uses per-attempt idempotency and keeps credentials server-side", async () => {
