@@ -45,3 +45,23 @@ export function reviewedSeedBatch(candidates, reviewedKeys, reviewedUrls, savedK
   }
   return results;
 }
+
+export function selectedDiscoverySeedBatch(candidates, selectedKeys, savedKeys) {
+  if (!Array.isArray(candidates) || candidates.length > 20) return [];
+  const selected = new Set(selectedKeys);
+  const saved = new Set(savedKeys);
+  const seen = new Set();
+  const output = [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate.name !== "string" ||
+        typeof candidate.category !== "string" ||
+        typeof candidate.sourceUrl !== "string") continue;
+    const key = reviewedCandidateKey(candidate);
+    if (!selected.has(key) || saved.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    // The original provider citation is not a reviewed profile or consent.
+    output.push({ key, discoverySeed: true, name: candidate.name,
+      category: candidate.category, citationUrl: candidate.sourceUrl });
+  }
+  return output;
+}
