@@ -1555,24 +1555,24 @@ function App() {
                       <div className="metric"><strong>{workspaceCandidates.filter(c =>
                         c.contactVerification?.usableAsContact === true).length}</strong><span>Usable contacts</span></div>
                     </div>
-                    <div className="table-scroll"><table><thead><tr>
+                    <div className="table-scroll candidate-pipeline-scroll"><table className="candidate-pipeline-table"><thead><tr>
                       <th>Candidate</th><th>Category</th><th>Region</th>
                       <th>Person-email</th><th>Mailbox</th><th>Next action</th><th>Review</th>
                     </tr></thead><tbody>
                       {workspaceCandidates.map(c => <tr key={c.id}>
-                        <td><strong>{c.name}</strong><small>{c.email ?? "No email"}</small></td>
-                        <td>{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td>
-                        <td>{c.region ?? "Unconfirmed"}</td>
-                        <td>{c.contactVerification?.personEmail === "REVIEWED"
+                        <td data-label="Candidate"><strong>{c.name}</strong><small>{c.email ?? "No email"}</small></td>
+                        <td data-label="Category">{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td>
+                        <td data-label="Region">{c.region ?? "Unconfirmed"}</td>
+                        <td data-label="Person-email">{c.contactVerification?.personEmail === "REVIEWED"
                           ? "Exact link reviewed" : c.contactVerification?.personEmail === "REVIEW_REQUIRED"
                           ? "Evidence awaiting review" : "No verified link"}</td>
-                        <td>{c.contactVerification?.mailbox === "VALID" ? "Provider valid" :
+                        <td data-label="Mailbox">{c.contactVerification?.mailbox === "VALID" ? "Provider valid" :
                           c.contactVerification?.mailbox === "INVALID" ? "Invalid" :
                           c.contactVerification?.mailbox === "RISKY" ? "Risky" : "Not confirmed"}</td>
-                        <td><strong>{stageNames[c.qualification.stage] ?? c.qualification.stage}</strong>
+                        <td data-label="Next action"><strong>{stageNames[c.qualification.stage] ?? c.qualification.stage}</strong>
                           {c.outreach.blockers.length > 0 && <small>{c.outreach.blockers.map(r =>
                             reasonNames[r] ?? r).join(" · ")}</small>}</td>
-                        <td>
+                        <td data-label="Review" className="candidate-pipeline-actions">
                           {c.expertProfileUrl && <button type="button" className="secondary"
                             disabled={busy || personEmailBusy}
                             onClick={() => void inspectCandidatePersonEmail(p.id, c.id)}>
@@ -1586,8 +1586,11 @@ function App() {
                             onClick={() => prepareIndependentResearch(c)}>Prepare AI criteria</button>
                           {c.discoveryKey && <button type="button" className="secondary"
                             disabled={busy || partnerReviewSaving} onClick={() => beginProfileReview(c)}>
-                            Review profile
+                            {c.expertProfileUrl ? "Review profile" : "Set expert profile"}
                           </button>}
+                          {!c.expertProfileUrl && <small className="candidate-pipeline-hint">
+                            Add a verified individual profile URL before inspecting named email.
+                          </small>}
                         </td>
                       </tr>)}
                       {!workspaceCandidates.length && <tr><td colSpan={7} className="empty">No candidates in this workspace.</td></tr>}
