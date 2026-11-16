@@ -10,7 +10,8 @@ const now = new Date("2026-11-16T15:00:00.000Z");
 const input = { campaignId, workspaceId, ownerId, encryptionKey: "test-only-encryption-key" };
 
 function fakeDatabase({ queued = true, member = true,
-  memberAtCommit = true, providerResult = "ok" } = {}) {
+  memberAtCommit = true, providerResult = "ok", failedCAS = false,
+  settlementUnavailable = false } = {}) {
   const events = [];
   let reservation;
   let membershipLocks = 0;
@@ -40,7 +41,7 @@ function fakeDatabase({ queued = true, member = true,
       update: async () => { events.push("task-claimed"); },
       updateMany: async ({ data }) => {
         events.push("task-" + data.status.toLowerCase());
-        return { count: 1 };
+        return { count: failedCAS && data.status === "PAUSED" ? 0 : 1 };
       },
     },
     researchCampaign: { updateMany: async () => ({ count: 1 }) },
@@ -53,6 +54,7 @@ function fakeDatabase({ queued = true, member = true,
         return reservation;
       },
       update: async ({ data }) => {
+        if (settlementUnavailable) throw new Error("Test settlement unavailable");
         events.push("money-settled");
         reservation = { ...reservation, ...data };
         return reservation;
@@ -180,4 +182,28 @@ test("explicit task claim does not permit unverified workspace or owner input", 
     ...input, workspaceId: "attacker-controlled",
   }, { search, decrypt: () => "test-only-provider-key", now: () => now }),
   TypeError);
+});
+
+test("failed task CAS never claims to have persisted a PAUSED status", async () => {
+  const { db, search, getReservation } = fakeDatabase({
+    providerResult: "fails", failedCAS: true,
+  });
+  const output = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(output.status, "RECOVERY_REQUIRED");
+  assert.equal(output.code, "TASK_LEASE_STATE_UNCONFIRMED");
+  assert.equal(getReservation().chargedCents, 200);
+});
+
+test("failed settlement never claims successful or safely paused execution", async () => {
+  const { db, search, getReservation } = fakeDatabase({
+    providerResult: "fails", settlementUnavailable: true,
+  });
+  const output = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(output.status, "RECONCILIATION_REQUIRED");
+  assert.equal(output.code, "RESEARCH_SPEND_RECONCILIATION_REQUIRED");
+  assert.equal(getReservation().status, "RESERVED");
 });
