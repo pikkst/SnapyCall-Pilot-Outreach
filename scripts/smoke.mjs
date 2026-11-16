@@ -89,8 +89,11 @@ try {
     body: JSON.stringify({ email: env.ADMIN_EMAIL, password: "integration-only-strong-password" }),
   });
   assert.equal(login.status, 200);
-  cookie = login.headers.get("set-cookie")?.split(";")[0];
+  const loginCookies = login.headers.getSetCookie();
+  cookie = loginCookies.find(entry => entry.startsWith("pilot_session="))?.split(";")[0];
   assert.ok(cookie?.startsWith("pilot_session="));
+  assert.ok(loginCookies.some(entry => /^pilot_partner_session=;/.test(entry)),
+    "Admin login must clear any previous partner cookie, not depend on Set-Cookie ordering");
 
   // Bootstrap persists a hash and never exposes the plaintext password.
   const { PrismaClient } = await import("@prisma/client");
@@ -316,6 +319,7 @@ try {
     assert.equal(partnerResponse.status, 200);
     const partner = await partnerResponse.json();
     assert.equal(partner.authenticated, true);
+    assert.equal(partner.userId, member.id, "Partner session must identify its own user for cross-tab isolation");
     assert.deepEqual(partner.partners.map(p => p.name).sort(), ["Second workspace", "Test Partner"]);
     assert.equal(await partnerDb.partnerUser.count({ where: { emailNormalized: "partner@example.org" } }), 1);
     assert.equal(await partnerDb.partnerMembership.count({ where: { userId: member.id } }), 2);
@@ -1087,11 +1091,90 @@ try {
     assert.notEqual(ownKeyRow.encryptedApiKey, "partner-personal-api-key-for-ci");
     const legacyAdminSettings = await call("/ai-settings", { headers: { cookie } });
     assert.equal((await legacyAdminSettings.json()).keyConfigured, false);
+    const dualCookie = cookie + "; " + partnerCookie;
     const ambiguousCookies = await call("/ai-settings", {
-      headers: { cookie: cookie + "; " + partnerCookie },
+      headers: { cookie: dualCookie },
     });
     assert.equal(ambiguousCookies.status, 409,
       "Concurrent admin and partner sessions must not fall back to admin AI key");
+    assert.equal((await call("/admin/partners", { headers: { cookie: dualCookie } })).status, 409,
+      "Dual cookies must not authorize any admin-only route");
+    const adminStateResponse = await call("/session", { headers: { cookie: dualCookie } });
+    const partnerStateResponse = await call("/partner/session", { headers: { cookie: dualCookie } });
+    assert.equal(adminStateResponse.headers.get("cache-control"), "no-store");
+    assert.equal(partnerStateResponse.headers.get("cache-control"), "no-store");
+    const adminState = await adminStateResponse.json();
+    const partnerState = await partnerStateResponse.json();
+    assert.deepEqual(adminState, { authenticated: false, conflict: true });
+    assert.deepEqual(partnerState, { authenticated: false, conflict: true });
+    const adminSwitch = await call("/session", {
+      method: "POST",
+      headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD }),
+    });
+    assert.equal(adminSwitch.status, 200);
+    const switchCookies = adminSwitch.headers.getSetCookie();
+    assert.ok(switchCookies.some(entry => /^pilot_partner_session=;/.test(entry)),
+      "Successful admin sign-in must revoke the partner browser cookie");
+    assert.ok(switchCookies.some(entry => /^pilot_session=[^.]+\./.test(entry)),
+      "Successful admin sign-in must issue a new admin session");
+    // A failed Google identity check must not replace an existing admin
+    // identity or set an unverified partner cookie.
+    const rejectedStart = await call("/auth/google/start", {
+      headers: { cookie }, redirect: "manual",
+    });
+    assert.equal(rejectedStart.status, 302);
+    const rejectedOAuth = new URL(rejectedStart.headers.get("location"));
+    const rejectedFlowCookie = rejectedStart.headers.getSetCookie()
+      .find(entry => entry.startsWith("pilot_google_flow="))?.split(";")[0];
+    assert.ok(rejectedFlowCookie);
+    const rejectedCallback = await call("/auth/google/callback?state=" +
+      encodeURIComponent(rejectedOAuth.searchParams.get("state")) + "&code=" +
+      encodeURIComponent(rejectedOAuth.searchParams.get("nonce") + ":wrong-email"), {
+      headers: { cookie: cookie + "; " + rejectedFlowCookie },
+      redirect: "manual",
+    });
+    assert.equal(rejectedCallback.status, 403);
+    assert.equal(rejectedCallback.headers.getSetCookie()
+      .some(entry => entry.startsWith("pilot_session=") ||
+        entry.startsWith("pilot_partner_session=")), false,
+    "Failed invitation/OIDC verification must not mutate either session");
+
+    // Exercise the real Google OIDC callback with the CI-only signed Google
+    // mock, entering OAuth from a browser carrying a privileged admin cookie.
+    // A valid invited Google account must replace, never inherit, admin access.
+    const oauthStart = await call("/auth/google/start", {
+      headers: { cookie }, redirect: "manual",
+    });
+    assert.equal(oauthStart.status, 302);
+    const oauthUrl = new URL(oauthStart.headers.get("location"));
+    const flowCookie = oauthStart.headers.getSetCookie()
+      .find(entry => entry.startsWith("pilot_google_flow="))?.split(";")[0];
+    assert.ok(flowCookie);
+    assert.equal(oauthUrl.origin, "https://accounts.google.com");
+    const callback = await call("/auth/google/callback?state=" +
+      encodeURIComponent(oauthUrl.searchParams.get("state")) + "&code=" +
+      encodeURIComponent(oauthUrl.searchParams.get("nonce") + ":good"), {
+      headers: { cookie: cookie + "; " + flowCookie },
+      redirect: "manual",
+    });
+    assert.equal(callback.status, 303, "Verified Google invitation should activate workspace");
+    const callbackCookies = callback.headers.getSetCookie();
+    assert.ok(callbackCookies.some(entry => /^pilot_session=;/.test(entry)),
+      "Google callback must remove an existing admin cookie");
+    const authenticatedPartner = callbackCookies.find(entry =>
+      entry.startsWith("pilot_partner_session="))?.split(";")[0];
+    assert.ok(authenticatedPartner);
+    assert.equal((await call("/admin/partners", {
+      headers: { cookie: authenticatedPartner },
+    })).status, 401, "Google partner must never acquire legacy admin privileges");
+    const identity = await (await call("/partner/session", {
+      headers: { cookie: authenticatedPartner },
+    })).json();
+    assert.equal(identity.authenticated, true);
+    assert.ok(identity.partners.some(workspace => workspace.id === firstWorkspace));
+
+
 
 
     assert.equal((await call("/partner/google/connections")).status, 401,
