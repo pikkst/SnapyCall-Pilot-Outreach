@@ -86,6 +86,7 @@ export async function runOneCampaignTask(db, {
   let settled = false;
   let invoked = false;
   let failure = null;
+  let diagnostic = null;
 
   const settle = async cents => {
     await db.$transaction(async tx => {
@@ -131,11 +132,18 @@ export async function runOneCampaignTask(db, {
       outcome = { status: "COMPLETED", attempted: true, taskId: claim.taskId,
         ...write, sendingEnabled: false };
     }
-  } catch {
-    // Any failure AFTER invoking a provider may already have incurred costs.
-    // No automatic replay is allowed, including 429, timeout and DB errors.
+  } catch (error) {
+    // A provider can bill for a completed answer lacking grounding. Keep
+    // BILLING_UNCERTAIN as the conservative lease/budget state; record only
+    // a stable, allow-listed diagnostic code for human reconciliation.
+    if (invoked && error?.code === "NO_VERIFIABLE_GROUNDING" &&
+        error?.phase === "EVIDENCE_VALIDATION") {
+      diagnostic = { code: "NO_VERIFIABLE_GROUNDING",
+        phase: "EVIDENCE_VALIDATION" };
+    }
     failure = invoked ? "BILLING_UNCERTAIN" : "UNCLASSIFIED";
-    outcome = { status: "PAUSED", attempted: invoked, code: failure };
+    outcome = { status: "PAUSED", attempted: invoked, code: failure,
+      ...(diagnostic ? { diagnosticCode: diagnostic.code } : {}) };
   } finally {
     if (!settled) {
       try { await settle(invoked ? null : 0); }
@@ -153,6 +161,22 @@ export async function runOneCampaignTask(db, {
         if (!state.applied) {
           outcome = { status: "RECOVERY_REQUIRED", attempted: invoked,
             code: "TASK_LEASE_STATE_UNCONFIRMED" };
+        } else if (diagnostic) {
+          // Non-critical audit: a telemetry outage must never undo the PAUSED
+          // lease or cause another potentially billable provider request.
+          try {
+            await db.auditEvent.create({ data: {
+              actorId: ownerId,
+              action: "research.campaign.evidence.rejected",
+              entityId: claim.taskId,
+              metadata: { workspaceId, campaignId,
+                phase: diagnostic.phase, code: diagnostic.code,
+                provider: setting.provider, billedCallPossible: true,
+                automaticRetryAllowed: false },
+            } });
+          } catch {
+            console.warn("[research-campaign] Sanitized diagnostic audit unavailable");
+          }
         }
       } catch {
         outcome = { status: "RECOVERY_REQUIRED", attempted: invoked,
