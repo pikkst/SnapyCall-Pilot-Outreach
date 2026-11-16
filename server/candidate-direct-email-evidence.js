@@ -27,11 +27,11 @@ function escaped(value) {
 export function classifyExplicitPersonEmailPage(candidate, page) {
   const url = publicCitationUrl(candidate?.expertProfileUrl);
   const visited = publicCitationUrl(page?.url);
-  const email = normalizedEmail(candidate?.email);
+  const priorEmail = candidate?.email == null ? null : normalizedEmail(candidate.email);
   const name = typeof candidate?.name === "string" ?
     candidate.name.normalize("NFKC").replace(/\s+/g, " ").trim() : "";
-  if (!url || url !== visited || !email || name.length < 5 ||
-      name.length > 160 || typeof page?.text !== "string" ||
+  if (!url || url !== visited || (candidate?.email != null && !priorEmail) ||
+      name.length < 5 || name.length > 160 || typeof page?.text !== "string" ||
       page.text.length > 200_000) {
     return { status: "UNVERIFIED", reason: "PROFILE_OR_ADDRESS_UNAVAILABLE" };
   }
@@ -40,7 +40,8 @@ export function classifyExplicitPersonEmailPage(candidate, page) {
   // A second address makes the page ambiguous even when it is not a usable
   // personal mailbox itself.
   const emails = [...new Set([...text.matchAll(EMAIL)].map(m => m[0].toLowerCase()))];
-  if (emails.length !== 1 || emails[0] !== email) {
+  const email = emails.length === 1 ? normalizedEmail(emails[0]) : null;
+  if (!email || (priorEmail && priorEmail !== email)) {
     return { status: "UNVERIFIED", reason: "ADDRESS_AMBIGUOUS_OR_NOT_PUBLISHED" };
   }
   const nameLabel = new RegExp("(?:^|\\s)(?:Name|Full name|Expert):\\s*" +
@@ -73,7 +74,8 @@ export async function inspectAndStoreDirectEmailObservation(db, {
   });
   if (!candidate) return { code: "CANDIDATE_NOT_FOUND", status: 404 };
   const profileUrl = publicCitationUrl(candidate.expertProfileUrl);
-  if (!profileUrl || !normalizedEmail(candidate.email)) {
+  const priorEmail = candidate.email == null ? null : normalizedEmail(candidate.email);
+  if (!profileUrl || (candidate.email != null && !priorEmail)) {
     return { status: 409, code: "DIRECT_PERSON_EMAIL_EVIDENCE_MISSING" };
   }
   let page;
@@ -98,8 +100,8 @@ export async function inspectAndStoreDirectEmailObservation(db, {
       FOR UPDATE`;
     if (rows.length !== 1) return { status: 404, code: "CANDIDATE_NOT_FOUND" };
     const current = rows[0];
-    if (normalizedEmail(current.email) !== finding.emailNormalized ||
-        current.name !== candidate.name ||
+    const currentEmail = current.email == null ? null : normalizedEmail(current.email);
+    if (currentEmail !== priorEmail || current.name !== candidate.name ||
         publicCitationUrl(current.expertProfileUrl) !== finding.profileUrl) {
       return { status: 409, code: "CANDIDATE_CHANGED_RECHECK_REQUIRED" };
     }
@@ -138,7 +140,10 @@ export async function inspectAndStoreDirectEmailObservation(db, {
 // Reads must never trust a snapshot for a later changed address or profile.
 export function visibleDirectEmailObservation(candidate, observation, now = new Date()) {
   if (!candidate || !observation ||
-      normalizedEmail(candidate.email) !== observation.emailNormalized ||
+      (candidate.email != null &&
+        normalizedEmail(candidate.email) !== observation.emailNormalized) ||
+      (observation.status === "PERSON_EMAIL_REVIEWED" &&
+        normalizedEmail(candidate.email) !== observation.emailNormalized) ||
       candidate.name !== observation.personName ||
       publicCitationUrl(candidate.expertProfileUrl) !== observation.profileUrl ||
       !["REVIEW_REQUIRED", "PERSON_EMAIL_REVIEWED"].includes(observation.status) ||
