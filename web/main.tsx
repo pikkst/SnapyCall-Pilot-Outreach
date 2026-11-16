@@ -5,6 +5,7 @@ import { manualIndependentResearch } from "../src/manual-research.js";
 import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch, selectedDiscoverySeedBatch } from "../src/research-review-batch.js";
 import { researchReadiness } from "../src/research-readiness.js";
 import { runApprovedCampaignBatch } from "../src/campaign-batch.js";
+import { describeCampaignBudget } from "../src/campaign-budget-status.js";
 import { singleAuthorizedWorkspaceId } from "../src/partner-workspace-navigation.js";
 
 type CampaignSummary = { id: string; query: string; targetCount: number; status: string; plannedTasks: number; uniqueSourcedCandidates: number; createdAt: string; providerCallsAuthorized: false };
@@ -1617,11 +1618,9 @@ function App() {
                           </>}
                         {campaignProgress.operationalState === "READY" && <>
                           <p>Personal AI key: {personalAi.keyConfigured ? "configured" : "missing"} ·
-                            Paid search budget: {researchBudget.enforcedForPaidSearch &&
-                              researchBudget.monthlyLimitCents != null
-                              ? "$" + (researchBudget.monthlyLimitCents / 100).toFixed(2)
-                              : "not configured"} ·
-                            Remaining daily requests: {researchLimits.dailyLimit} limit
+                            {describeCampaignBudget(researchBudget,
+                              personalAi.keyConfigured).message} ·
+                            Daily research attempt limit: {researchLimits.dailyLimit}
                             (shared across manual and campaign research).</p>
                           <p className="muted">One campaign run continues through
                             the remaining {campaignProgress.tasks.queued} queued tasks
@@ -1660,10 +1659,17 @@ function App() {
                             }}>
                             Stop run after current task ({campaignBatchCompleted} complete)
                           </button>}
-                          {(!personalAi.keyConfigured ||
-                            !researchBudget.enforcedForPaidSearch) &&
-                            <p className="muted">Configure your personal AI key and
-                              monthly paid research budget in Settings first.</p>}
+                          {(budgetStatus !== "ready" || personalAiStatus !== "ready") &&
+                            <p className="muted" role="status">Research budget or AI key
+                              status is loading or unavailable. Refresh Settings
+                              before initiating a paid call.</p>}
+                          {budgetStatus === "ready" && personalAiStatus === "ready" &&
+                            describeCampaignBudget(researchBudget,
+                              personalAi.keyConfigured).code !== "READY" &&
+                            <p role="status">Action required: {describeCampaignBudget(
+                              researchBudget, personalAi.keyConfigured).message}
+                              {" "}Review your application budget and spend ledger in AI settings.
+                              No automatic budget increase or refund is performed.</p>}
                         </>}
                         <button type="button" className="secondary"
                           onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
@@ -1713,7 +1719,10 @@ function App() {
                   <h3>Find experts with AI web search</h3>
                   <p className="muted">Describe the type of experts you need. Run a source-backed search,
                     then select candidates to save in your review queue. A single search supports up to
-                    20 results; automated 100+ campaigns are not available yet.</p>
+                    20 results. For 100-candidate discovery campaigns, use
+                    Dashboard → Research campaigns. Campaign findings are not
+                    automatically converted into reviewed Candidate records or
+                    verified email contacts.</p>
                   <details className="research-technical-details">
                     <summary>Search limits and costs</summary>
                     <p className="muted">Paid public-web research with your selected
