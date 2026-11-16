@@ -357,7 +357,7 @@ app.get("/api/partner/session", safe(async (req, res) => {
   const user = await partnerIdentity(req);
   if (!user) return res.json({ authenticated: false });
   return res.json({
-    authenticated: true, displayName: user.displayName,
+    authenticated: true, userId: user.id, displayName: user.displayName,
     partners: user.memberships.map(m => ({ id: m.partner.id, name: m.partner.name, role: m.role })),
   });
 }));
