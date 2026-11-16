@@ -49,7 +49,7 @@ test("unreviewed suggestions and invalid user-provided sources never enter batch
   const disallowed = [
     "http://example.org/profile", "https://localhost/profile",
     "https://127.0.0.1/profile", "https://[::1]/",
-    "https://user:pass@example.org/", "https://example.org:443/profile",
+    "https://user:pass@example.org/", "https://example.org:444/profile",
     "https://vertexaisearch.cloud.google.com/grounding-api-redirect/opaque",
     "javascript:alert(1)", "https://org.invalid/path", "https://example.org/" + "a".repeat(2049),
   ];
