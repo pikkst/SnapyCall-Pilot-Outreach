@@ -36,7 +36,10 @@ export function classifyExplicitPersonEmailPage(candidate, page) {
     return { status: "UNVERIFIED", reason: "PROFILE_OR_ADDRESS_UNAVAILABLE" };
   }
   const text = page.text.normalize("NFKC").replace(/\s+/g, " ").trim();
-  const emails = [...new Set([...text.matchAll(EMAIL)].map(m => normalizedEmail(m[0])).filter(Boolean))];
+  // Count ALL published mailboxes, including generic organization inboxes.
+  // A second address makes the page ambiguous even when it is not a usable
+  // personal mailbox itself.
+  const emails = [...new Set([...text.matchAll(EMAIL)].map(m => m[0].toLowerCase()))];
   if (emails.length !== 1 || emails[0] !== email) {
     return { status: "UNVERIFIED", reason: "ADDRESS_AMBIGUOUS_OR_NOT_PUBLISHED" };
   }
