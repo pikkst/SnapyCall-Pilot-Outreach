@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeCampaignObservations, commitCampaignResearchResult,
-  summarizeCampaignProgress, CampaignLeaseConflict
+  summarizeCampaignProgress, deriveCampaignOperationalState, CampaignLeaseConflict
 } from "../server/research-campaign-observations.js";
 
 const url1 = "https://example.org/expert/ada";
@@ -108,4 +108,60 @@ test("progress distinguishes unique candidates from raw observations", () => {
     _count: { observations: 1 },
     tasks: [{ status: "FORGED", observedCount: 0, resultLimit: 10 }],
   }));
+});
+
+test("operational state never hides an expired paid worker lease", () => {
+  const now = new Date("2026-11-16T14:00:00.000Z");
+  const input = { id: "campaign-x", status: "RUNNING", targetCount: 100,
+    _count: { observations: 100 }, tasks: [
+      { status: "RUNNING", leaseUntil: new Date(now.getTime() - 1) },
+      { status: "QUEUED" },
+    ] };
+  assert.deepEqual(deriveCampaignOperationalState(input, now), {
+    operationalState: "RECOVERY_REQUIRED",
+    nextAction: "RECONCILE_EXPIRED_LEASES",
+    expiredLeases: 1, needsReconciliation: true,
+  });
+  assert.equal(deriveCampaignOperationalState({ ...input, tasks: [
+    { status: "RUNNING", leaseUntil: null },
+  ] }, now).operationalState, "RECOVERY_REQUIRED");
+});
+
+test("state distinguishes completed target, partial exhaustion, paused work and cancelled", () => {
+  const snapshot = { id: "campaign-x", status: "RUNNING",
+    targetCount: 100, _count: { observations: 101 },
+    tasks: [{ status: "COMPLETED" }, { status: "QUEUED" }] };
+  let state = deriveCampaignOperationalState(snapshot);
+  assert.equal(state.operationalState, "TARGET_REACHED");
+  assert.equal(state.nextAction, "STOP_REMAINING_TASKS");
+  state = deriveCampaignOperationalState({ ...snapshot, tasks: [{ status: "COMPLETED" }] });
+  assert.equal(state.nextAction, "FINALIZE_CAMPAIGN");
+  state = deriveCampaignOperationalState({ ...snapshot,
+    _count: { observations: 83 }, tasks: [{ status: "COMPLETED" }] });
+  assert.equal(state.operationalState, "PARTIAL");
+  state = deriveCampaignOperationalState({ ...snapshot, tasks: [
+    { status: "PAUSED" }, { status: "QUEUED" },
+  ] });
+  assert.equal(state.operationalState, "PAUSED_REVIEW");
+  assert.equal(state.needsReconciliation, true);
+  state = deriveCampaignOperationalState({ ...snapshot, status: "CANCELLED", tasks: [
+    { status: "CANCELLED" },
+  ] });
+  assert.equal(state.operationalState, "CANCELLED");
+  state = deriveCampaignOperationalState({ ...snapshot,
+    _count: { observations: 0 }, tasks: [{ status: "QUEUED" }] });
+  assert.equal(state.operationalState, "READY");
+});
+
+test("progress includes recovery signals but does not change persisted job state", () => {
+  const p = summarizeCampaignProgress({
+    id: "campaign-x", status: "RUNNING", targetCount: 100,
+    _count: { observations: 30 }, tasks: [{
+      status: "RUNNING", observedCount: 0, resultLimit: 10,
+      leaseUntil: new Date("2020-01-01T00:00:00Z"),
+    }],
+  });
+  assert.equal(p.status, "RUNNING");
+  assert.equal(p.operationalState, "RECOVERY_REQUIRED");
+  assert.equal(p.needsReconciliation, true);
 });
