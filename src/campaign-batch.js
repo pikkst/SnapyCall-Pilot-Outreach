@@ -58,5 +58,14 @@ export async function runApprovedCampaignBatch({
     completed++;
     await onProgress(completed);
   }
+  // The last successful task may have finalized the campaign. Reflect the
+  // durable server state instead of describing a completed plan as a limit.
+  const final = await readState();
+  if (shouldStop()) return { status: "STOPPED", completed };
+  if (final?.operationalState !== "READY" || final?.needsReconciliation ||
+      final?.budgetReady !== true) {
+    return { status: "NOT_READY", completed,
+      operationalState: final?.operationalState ?? "UNAVAILABLE" };
+  }
   return { status: "RUN_LIMIT_REACHED", completed };
 }
