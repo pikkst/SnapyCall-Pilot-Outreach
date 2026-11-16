@@ -600,12 +600,32 @@ app.get("/api/admin/research-reconciliation", authenticated, safe(async (_req, r
     alert: evaluateResearchReconciliationAlert(overview),
   });
 }));
+async function ownerResearchBudgetReadiness(ownerId) {
+  const [snapshot, setting] = await Promise.all([
+    readOwnerBudgetSnapshot(prisma, ownerId),
+    prisma.aiSetting.findUnique({
+      where: { ownerId }, select: { provider: true, model: true },
+    }),
+  ]);
+  let worstCaseCents = null;
+  if (env.AI_WEB_RESEARCH_ENABLED === "true" && setting) {
+    try {
+      worstCaseCents = requireResearchPriceEnvelope(setting).worstCaseCents;
+    } catch (error) {
+      if (!(error instanceof ResearchPricingUnavailable)) throw error;
+    }
+  }
+  const remainingCents = snapshot.ledger.availableCents;
+  return { ...snapshot,
+    enforcedForPaidSearch: worstCaseCents !== null &&
+      Number.isSafeInteger(remainingCents) && remainingCents >= worstCaseCents };
+}
 app.get("/api/research-budget", aiOwnerAuthenticated, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
   if (!identity || identity.id !== req.aiOwnerId) {
     return res.status(403).json({ error: "Google partner session required" });
   }
-  return res.json(await readOwnerBudgetSnapshot(prisma, identity.id));
+  return res.json(await ownerResearchBudgetReadiness(identity.id));
 }));
 app.put("/api/research-budget", aiOwnerAuthenticated, requireOrigin, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
@@ -632,7 +652,7 @@ app.put("/api/research-budget", aiOwnerAuthenticated, requireOrigin, safe(async 
       entityId: identity.id, metadata: { currency: "USD", ...input },
     } });
   });
-  return res.json(await readOwnerBudgetSnapshot(prisma, identity.id));
+  return res.json(await ownerResearchBudgetReadiness(identity.id));
 }));
 app.get("/api/research-limits", aiOwnerAuthenticated, safe(async (req, res) => {
   const identity = await partnerIdentity(req);

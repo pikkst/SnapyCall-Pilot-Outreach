@@ -3,23 +3,62 @@ import assert from "node:assert/strict";
 import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
   calculateBoundedWorstCaseCents } from "../server/research-price-policy.js";
 
-test("research pricing preflight blocks every provider until a verified monetary policy is released", () => {
-  const configurations = [
-    { provider: "anthropic", model: "claude-sonnet-4-6" },
-    { provider: "openai", model: "gpt-4.1" },
-    { provider: "gemini", model: "gemini-2.5-flash" },
-    { provider: "anthropic", model: "arbitrary-custom-model" },
-    { provider: "unknown", model: "gpt-4.1" },
-  ];
-  for (const config of configurations) {
-    assert.throws(() => requireResearchPriceEnvelope(config), ResearchPricingUnavailable);
-  }
+test("only Claude Sonnet 4.6 has a dated server-authorized bounded pricing envelope", () => {
+  const policy = requireResearchPriceEnvelope({
+    provider: "anthropic", model: "claude-sonnet-4-6",
+  });
+  assert.equal(policy.provider, "anthropic");
+  assert.equal(policy.worstCaseCents, 400);
+  assert.equal(policy.pricing.billingUnit, "search_requests");
+  assert.equal(policy.usageLimits.maxSearchRequests, 3);
+  assert.equal(policy.usageLimits.maxOutputTokens, 3200);
+  assert.equal(policy.usageLimits.maxInputTokens, 1_000_000);
+  const modeledMax = calculateBoundedWorstCaseCents(policy.pricing, policy.usageLimits);
+  assert.equal(modeledMax, 308);
+  assert.ok(policy.worstCaseCents >= modeledMax);
+  assert.ok(policy.expiresAt > new Date("2026-11-16T00:00:00Z"));
 });
 
-test("caller-provided prices, approvals and forged identifiers cannot authorize billable search", () => {
+test("provider-specific paid search policies price Gemini grounded prompts and OpenAI tool calls", () => {
+  const openai = requireResearchPriceEnvelope({ provider: "openai", model: "gpt-4.1-mini" });
+  assert.equal(openai.worstCaseCents, 150);
+  assert.equal(openai.pricing.billingUnit, "search_requests");
+  assert.equal(openai.usageLimits.maxSearchRequests, 3);
+  assert.ok(calculateBoundedWorstCaseCents(openai.pricing, openai.usageLimits) <= 150);
+
+  const gemini = requireResearchPriceEnvelope({ provider: "gemini", model: "gemini-2.5-flash" });
+  assert.equal(gemini.worstCaseCents, 200);
+  assert.equal(gemini.pricing.billingUnit, "grounded_prompts");
+  assert.equal(gemini.usageLimits.maxGroundedPrompts, 1);
+  assert.ok(calculateBoundedWorstCaseCents(gemini.pricing, gemini.usageLimits) <= 200);
+  assert.equal(calculateVerifiedSpendCents(gemini, {
+    inputTokens: 1, outputTokens: 1, searchRequests: 1,
+  }), null, "Gemini must retain the full reservation, never infer prompt fees from query counts");
+});
+
+test("all other models remain blocked despite the pilot activation", () => {
+  for (const config of [
+    { provider: "openai", model: "gpt-4.1" },
+    { provider: "gemini", model: "gemini-3.1-pro-preview" },
+    { provider: "anthropic", model: "claude-sonnet-4-5" },
+    { provider: "anthropic", model: "arbitrary-custom-model" },
+    { provider: "unknown", model: "gpt-4.1" },
+  ]) assert.throws(() => requireResearchPriceEnvelope(config), ResearchPricingUnavailable);
+});
+
+test("caller-provided pricing cannot override an approved exact-model policy", () => {
+  const policy = requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-2.5-flash",
+    priceVersion: "user-supplied", worstCaseCents: 1, enforcementReady: false,
+    expiresAt: new Date("2099-01-01"),
+  });
+  assert.equal(policy.worstCaseCents, 200);
+  assert.equal(policy.priceVersion, "gemini-2.5-flash-grounded-prompt-2026-11-16");
+});
+
+test("caller approvals and forged model identifiers cannot authorize unavailable models", () => {
   for (const config of [
     { provider: "openai", model: "gpt-4.1", worstCaseCents: 1, enforcementReady: true },
-    { provider: "gemini", model: "gemini-2.5-flash", priceVersion: "user-supplied", expiresAt: new Date("2099-01-01") },
     { provider: "anthropic", model: "__proto__" },
     { provider: "anthropic", model: "" },
     { provider: "", model: "claude-sonnet-4-6" },

@@ -19,6 +19,7 @@ test("OpenAI Responses search uses own BYOK, native search and trusted citation 
     assert.equal(headers.authorization, "Bearer openai-test-user-key");
     assert.deepEqual(payload.tools, [{ type: "web_search", search_context_size: "low" }]);
     assert.equal(payload.max_output_tokens, 3200);
+    assert.equal(payload.max_tool_calls, 3);
     assert.match(payload.input, /public internet broadly/);
     assert.match(payload.input, /manual review/);
     return { status: "completed", usage: { input_tokens: 120, output_tokens: 90 },

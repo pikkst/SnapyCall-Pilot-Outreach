@@ -44,7 +44,7 @@ export async function searchWithOpenAI({ query, limit, model, apiKey }, post, si
   const result = await post("https://api.openai.com/v1/responses",
     { authorization: "Bearer " + apiKey },
     {
-      model, max_output_tokens: 3200,
+      model, max_output_tokens: 3200, max_tool_calls: 3,
       tools: [{ type: "web_search", search_context_size: "low" }],
       input: instructions(query, limit),
     }, signal);
