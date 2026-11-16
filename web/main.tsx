@@ -7,6 +7,15 @@ import { researchReadiness } from "../src/research-readiness.js";
 import { singleAuthorizedWorkspaceId } from "../src/partner-workspace-navigation.js";
 
 type CampaignSummary = { id: string; query: string; targetCount: number; status: string; plannedTasks: number; uniqueSourcedCandidates: number; createdAt: string; providerCallsAuthorized: false };
+type CampaignProgress = {
+  id: string; status: string; operationalState: string; action: string;
+  targetCount: number; uniqueSourcedCandidates: number;
+  rawCandidateObservations: number; duplicateObservations: number;
+  plannedTasks: number; expiredLeases: number; needsReconciliation: boolean;
+  tasks: { queued: number; running: number; completed: number;
+    paused: number; failed: number; cancelled: number };
+  contactVerification: "NOT_PERFORMED"; sendingEnabled: false;
+};
 type PartnerTab = "dashboard" | "candidates" | "discovery" | "drafts" | "profile" | "settings";
 type PartnerSession = { authenticated: boolean; conflict?: boolean; userId?: string; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
@@ -176,6 +185,7 @@ function App() {
   const [personalAiStatus, setPersonalAiStatus] = useState<"loading" | "ready" | "error">("loading");
 
   const workspaceRequest = useRef(0);
+  const campaignProgressRequest = useRef(0);
   const partnerEvidenceRequest = useRef(0);
   const partnerReviewRequest = useRef(0);
   const personEmailRequest = useRef(0);
@@ -198,6 +208,10 @@ function App() {
   const [workspaceDrafts, setWorkspaceDrafts] = useState<Draft[]>([]);
   const [workspaceCampaigns, setWorkspaceCampaigns] = useState<CampaignSummary[]>([]);
   const [campaignListStatus, setCampaignListStatus] = useState<"idle" | "ready" | "error">("idle");
+  const [campaignProgressId, setCampaignProgressId] = useState<string | null>(null);
+  const [campaignProgress, setCampaignProgress] = useState<CampaignProgress | null>(null);
+  const [campaignProgressStatus, setCampaignProgressStatus] =
+    useState<"idle" | "loading" | "ready" | "error">("idle");
   const [workspaceDataStatus, setWorkspaceDataStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [researchQuery, setResearchQuery] = useState("Find experienced English-speaking AI automation consultants offering online consultations");
   const [seedName, setSeedName] = useState("");
@@ -386,6 +400,10 @@ function App() {
   async function viewWorkspace(workspaceId: string) {
     // An earlier response must never render under a newly selected workspace.
     const generation = ++workspaceRequest.current;
+    ++campaignProgressRequest.current;
+    setCampaignProgressId(null);
+    setCampaignProgress(null);
+    setCampaignProgressStatus("idle");
     ++partnerEvidenceRequest.current;
     ++partnerReviewRequest.current;
     ++personEmailRequest.current;
@@ -448,6 +466,29 @@ function App() {
       void viewWorkspace(onlyWorkspaceId);
     }
   }, [partnerSession?.userId, onlyWorkspaceId]);
+
+  async function openCampaignProgress(workspaceId: string, campaignId: string) {
+    if (activeWorkspaceId !== workspaceId) return;
+    const workspaceGeneration = workspaceRequest.current;
+    const request = ++campaignProgressRequest.current;
+    setCampaignProgressId(campaignId);
+    setCampaignProgress(null);
+    setCampaignProgressStatus("loading");
+    try {
+      // This endpoint is strictly read-only and never invokes AI providers.
+      const snapshot = await api<CampaignProgress>("/research-campaigns/" +
+        encodeURIComponent(campaignId) + "/progress?workspaceId=" +
+        encodeURIComponent(workspaceId));
+      if (workspaceRequest.current !== workspaceGeneration ||
+          campaignProgressRequest.current !== request) return;
+      setCampaignProgress(snapshot);
+      setCampaignProgressStatus("ready");
+    } catch {
+      if (workspaceRequest.current !== workspaceGeneration ||
+          campaignProgressRequest.current !== request) return;
+      setCampaignProgressStatus("error");
+    }
+  }
 
   async function inspectCandidatePersonEmail(workspaceId: string, candidateId: string) {
     if (activeWorkspaceId !== workspaceId || personEmailBusy) return;
@@ -879,6 +920,10 @@ function App() {
     await execute(async () => {
       await api("/partner/session", { method: "DELETE" });
       ++workspaceRequest.current;
+      ++campaignProgressRequest.current;
+      setCampaignProgressId(null);
+      setCampaignProgress(null);
+      setCampaignProgressStatus("idle");
       setPartnerSession(null);
       setGmailStatus(null);
       setGmailStatusError(false);
@@ -1267,9 +1312,61 @@ function App() {
                     {campaignListStatus === "ready" && (workspaceCampaigns.length
                       ? <ul>{workspaceCampaigns.map(item => <li key={item.id}>
                           <strong>{item.query}</strong> — {item.status.toLowerCase()}
-                          <small>{item.uniqueSourcedCandidates} unique cited candidates / target {item.targetCount} · {item.plannedTasks} planned tasks · No automatic execution</small>
+                          <small>{item.uniqueSourcedCandidates} unique cited candidates /
+                            target {item.targetCount} · {item.plannedTasks} planned tasks ·
+                            No automatic execution</small>
+                          <button type="button" className="secondary"
+                            disabled={campaignProgressStatus === "loading"}
+                            onClick={() => void openCampaignProgress(p.id, item.id)}>
+                            {campaignProgressId === item.id && campaignProgressStatus === "loading"
+                              ? "Loading…" : "View progress"}
+                          </button>
                         </li>)}</ul>
                       : <p className="muted">No research campaigns planned in this workspace.</p>)}
+                    {campaignProgressId && <section className="review-panel"
+                      aria-label="Campaign research progress" aria-live="polite">
+                      <h4>Campaign progress</h4>
+                      {campaignProgressStatus === "loading" && <p role="status">
+                        Loading committed research progress…</p>}
+                      {campaignProgressStatus === "error" && <p role="alert">
+                        Progress could not be loaded.
+                        <button type="button" className="secondary"
+                          onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
+                          Retry</button></p>}
+                      {campaignProgressStatus === "ready" && campaignProgress && <>
+                        <p><strong>{campaignProgress.uniqueSourcedCandidates}</strong> unique
+                          cited candidates / target {campaignProgress.targetCount}</p>
+                        <progress aria-label="Sourced candidate target progress"
+                          max={campaignProgress.targetCount}
+                          value={Math.min(campaignProgress.uniqueSourcedCandidates,
+                            campaignProgress.targetCount)}/>
+                        <p>Operational status: <strong>{campaignProgress.operationalState}</strong></p>
+                        <p className="muted">Tasks: {campaignProgress.tasks.completed} complete ·
+                          {campaignProgress.tasks.queued} queued ·
+                          {campaignProgress.tasks.running} running ·
+                          {campaignProgress.tasks.paused} paused ·
+                          {campaignProgress.tasks.failed} failed</p>
+                        <p className="muted">{campaignProgress.duplicateObservations} duplicate
+                          research observations. These are discovery candidates,
+                          not verified person-email contacts.</p>
+                        {campaignProgress.needsReconciliation && <p role="alert">
+                          Manual reconciliation required. Expired worker leases:
+                          {" " + campaignProgress.expiredLeases}.
+                          Do not restart paid research until the spend ledger is checked.</p>}
+                        <p className="muted">Next step: {campaignProgress.action}.
+                          No email checks or messages were sent by this view.</p>
+                        <button type="button" className="secondary"
+                          onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
+                          Refresh progress</button>
+                      </>}
+                      <button type="button" className="secondary"
+                        onClick={() => {
+                          ++campaignProgressRequest.current;
+                          setCampaignProgressId(null);
+                          setCampaignProgress(null);
+                          setCampaignProgressStatus("idle");
+                        }}>Close</button>
+                    </section>}
                   </div>
                 </div>}
                 {partnerTab === "discovery" && <>
