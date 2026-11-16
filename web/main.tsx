@@ -1544,6 +1544,8 @@ function App() {
                     {campaignListStatus === "ready" && (workspaceCampaigns.length
                       ? <ul>{workspaceCampaigns.map(item => <li key={item.id}>
                           <strong>{item.query}</strong> — {item.status.toLowerCase()}
+                          <small>Campaign {item.id.slice(-6)} ·
+                            Created {new Date(item.createdAt).toLocaleString()}</small>
                           <small>{item.uniqueSourcedCandidates} unique cited candidates /
                             target {item.targetCount} · {item.plannedTasks} planned tasks ·
                             No automatic execution</small>
