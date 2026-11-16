@@ -4,6 +4,7 @@ import "./style.css";
 import { manualIndependentResearch } from "../src/manual-research.js";
 import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch, selectedDiscoverySeedBatch } from "../src/research-review-batch.js";
 import { researchReadiness } from "../src/research-readiness.js";
+import { runApprovedCampaignBatch } from "../src/campaign-batch.js";
 import { singleAuthorizedWorkspaceId } from "../src/partner-workspace-navigation.js";
 
 type CampaignSummary = { id: string; query: string; targetCount: number; status: string; plannedTasks: number; uniqueSourcedCandidates: number; createdAt: string; providerCallsAuthorized: false };
@@ -214,6 +215,11 @@ function App() {
   const [campaignTestBusy, setCampaignTestBusy] = useState(false);
   const [campaignTestNotice, setCampaignTestNotice] = useState("");
   const [campaignPaidConfirmed, setCampaignPaidConfirmed] = useState(false);
+  const [campaignBatchCount, setCampaignBatchCount] = useState(3);
+  const [campaignBatchCompleted, setCampaignBatchCompleted] = useState(0);
+  const campaignBatchProgressRef = useRef(0);
+  const batchInFlight = useRef(false);
+  const batchStopRequested = useRef(false);
   const [skipChargeConfirmed, setSkipChargeConfirmed] = useState(false);
   const campaignCreateIdempotency = useRef<string | null>(null);
   const [campaignProgressId, setCampaignProgressId] = useState<string | null>(null);
@@ -409,6 +415,8 @@ function App() {
     // An earlier response must never render under a newly selected workspace.
     const generation = ++workspaceRequest.current;
     ++campaignProgressRequest.current;
+    batchStopRequested.current = true;
+    setCampaignBatchCompleted(0);
     setCampaignTestBusy(false);
     setCampaignPaidConfirmed(false);
     setSkipChargeConfirmed(false);
@@ -522,7 +530,7 @@ function App() {
   }
 
   async function executeManualCampaignTask(workspaceId: string, campaignId: string) {
-    if (campaignTestBusy || !campaignPaidConfirmed ||
+    if (batchInFlight.current || campaignTestBusy || !campaignPaidConfirmed ||
         activeWorkspaceId !== workspaceId ||
         !personalAi.keyConfigured ||
         !researchBudget.enforcedForPaidSearch ||
@@ -530,29 +538,77 @@ function App() {
         researchBudget.reconciliation?.needsReview === true ||
         budgetStatus !== "ready" || personalAiStatus !== "ready") return;
     const generation = workspaceRequest.current;
+    const approvedMaxTasks = campaignBatchCount;
+    batchInFlight.current = true;
+    batchStopRequested.current = false;
+    setCampaignBatchCompleted(0);
+    campaignBatchProgressRef.current = 0;
     setCampaignTestBusy(true);
     setCampaignPaidConfirmed(false);
     setCampaignTestNotice("");
     try {
-      // One task per click deliberately avoids an unbounded paid loop.
-      await api("/research-campaigns/" + encodeURIComponent(campaignId) +
-        "/execute-next?workspaceId=" + encodeURIComponent(workspaceId), {
-        method: "POST", body: JSON.stringify({ maxTasks: 1 }),
+      const result = await runApprovedCampaignBatch({
+        maxTasks: approvedMaxTasks,
+        shouldStop: () => batchStopRequested.current ||
+          generation !== workspaceRequest.current,
+        readState: async () => {
+          const [progress, budget] = await Promise.all([
+            api<CampaignProgress>("/research-campaigns/" +
+              encodeURIComponent(campaignId) + "/progress?workspaceId=" +
+              encodeURIComponent(workspaceId)),
+            api<ResearchBudget>("/research-budget"),
+          ]);
+          if (generation === workspaceRequest.current) {
+            setCampaignProgress(progress);
+            setResearchBudget(budget);
+          }
+          return {
+            operationalState: progress.operationalState,
+            needsReconciliation: progress.needsReconciliation,
+            budgetReady: budget.enforcedForPaidSearch &&
+              budget.reconciliation?.needsReview !== true &&
+              budget.ledger?.pendingReservations === 0,
+          };
+        },
+        execute: async () => {
+          // Exactly one provider attempt per request; server enforces daily
+          // quota, price envelope, workspace ownership and lease fencing.
+          await api("/research-campaigns/" + encodeURIComponent(campaignId) +
+            "/execute-next?workspaceId=" + encodeURIComponent(workspaceId), {
+            method: "POST", body: JSON.stringify({ maxTasks: 1 }),
+          });
+        },
+        onProgress: completed => {
+          if (generation === workspaceRequest.current) {
+            setCampaignBatchCompleted(completed);
+            campaignBatchProgressRef.current = completed;
+            setCampaignTestNotice(completed + " / " + approvedMaxTasks +
+              " paid tasks completed in this approved batch.");
+          }
+        },
       });
-      if (generation !== workspaceRequest.current) return;
-      setCampaignTestNotice("One paid task finished. Review the sourced evidence before continuing.");
+      if (generation === workspaceRequest.current) {
+        setCampaignTestNotice(result.completed + " / " + approvedMaxTasks +
+          " tasks completed. " + (result.status === "BATCH_COMPLETED"
+            ? "Batch complete."
+            : result.status === "STOPPED"
+            ? "Stopped after the last finished task."
+            : "Campaign or budget requires review before continuing.") +
+          " No email messages were sent.");
+      }
     } catch (error) {
+      // No automatic retry, even for 429 or lost network responses.
       if (generation === workspaceRequest.current) setCampaignTestNotice(
-        "Execution stopped: " + (error instanceof Error ? error.message : "Unknown") +
-        ". Inspect progress and spend before any retry.");
+        "Batch stopped after " + campaignBatchProgressRef.current +
+        " completed tasks: " + (error instanceof Error ? error.message : "Unknown error") +
+        ". Check progress and spend before any further paid request.");
     } finally {
+      batchInFlight.current = false;
       if (generation === workspaceRequest.current) {
         setCampaignTestBusy(false);
-        // Refreshing is read-only and never replays a possibly chargeable call.
         await openCampaignProgress(workspaceId, campaignId);
-        try { await refreshCampaignList(workspaceId, generation); } catch {
-          setCampaignListStatus("error");
-        }
+        try { await refreshCampaignList(workspaceId, generation); }
+        catch { setCampaignListStatus("error"); }
         try {
           const budget = await api<ResearchBudget>("/research-budget");
           if (generation === workspaceRequest.current) setResearchBudget(budget);
@@ -1056,6 +1112,7 @@ function App() {
       await api("/partner/session", { method: "DELETE" });
       ++workspaceRequest.current;
       ++campaignProgressRequest.current;
+      batchStopRequested.current = true;
       setCampaignPaidConfirmed(false);
       setCampaignTestBusy(false);
       setCampaignTestNotice("");
