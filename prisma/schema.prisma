@@ -33,6 +33,7 @@ model Candidate {
   updatedAt DateTime @updatedAt
   drafts OutreachDraft[]
   evidence CandidateEvidence[]
+  emailVerification CandidateEmailVerification?
   @@unique([workspaceId, emailNormalized])
   @@unique([workspaceId, discoveryKey])
   @@index([workspaceId, createdAt])
@@ -106,6 +107,7 @@ model Partner {
   researchCampaigns ResearchCampaign[]
   drafts OutreachDraft[]
   candidateEvidence CandidateEvidence[]
+  emailVerifications CandidateEmailVerification[]
   googleConnections PartnerGoogleConnection[]
   createdAt DateTime @default(now())
 }
@@ -318,4 +320,24 @@ model ResearchCampaignObservation {
   @@unique([campaignId, evidenceKey])
   @@index([campaignId, observedAt, id])
   @@index([taskId])
+}
+
+model CandidateEmailVerification {
+  // DNS checks are domain-level evidence, never mailbox-level proof.
+  // One snapshot per Candidate; changing their email replaces the snapshot.
+  id String @id @default(cuid())
+  workspaceId String
+  workspace Partner @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  candidateId String @unique
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  emailNormalized String
+  checkType String @default("DNS_MX")
+  status String @default("UNKNOWN")
+  reason String
+  domainAcceptsMail Boolean?
+  checkedAt DateTime
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([workspaceId, expiresAt])
 }
