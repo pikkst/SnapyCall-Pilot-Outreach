@@ -160,3 +160,33 @@ test("Gemini bounded metadata still rejects pathological query and citation arra
     post: async () => makeResponse(["query"], Array(201).fill({ web: { uri: source } })),
   }));
 });
+
+test("third live Gemini shape with STOP and seven candidates but no groundingChunks fails closed", async () => {
+  const names = ["Rashad DuPaty", "Allie K. Miller", "Naman Modi",
+    "Tod Sacerdoti", "Robert Portillo", "Lilach Bullock", "Jay Mehta"];
+  const redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/example";
+  const text = "```json\\n" + JSON.stringify({
+    candidates: names.map(name => ({
+      name, category: "AI_AUTOMATION", sourceUrl: redirect,
+      rationale: "A named professional potentially offering AI automation consulting.",
+    })),
+  }) + "\\n```";
+  let calls = 0;
+  await assert.rejects(() => researchCandidates({
+    provider: "gemini", model: "gemini-2.5-flash",
+    apiKey: "test-owner-key", query,
+  }, { post: async () => {
+    calls++;
+    return { candidates: [{
+      finishReason: "STOP", content: { parts: [{ text }] },
+      groundingMetadata: {
+        webSearchQueries: ["AI consulting US", "AI automation Canada",
+          "North American AI expert"],
+        searchEntryPoint: { renderedContent: "<div>Search links</div>" },
+        // Critically: no provider-cited groundingChunks.
+      },
+    }], usageMetadata: { candidatesTokenCount: 1654 } };
+  } }), error => error?.code === "NO_VERIFIABLE_GROUNDING" &&
+    error?.phase === "EVIDENCE_VALIDATION");
+  assert.equal(calls, 1, "Never retry an already potentially billable search");
+});
