@@ -21,6 +21,7 @@ import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { inspectAndStoreDirectEmailObservation, visibleDirectEmailObservation } from "./candidate-direct-email-evidence.js";
+import { reviewCandidateDirectEmailEvidence, directEmailReviewSnapshot } from "./candidate-direct-email-review.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { normalizeDiscoveryLeadSeed } from "./discovery-lead-seed.js";
 import { partnerSelfProfileInput, publicPartnerSelfProfile } from "./partner-self-profile.js";
@@ -1158,12 +1159,34 @@ app.get("/api/candidates/:id/direct-email-evidence", candidateReadScope,
     res.set("Cache-Control", "no-store");
     return res.json({
       candidateId: row.id,
-      observation: visibleDirectEmailObservation(row, stored),
+      observation: directEmailReviewSnapshot(row, stored),
       personEmailLinked: false,
       usableAsContact: false,
       onboardingEligible: false,
       sendingEnabled: false,
     });
+  }));
+
+// A reviewer confirms ONLY one immutable, independently inspected
+// Name + Email evidence snapshot; this never authorizes mailing.
+app.post("/api/candidates/:id/direct-email-evidence/review",
+  candidateReadScope, requireOrigin, safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const input = z.object({
+      expectedDigest: z.string().regex(/^[a-f0-9]{64}$/),
+      confirmsExactPersonEmailPair: z.literal(true),
+    }).strict().parse(req.body);
+    const result = await reviewCandidateDirectEmailEvidence(prisma, {
+      candidateId: req.params.id,
+      workspaceId: req.candidateScope, ownerId: identity.id,
+      expectedDigest: input.expectedDigest,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
   }));
 
 // Exact matches are review hints, not automatic identity merges. No name-only matches.
