@@ -215,7 +215,6 @@ function App() {
   const [campaignTestBusy, setCampaignTestBusy] = useState(false);
   const [campaignTestNotice, setCampaignTestNotice] = useState("");
   const [campaignPaidConfirmed, setCampaignPaidConfirmed] = useState(false);
-  const [campaignBatchCount, setCampaignBatchCount] = useState(3);
   const [campaignBatchCompleted, setCampaignBatchCompleted] = useState(0);
   const campaignBatchProgressRef = useRef(0);
   const batchInFlight = useRef(false);
@@ -538,7 +537,11 @@ function App() {
         researchBudget.reconciliation?.needsReview === true ||
         budgetStatus !== "ready" || personalAiStatus !== "ready") return;
     const generation = workspaceRequest.current;
-    const approvedMaxTasks = campaignBatchCount;
+    // One approval covers only the currently queued work on this campaign.
+    // Server-side cost/identity/lease checks remain authoritative per call.
+    const approvedMaxTasks = Math.min(24, campaignProgress?.id === campaignId ?
+      campaignProgress.tasks.queued : 24);
+    if (approvedMaxTasks < 1) return;
     batchInFlight.current = true;
     batchStopRequested.current = false;
     setCampaignBatchCompleted(0);
@@ -578,22 +581,36 @@ function App() {
             method: "POST", body: JSON.stringify({ maxTasks: 1 }),
           });
         },
+        onWaiting: delay => {
+          if (generation === workspaceRequest.current) {
+            setCampaignTestNotice("Respecting the campaign rate limit (" +
+              Math.ceil(delay / 1000) + "s before the next task). " +
+              campaignBatchProgressRef.current + " tasks completed.");
+          }
+        },
         onProgress: completed => {
           if (generation === workspaceRequest.current) {
             setCampaignBatchCompleted(completed);
             campaignBatchProgressRef.current = completed;
             setCampaignTestNotice(completed + " / " + approvedMaxTasks +
-              " paid tasks completed in this approved batch.");
+              " research tasks completed in this run. Looking for the next eligible task.");
           }
         },
       });
       if (generation === workspaceRequest.current) {
+        const finalMessage = result.status === "STOPPED"
+          ? "Stopped at your request."
+          : result.status === "RUN_LIMIT_REACHED"
+          ? "Approved run limit reached. Check campaign status."
+          : result.operationalState === "COMPLETED"
+          ? "100 cited candidates reached."
+          : result.operationalState === "PARTIAL"
+          ? "All planned tasks finished below target. Review results."
+          : result.operationalState === "PAUSED_REVIEW"
+          ? "Provider response or billing needs manual review. No automatic retry."
+          : "Campaign or budget requires review before continuing.";
         setCampaignTestNotice(result.completed + " / " + approvedMaxTasks +
-          " tasks completed. " + (result.status === "BATCH_COMPLETED"
-            ? "Batch complete."
-            : result.status === "STOPPED"
-            ? "Stopped after the last finished task."
-            : "Campaign or budget requires review before continuing.") +
+          " tasks executed. " + finalMessage +
           " No email messages were sent.");
       }
     } catch (error) {
@@ -1527,6 +1544,8 @@ function App() {
                     {campaignListStatus === "ready" && (workspaceCampaigns.length
                       ? <ul>{workspaceCampaigns.map(item => <li key={item.id}>
                           <strong>{item.query}</strong> — {item.status.toLowerCase()}
+                          <small>Campaign {item.id.slice(-6)} ·
+                            Created {new Date(item.createdAt).toLocaleString()}</small>
                           <small>{item.uniqueSourcedCandidates} unique cited candidates /
                             target {item.targetCount} · {item.plannedTasks} planned tasks ·
                             No automatic execution</small>
@@ -1604,28 +1623,25 @@ function App() {
                               : "not configured"} ·
                             Remaining daily requests: {researchLimits.dailyLimit} limit
                             (shared across manual and campaign research).</p>
-                          <label>Approved test batch size
-                            <select value={campaignBatchCount} disabled={campaignTestBusy}
-                              onChange={event => {
-                                setCampaignBatchCount(Number(event.target.value));
-                                setCampaignPaidConfirmed(false);
-                              }}>
-                              <option value={1}>1 task</option>
-                              <option value={3}>Up to 3 tasks</option>
-                              <option value={5}>Up to 5 tasks</option>
-                            </select>
-                          </label>
-                          <p className="muted">Each task may incur a separate AI provider
-                            charge. The server checks your remaining budget and daily
-                            quota before every task. This batch stops on any error,
-                            a paused task or exhausted budget; it does not retry.</p>
+                          <p className="muted">One campaign run continues through
+                            the remaining {campaignProgress.tasks.queued} queued tasks
+                            (maximum 24), until 100 cited candidates are found,
+                            the plan is exhausted, or a safety gate stops it.
+                            Start intervals are paced to respect the API limit.
+                            Leave this browser tab open while the run is active.</p>
+                          <p className="muted">Each task can incur a separate
+                            provider charge. The app currently reserves a
+                            conservative pricing ceiling; this is not the
+                            actual Gemini invoice. Workspace permissions, spend
+                            and daily quota are rechecked before each task.</p>
                           <label className="checkbox-review">
                             <input type="checkbox" checked={campaignPaidConfirmed}
                               disabled={campaignTestBusy}
                               onChange={event => setCampaignPaidConfirmed(event.target.checked)}/>
-                            I authorize up to {campaignBatchCount} billable AI research
-                            tasks with my personal API key and existing spend limits.
-                            I understand that stopping waits for the current task to finish.
+                            I authorize this single campaign run for up to
+                            {Math.min(24, campaignProgress.tasks.queued)} paid AI research
+                            tasks, within my configured limits. I will keep the
+                            browser tab open, and stopping waits for the current task.
                           </label>
                           <button type="button" disabled={campaignTestBusy ||
                             !campaignPaidConfirmed || !personalAi.keyConfigured ||
@@ -1634,7 +1650,7 @@ function App() {
                             researchBudget.reconciliation?.needsReview === true ||
                             budgetStatus !== "ready" || personalAiStatus !== "ready"}
                             onClick={() => void executeManualCampaignTask(p.id, campaignProgress.id)}>
-                            Run approved batch (up to {campaignBatchCount})
+                            Run campaign until target or safety stop
                           </button>
                           {campaignTestBusy && <button type="button" className="secondary"
                             disabled={batchStopRequested.current}
@@ -1642,7 +1658,7 @@ function App() {
                               batchStopRequested.current = true;
                               setCampaignTestNotice("Stop requested. Current paid task may finish; no further task will start.");
                             }}>
-                            Stop after current task ({campaignBatchCompleted} complete)
+                            Stop run after current task ({campaignBatchCompleted} complete)
                           </button>}
                           {(!personalAi.keyConfigured ||
                             !researchBudget.enforcedForPaidSearch) &&
