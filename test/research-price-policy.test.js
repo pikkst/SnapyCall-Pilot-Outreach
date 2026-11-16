@@ -3,17 +3,30 @@ import assert from "node:assert/strict";
 import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
   calculateBoundedWorstCaseCents } from "../server/research-price-policy.js";
 
-test("research pricing preflight blocks every provider until a verified monetary policy is released", () => {
-  const configurations = [
-    { provider: "anthropic", model: "claude-sonnet-4-6" },
+test("only Claude Sonnet 4.6 has a dated server-authorized bounded pricing envelope", () => {
+  const policy = requireResearchPriceEnvelope({
+    provider: "anthropic", model: "claude-sonnet-4-6",
+  });
+  assert.equal(policy.provider, "anthropic");
+  assert.equal(policy.worstCaseCents, 400);
+  assert.equal(policy.pricing.billingUnit, "search_requests");
+  assert.equal(policy.usageLimits.maxSearchRequests, 3);
+  assert.equal(policy.usageLimits.maxOutputTokens, 3200);
+  assert.equal(policy.usageLimits.maxInputTokens, 1_000_000);
+  const modeledMax = calculateBoundedWorstCaseCents(policy.pricing, policy.usageLimits);
+  assert.equal(modeledMax, 308);
+  assert.ok(policy.worstCaseCents >= modeledMax);
+  assert.ok(policy.expiresAt > new Date("2026-11-16T00:00:00Z"));
+});
+
+test("all other models remain blocked despite the pilot activation", () => {
+  for (const config of [
     { provider: "openai", model: "gpt-4.1" },
     { provider: "gemini", model: "gemini-2.5-flash" },
+    { provider: "anthropic", model: "claude-sonnet-4-5" },
     { provider: "anthropic", model: "arbitrary-custom-model" },
     { provider: "unknown", model: "gpt-4.1" },
-  ];
-  for (const config of configurations) {
-    assert.throws(() => requireResearchPriceEnvelope(config), ResearchPricingUnavailable);
-  }
+  ]) assert.throws(() => requireResearchPriceEnvelope(config), ResearchPricingUnavailable);
 });
 
 test("caller-provided prices, approvals and forged identifiers cannot authorize billable search", () => {
