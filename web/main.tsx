@@ -11,6 +11,10 @@ type PartnerInvitation = { id: string; workspaceId: string; workspace: string;
 type ConnectionStatus = "loading" | "ready" | "unavailable";
 type ConnectionResponse = { connections: GoogleConnection[]; available: boolean };
 type GmailStatus = { connected: boolean; available: boolean; email: string; sendingEnabled: false };
+type PartnerSelfProfile = {
+  displayName: string; email: string; jobTitle: string; organizationName: string;
+  businessPhone: string; publicWebsite: string; emailSignature: string;
+};
 type Candidate = {
   id: string; name: string; email: string | null; category: string;
   region: string | null; onlineEnglish: boolean; status: string;
@@ -124,8 +128,11 @@ function App() {
   const [operatorResearch, setOperatorResearch] = useState<ResearchReconciliationOverview | null>(null);
   const [operatorResearchStatus, setOperatorResearchStatus] =
     useState<"idle" | "loading" | "ready" | "error">("idle");
-  const [partnerTab, setPartnerTab] = useState<"candidates" | "discovery" | "drafts" | "settings">("candidates");
+  const [partnerTab, setPartnerTab] = useState<"candidates" | "discovery" | "drafts" | "profile" | "settings">("candidates");
   const [partnerSession, setPartnerSession] = useState<PartnerSession | null>(null);
+  const [myProfile, setMyProfile] = useState<PartnerSelfProfile | null>(null);
+  const [profileState, setProfileState] = useState<"loading" | "ready" | "error">("loading");
+  const [profileSaving, setProfileSaving] = useState(false);
   const [googleConnections, setGoogleConnections] = useState<GoogleConnection[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("loading");
   const [googleConfigured, setGoogleConfigured] = useState(false);
@@ -254,9 +261,40 @@ function App() {
           await loadPersonalAiSettings();
           await loadResearchLimits();
           await loadResearchBudget();
+          await loadMyProfile();
         }
       }).catch(() => setError("Unable to reach the authentication API"));
   }, []);
+
+  async function loadMyProfile() {
+    setProfileState("loading");
+    try {
+      setMyProfile(await api<PartnerSelfProfile>("/partner/profile"));
+      setProfileState("ready");
+    } catch {
+      setProfileState("error");
+    }
+  }
+
+  async function saveMyProfile(event: React.FormEvent) {
+    event.preventDefault();
+    if (!myProfile || profileSaving) return;
+    setProfileSaving(true);
+    setError("");
+    try {
+      const { email: _readonlyEmail, ...editable } = myProfile;
+      const saved = await api<PartnerSelfProfile>("/partner/profile", {
+        method: "PUT", body: JSON.stringify(editable),
+      });
+      setMyProfile(saved);
+      setPartnerSession(previous => previous ? { ...previous, displayName: saved.displayName } : previous);
+      setNotice("Your personal sender profile has been saved. This does not enable email sending.");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not save profile");
+    } finally {
+      setProfileSaving(false);
+    }
+  }
 
   async function viewWorkspace(workspaceId: string) {
     // An earlier response must never render under a newly selected workspace.
@@ -867,10 +905,10 @@ function App() {
         <div className="brand">SNAPYCALL<span> / PILOT</span></div>
         <p className="sidebar-label">WORKSPACE</p>
         <nav aria-label="Workspace sections">
-          {(["candidates", "discovery", "drafts", "settings"] as const).map(item =>
+          {(["candidates", "discovery", "drafts", "profile", "settings"] as const).map(item =>
             <button type="button" key={item} className={partnerTab === item ? "active" : ""}
               onClick={() => setPartnerTab(item)}>
-              {item === "settings" ? "AI configuration" : item === "drafts" ? "Outreach drafts" :
+              {item === "profile" ? "My profile" : item === "settings" ? "AI configuration" : item === "drafts" ? "Outreach drafts" :
                 item === "discovery" ? "Free discovery" : "Candidates"}
             </button>)}
         </nav>
@@ -883,13 +921,48 @@ function App() {
       <section className="content" aria-label="Partner workspace">
         <header><div><span className="eyebrow">SNAPYCALL • PARTNER</span>
           <h1>{partnerTab === "candidates" ? "Expert candidates" : partnerTab === "discovery" ?
-            "Free lead discovery" : partnerTab === "drafts" ? "Outreach drafts" : "Your AI provider"}</h1>
+            "Free lead discovery" : partnerTab === "drafts" ? "Outreach drafts" :
+            partnerTab === "profile" ? "My profile" : "Your AI provider"}</h1>
           <p className="muted">Welcome{partnerSession.displayName ? ", " + partnerSession.displayName : ""}.
             Your access is limited to your authorized workspaces.</p>
         </div><span className="pill">No automatic sending</span></header>
         {error && <div className="error" role="alert">{error}</div>}
         {notice && <div className="success" role="status">{notice}</div>}
-        {partnerTab !== "settings" && <section className="panel">
+        {partnerTab === "profile" && <section className="panel" aria-label="Personal sender profile">
+          <h2>My profile</h2>
+          <p className="muted">These details belong to your signed-in user account across authorized
+            workspaces. They can be used for future personalized email drafts and signatures.
+            Your verified sign-in email cannot be changed here; saving does not send messages.</p>
+          {profileState === "loading" && <p>Loading your profile…</p>}
+          {profileState === "error" && <button type="button" className="secondary"
+            onClick={() => void loadMyProfile()}>Retry loading profile</button>}
+          {profileState === "ready" && myProfile && <form className="form-grid"
+            onSubmit={event => void saveMyProfile(event)}>
+            <label>Full name<input maxLength={120} value={myProfile.displayName}
+              onChange={event => setMyProfile({ ...myProfile, displayName: event.target.value })}/></label>
+            <label>Sign-in email (read-only)<input type="email" readOnly value={myProfile.email}/></label>
+            <label>Job title<input maxLength={120} value={myProfile.jobTitle}
+              onChange={event => setMyProfile({ ...myProfile, jobTitle: event.target.value })}/></label>
+            <label>Organization<input maxLength={160} value={myProfile.organizationName}
+              onChange={event => setMyProfile({ ...myProfile, organizationName: event.target.value })}/></label>
+            <label>Business phone<input type="tel" maxLength={32} value={myProfile.businessPhone}
+              onChange={event => setMyProfile({ ...myProfile, businessPhone: event.target.value })}/></label>
+            <label>Public website (HTTPS)<input type="url" maxLength={2048}
+              value={myProfile.publicWebsite}
+              onChange={event => setMyProfile({ ...myProfile, publicWebsite: event.target.value })}/></label>
+            <label className="wide">Email signature (plain text)
+              <textarea maxLength={1000} rows={5} value={myProfile.emailSignature}
+                onChange={event => setMyProfile({ ...myProfile, emailSignature: event.target.value })}/>
+            </label>
+            <p className="wide muted">Profile details are never inserted into an email
+              automatically in this release. A future approved template flow will render
+              them safely, with a preview and explicit sending authorization.</p>
+            <button type="submit" disabled={profileSaving}>
+              {profileSaving ? "Saving…" : "Save my profile"}
+            </button>
+          </form>}
+        </section>}
+        {partnerTab !== "settings" && partnerTab !== "profile" && <section className="panel">
           <p className="muted">Candidate and draft data are workspace-scoped.
             You may manually save inspected AI-research candidates for further review.
             Contact verification, automated importing, AI drafting and sending
