@@ -63,3 +63,20 @@ td button+button{margin-left:6px}
 .research-setup-notice p{margin:0 0 9px;font-size:13px}
 @media(max-width:900px){.workspace-dashboard .getting-started{grid-template-columns:1fr}.getting-started li p{min-height:0}}
 @media(max-width:600px){.workspace-dashboard .dashboard-metrics{grid-template-columns:1fr}.workspace-dashboard .dashboard-intro{padding:18px}.getting-started li{padding:15px}.research-setup-notice button{width:100%}}
+
+
+/* Research readiness uses server-derived status, never optimistic provider credit. */
+.research-readiness{margin:18px 0;padding:18px;border:1px solid #dce3f1;border-radius:12px;background:#f8faff}
+.research-readiness-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.research-readiness-heading h4{margin:0;font-size:16px}
+.research-ready-label,.research-pending-label{padding:5px 10px;border-radius:20px;font-weight:700;font-size:12px}
+.research-ready-label{background:#def4e7;color:#18663b}
+.research-pending-label{background:#fff0d4;color:#80551b}
+.research-readiness-steps{display:grid;gap:10px;padding:0;margin:16px 0;list-style:none;counter-reset:readiness}
+.research-readiness-step{counter-increment:readiness;background:white;border:1px solid #dce3f1;border-radius:10px;padding:14px 16px}
+.research-readiness-step strong::before{content:counter(readiness) ". ";color:#3153a2}
+.research-readiness-step.ready{border-left:4px solid #21865c}
+.research-readiness-step.blocked{border-left:4px solid #c76a29}
+.research-readiness-step .muted{margin:7px 0 0;overflow-wrap:anywhere}
+.research-readiness-step button{margin-top:10px}
+@media(max-width:600px){.research-readiness{padding:13px}.research-readiness-heading{align-items:flex-start}.research-readiness-step{padding:12px}.research-readiness-step button{width:100%}}
