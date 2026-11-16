@@ -91,3 +91,55 @@ test("review preview corroborates full name from inspected cited page without cl
   assert.equal(result.contactAssociations[0].identityVerified, false);
   assert.equal(result.contactAssociations[0].organizationVerified, false);
 });
+
+
+test("named professional email observation requires source citation and nearby full name", async () => {
+  const source = "https://experts.example.org/team/ada";
+  const result = await inspectResearchPreview({
+    candidates: [{ name: "Ada Mentor", sourceUrl: source }],
+    sources: [{ url: source, title: "Team profile" }],
+  }, { retrieve: async url => ({
+    url, text: "Ada Mentor — AI workflow consultant. Email ada.mentor@experts.example.org"
+  }) });
+  assert.deepEqual(result.publicNamedContactObservations, [{
+    type: "PUBLIC_NAMED_EMAIL_OBSERVATION",
+    observedEmail: "ada.mentor@experts.example.org",
+    sourceUrl: source,
+    candidateNames: ["Ada Mentor"],
+    relationship: "NAME_NEAR_EMAIL_UNVERIFIED",
+    provenance: "SERVER_INSPECTED_PAGE", status: "REVIEW_REQUIRED",
+    identityVerified: false, contactPermission: false,
+    deliverabilityVerified: false,
+  }]);
+  assert.equal(result.publicBusinessContacts.length, 0);
+});
+
+test("named email is not inferred when a profile has no contextual email proof", async () => {
+  const source = "https://experts.example.org/team/ada";
+  const result = await inspectResearchPreview({
+    candidates: [{ name: "Ada Mentor", sourceUrl: source }],
+    sources: [{ url: source, title: "Team profile" }],
+  }, { retrieve: async url => ({
+    url, text: "Public contact morgan@example.org. Long article ".repeat(10) +
+      "The professional Ada Mentor works in AI."
+  }) });
+  assert.deepEqual(result.publicNamedContactObservations, []);
+});
+
+test("multiple names near the same mailbox never produce claimed individual ownership", async () => {
+  const source = "https://experts.example.org/team";
+  const output = await inspectResearchPreview({
+    candidates: [
+      { name: "Ada Mentor", sourceUrl: source },
+      { name: "Morgan Field", sourceUrl: source },
+    ],
+    sources: [{ url: source }],
+  }, { retrieve: async url => ({
+    url, text: "Ada Mentor and Morgan Field — contact team.lead@experts.example.org"
+  }) });
+  assert.equal(output.publicNamedContactObservations.length, 1);
+  assert.equal(output.publicNamedContactObservations[0].relationship,
+    "MULTIPLE_NAMES_NEAR_EMAIL_AMBIGUOUS");
+  assert.equal(output.publicNamedContactObservations[0].identityVerified, false);
+  assert.equal(output.publicNamedContactObservations[0].contactPermission, false);
+});
