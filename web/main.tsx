@@ -28,6 +28,21 @@ type Candidate = {
   score: { score: number | null; eligible: boolean; stage: string };
   qualification: { stage: string; qualified: boolean; score: null; blockers: string[] };
   outreach: { stage: string; canDraft: boolean; canSend: false; blockers: string[] };
+  contactVerification?: {
+    personEmail: "REVIEWED" | "REVIEW_REQUIRED" | "UNVERIFIED";
+    mailbox: "VALID" | "INVALID" | "RISKY" | "UNKNOWN";
+    usableAsContact: boolean; draftEligible: boolean;
+    onboardingEligible: false; sendingEnabled: false;
+  };
+};
+type DirectEmailEvidenceResponse = {
+  candidateId: string; personEmailLinked: boolean;
+  usableAsContact: false; onboardingEligible: false; sendingEnabled: false;
+  observation: null | {
+    sourceUrl: string; observedEmail: string; evidenceDigest: string;
+    status: "REVIEW_REQUIRED" | "PERSON_EMAIL_REVIEWED";
+    reviewRequired: boolean; personEmailLinked: boolean; inspectedAt: string;
+  };
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
 type ResearchPreview = {
@@ -102,7 +117,10 @@ const reasonNames: Record<string, string> = {
   english_online_requirement_unconfirmed: "Confirm English online consultations",
   expert_profile_review_pending: "Review a separate expert profile",
   email_missing: "Add a verified contact channel", legal_basis_missing: "Review legal basis",
-  contact_review_pending: "Review contact details", suppressed: "Contact is suppressed",
+  contact_review_pending: "Review contact details",
+  person_email_link_unverified: "Verify the exact person-to-email link",
+  mailbox_deliverability_unconfirmed: "Validate this specific mailbox",
+  suppressed: "Contact is suppressed",
   candidate_rejected: "Candidate was rejected",
 };
 const regions = [
@@ -160,6 +178,12 @@ function App() {
   const workspaceRequest = useRef(0);
   const partnerEvidenceRequest = useRef(0);
   const partnerReviewRequest = useRef(0);
+  const personEmailRequest = useRef(0);
+  const [personEmailCandidateId, setPersonEmailCandidateId] = useState<string | null>(null);
+  const [personEmailEvidence, setPersonEmailEvidence] =
+    useState<DirectEmailEvidenceResponse | null>(null);
+  const [personEmailBusy, setPersonEmailBusy] = useState(false);
+  const [personEmailConfirmed, setPersonEmailConfirmed] = useState(false);
   const [partnerReviewSaving, setPartnerReviewSaving] = useState(false);
   const [partnerEvidenceId, setPartnerEvidenceId] = useState<string | null>(null);
   const [partnerEvidenceRows, setPartnerEvidenceRows] = useState<Evidence[]>([]);
@@ -364,6 +388,11 @@ function App() {
     const generation = ++workspaceRequest.current;
     ++partnerEvidenceRequest.current;
     ++partnerReviewRequest.current;
+    ++personEmailRequest.current;
+    setPersonEmailCandidateId(null);
+    setPersonEmailEvidence(null);
+    setPersonEmailBusy(false);
+    setPersonEmailConfirmed(false);
     setPartnerReviewSaving(false);
     setReviewId(null);
     setPartnerEvidenceId(null);
@@ -419,6 +448,70 @@ function App() {
       void viewWorkspace(onlyWorkspaceId);
     }
   }, [partnerSession?.userId, onlyWorkspaceId]);
+
+  async function inspectCandidatePersonEmail(workspaceId: string, candidateId: string) {
+    if (activeWorkspaceId !== workspaceId || personEmailBusy) return;
+    const generation = workspaceRequest.current;
+    const request = ++personEmailRequest.current;
+    const url = "/candidates/" + encodeURIComponent(candidateId) +
+      "/direct-email-evidence?workspaceId=" + encodeURIComponent(workspaceId);
+    setPersonEmailCandidateId(candidateId);
+    setPersonEmailEvidence(null);
+    setPersonEmailConfirmed(false);
+    setPersonEmailBusy(true);
+    setError("");
+    try {
+      // Only the server chooses the candidate's profile and independently
+      // inspects it. No client-supplied email or source URL is trusted.
+      await api(url, { method: "POST", body: "{}" });
+      const result = await api<DirectEmailEvidenceResponse>(url);
+      if (workspaceRequest.current !== generation ||
+          personEmailRequest.current !== request) return;
+      setPersonEmailEvidence(result);
+      setNotice("Public person-email evidence found for review. No contact was approved.");
+    } catch (err) {
+      if (workspaceRequest.current !== generation ||
+          personEmailRequest.current !== request) return;
+      setError(err instanceof Error ? err.message : "Profile email inspection unavailable");
+    } finally {
+      if (workspaceRequest.current === generation &&
+          personEmailRequest.current === request) setPersonEmailBusy(false);
+    }
+  }
+
+  async function approveCandidatePersonEmail(workspaceId: string) {
+    const candidateId = personEmailCandidateId;
+    const observation = personEmailEvidence?.observation;
+    if (!candidateId || !observation || !observation.reviewRequired ||
+        !personEmailConfirmed || personEmailBusy ||
+        activeWorkspaceId !== workspaceId) return;
+    const generation = workspaceRequest.current;
+    const request = personEmailRequest.current;
+    setPersonEmailBusy(true);
+    setError("");
+    try {
+      await api("/candidates/" + encodeURIComponent(candidateId) +
+        "/direct-email-evidence/review?workspaceId=" +
+        encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify({
+            expectedDigest: observation.evidenceDigest,
+            confirmsExactPersonEmailPair: true,
+          }),
+        });
+      if (workspaceRequest.current !== generation ||
+          personEmailRequest.current !== request) return;
+      await viewWorkspace(workspaceId);
+      setNotice("Exact person-email association reviewed. Mailbox, legal basis and suppression checks are still required before outreach.");
+    } catch (err) {
+      if (workspaceRequest.current !== generation ||
+          personEmailRequest.current !== request) return;
+      setError(err instanceof Error ? err.message : "Person-email review failed");
+    } finally {
+      if (workspaceRequest.current === generation &&
+          personEmailRequest.current === request) setPersonEmailBusy(false);
+    }
+  }
 
   async function openPartnerEvidence(workspaceId: string, candidateId: string) {
     if (workspaceId !== activeWorkspaceId) return;
@@ -1431,8 +1524,9 @@ function App() {
                 </section></>}
                 {(partnerTab === "candidates" || partnerTab === "drafts") && <>
                 <h3>My candidates and outreach drafts</h3>
-                <p className="muted">Workspace-isolated read-only preview. Editing,
-                  discovery import, AI drafting and sending are not enabled for Google users yet.</p>
+                <p className="muted">Workspace-isolated candidate review. Public person-email
+                  associations require explicit source inspection and confirmation. No
+                  automatic outreach or email sending is enabled.</p>
                 {workspaceDataStatus === "loading" && <p>Loading workspace data…</p>}
                 {workspaceDataStatus === "error" && <div role="alert">
                   Workspace data could not be loaded.
@@ -1445,18 +1539,45 @@ function App() {
                     <div className="metric"><strong>{workspaceCandidates.length}</strong><span>Total candidates</span></div>
                     <div className="metric"><strong>{workspaceCandidates.filter(c => c.qualification.qualified).length}</strong><span>Qualified experts</span></div>
                     <div className="metric"><strong>{workspaceDrafts.length}</strong><span>Saved drafts</span></div>
+                    <div className="metric"><strong>{workspaceCandidates.filter(c =>
+                      c.contactVerification?.usableAsContact === true).length}</strong><span>Verified usable contacts</span></div>
                   </div>
                   {partnerTab === "candidates" && <>
                     <h3>Candidate pipeline</h3>
+                    <p className="muted">Candidate count is not contact count. An email is usable only
+                      after the exact person–email association is reviewed AND the mailbox
+                      has a valid technical verification. Neither proves consent to send.</p>
+                    <div className="metrics" aria-label="Contact evidence funnel">
+                      <div className="metric"><strong>{workspaceCandidates.filter(c =>
+                        c.contactVerification?.personEmail === "REVIEWED").length}</strong><span>Person-email links reviewed</span></div>
+                      <div className="metric"><strong>{workspaceCandidates.filter(c =>
+                        c.contactVerification?.mailbox === "VALID").length}</strong><span>Mailboxes vendor-valid</span></div>
+                      <div className="metric"><strong>{workspaceCandidates.filter(c =>
+                        c.contactVerification?.usableAsContact === true).length}</strong><span>Usable contacts</span></div>
+                    </div>
                     <div className="table-scroll"><table><thead><tr>
-                      <th>Candidate</th><th>Category</th><th>Region</th><th>Next action</th><th>Review</th>
+                      <th>Candidate</th><th>Category</th><th>Region</th>
+                      <th>Person-email</th><th>Mailbox</th><th>Next action</th><th>Review</th>
                     </tr></thead><tbody>
                       {workspaceCandidates.map(c => <tr key={c.id}>
                         <td><strong>{c.name}</strong><small>{c.email ?? "No email"}</small></td>
                         <td>{categories.find(x => x[0] === c.category)?.[1] ?? c.category}</td>
                         <td>{c.region ?? "Unconfirmed"}</td>
-                        <td>{stageNames[c.qualification.stage] ?? c.qualification.stage}</td>
+                        <td>{c.contactVerification?.personEmail === "REVIEWED"
+                          ? "Exact link reviewed" : c.contactVerification?.personEmail === "REVIEW_REQUIRED"
+                          ? "Evidence awaiting review" : "No verified link"}</td>
+                        <td>{c.contactVerification?.mailbox === "VALID" ? "Provider valid" :
+                          c.contactVerification?.mailbox === "INVALID" ? "Invalid" :
+                          c.contactVerification?.mailbox === "RISKY" ? "Risky" : "Not confirmed"}</td>
+                        <td><strong>{stageNames[c.qualification.stage] ?? c.qualification.stage}</strong>
+                          {c.outreach.blockers.length > 0 && <small>{c.outreach.blockers.map(r =>
+                            reasonNames[r] ?? r).join(" · ")}</small>}</td>
                         <td>
+                          {c.expertProfileUrl && <button type="button" className="secondary"
+                            disabled={busy || personEmailBusy}
+                            onClick={() => void inspectCandidatePersonEmail(p.id, c.id)}>
+                            Inspect named email
+                          </button>}
                           <button type="button" className="secondary" disabled={busy}
                             onClick={() => void openPartnerEvidence(p.id, c.id)}>Evidence</button>
                           <button type="button" className="secondary" disabled={busy}
@@ -1469,8 +1590,52 @@ function App() {
                           </button>}
                         </td>
                       </tr>)}
-                      {!workspaceCandidates.length && <tr><td colSpan={5} className="empty">No candidates in this workspace.</td></tr>}
+                      {!workspaceCandidates.length && <tr><td colSpan={7} className="empty">No candidates in this workspace.</td></tr>}
                     </tbody></table></div>
+                    {personEmailCandidateId && <section className="review-panel"
+                      aria-label="Direct person-email evidence review">
+                      <h3>Review public person-email evidence</h3>
+                      <p className="muted">The server inspects only the candidate's saved public
+                        individual profile. A discovered address is never automatically
+                        approved, and no message is sent.</p>
+                      {personEmailBusy && <p role="status">Checking person-email evidence…</p>}
+                      {personEmailEvidence?.observation && <>
+                        <p>Candidate: <strong>{workspaceCandidates.find(c =>
+                          c.id === personEmailCandidateId)?.name ?? "Selected candidate"}</strong></p>
+                        <p>Publicly observed address: <strong>{
+                          personEmailEvidence.observation.observedEmail}</strong></p>
+                        <p><a href={personEmailEvidence.observation.sourceUrl}
+                          target="_blank" rel="noopener noreferrer">
+                          Open independently inspected profile</a></p>
+                        <p className="muted">Evidence status: {personEmailEvidence.observation.status}.
+                          A positive mailbox check, legal review and suppression check
+                          are still required independently.</p>
+                        {personEmailEvidence.observation.reviewRequired && <>
+                          <label className="checkbox-review">
+                            <input type="checkbox" checked={personEmailConfirmed}
+                              disabled={personEmailBusy} onChange={event =>
+                                setPersonEmailConfirmed(event.target.checked)} />
+                            I checked this public profile and confirm this exact
+                            person owns the displayed professional email
+                          </label>
+                          <button type="button"
+                            disabled={!personEmailConfirmed || personEmailBusy}
+                            onClick={() => void approveCandidatePersonEmail(p.id)}>
+                            Confirm exact person-email link
+                          </button>
+                        </>}
+                      </>}
+                      {!personEmailBusy && !personEmailEvidence?.observation &&
+                        <p className="muted">No reviewable direct email evidence is available.
+                          Check the candidate's individual profile and try inspection again.</p>}
+                      <button type="button" className="secondary"
+                        disabled={personEmailBusy} onClick={() => {
+                          ++personEmailRequest.current;
+                          setPersonEmailCandidateId(null);
+                          setPersonEmailEvidence(null);
+                          setPersonEmailConfirmed(false);
+                        }}>Close</button>
+                    </section>}
                     {reviewId && <form className="form-grid review-panel"
                       aria-label="Partner expert profile review"
                       onSubmit={event => void savePartnerProfileReview(p.id, event)}>
