@@ -79,3 +79,33 @@ td button+button{margin-left:6px}
 .research-readiness-step .muted{margin:7px 0 0;overflow-wrap:anywhere}
 .research-readiness-step button{margin-top:10px}
 @media(max-width:600px){.research-readiness{padding:13px}.research-readiness-heading{align-items:flex-start}.research-readiness-step{padding:12px}.research-readiness-step button{width:100%}}
+
+/* Candidate verification must stay usable when DevTools or a sidebar narrows
+   the viewport. Keep the same semantic table; present its rows as cards. */
+.candidate-pipeline-actions{white-space:normal;min-width:270px}
+.candidate-pipeline-actions button{margin:2px 5px 2px 0;white-space:normal}
+.candidate-pipeline-actions button+button{margin-left:0}
+.candidate-pipeline-hint{display:block;max-width:285px;white-space:normal;line-height:1.45}
+@media(max-width:1500px){
+  .candidate-pipeline-scroll{overflow:visible;max-width:100%}
+  .candidate-pipeline-table,.candidate-pipeline-table tbody,
+  .candidate-pipeline-table tr,.candidate-pipeline-table td{display:block;width:100%}
+  .candidate-pipeline-table thead{position:absolute;clip:rect(0,0,0,0);
+    width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;white-space:nowrap}
+  .candidate-pipeline-table tbody{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .candidate-pipeline-table tr{background:#fff;border:1px solid #dce4f1;
+    border-radius:12px;padding:12px 15px;min-width:0}
+  .candidate-pipeline-table td{border:0;white-space:normal;overflow-wrap:anywhere;
+    padding:6px 0;min-width:0}
+  .candidate-pipeline-table td::before{content:attr(data-label);display:block;
+    font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+    color:#73829c;margin-bottom:4px}
+  .candidate-pipeline-table .candidate-pipeline-actions{min-width:0;
+    display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .candidate-pipeline-table .candidate-pipeline-actions::before{flex-basis:100%}
+  .candidate-pipeline-table .candidate-pipeline-actions button{margin:0;flex:0 1 auto}
+  .candidate-pipeline-table .candidate-pipeline-hint{max-width:100%;flex-basis:100%}
+}
+@media(max-width:1050px){
+  .candidate-pipeline-table tbody{grid-template-columns:minmax(0,1fr)}
+}
