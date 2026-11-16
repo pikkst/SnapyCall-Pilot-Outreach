@@ -20,6 +20,7 @@ import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
+import { inspectEmailDomain, onboardingEmailEligibility } from "./email-deliverability.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { normalizeDiscoveryLeadSeed } from "./discovery-lead-seed.js";
 import { partnerSelfProfileInput, publicPartnerSelfProfile } from "./partner-self-profile.js";
@@ -1120,6 +1121,35 @@ app.post("/api/candidates/:id/evidence", candidateReadScope, requireOrigin, safe
   return res.status(result.status).json(result.body);
 }));
 // Exact matches are review hints, not automatic identity merges. No name-only matches.
+// Scoped read-only preflight: DNS routing is not mailbox verification.
+// Never accepts arbitrary email input and never sends a probe or stores PII.
+app.get("/api/candidates/:id/email-check", candidateReadScope,
+  researchLimiter, safe(async (req, res) => {
+    const identity = req.candidateScope === null ? null : await partnerIdentity(req);
+    if (req.candidateScope !== null && !identity) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const row = await prisma.candidate.findFirst({
+      where: { id: req.params.id, workspaceId: req.candidateScope },
+      select: { id: true, email: true, suppressed: true,
+        contactReviewed: true, legalBasis: true },
+    });
+    if (!row) return res.status(404).json({ error: "Candidate not found" });
+    const inspection = await inspectEmailDomain(row.email);
+    // Identity linkage and mailbox-level verification are not persisted yet.
+    // Neither a VALID syntax nor an MX record grants onboarding eligibility.
+    const eligibility = onboardingEmailEligibility(row, {
+      email: row.email, status: inspection.status, checkedAt: new Date(),
+    });
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      candidateId: row.id, syntaxAndDomain: inspection,
+      mailboxVerified: false, personEmailLinked: false,
+      usableAsContact: false, onboardingEligible: false,
+      blockers: eligibility.blockers, sendingEnabled: false,
+    });
+  }));
+
 app.get("/api/candidates/:id/possible-duplicates", candidateReadScope, safe(async (req, res) => {
   const candidate = await prisma.candidate.findFirst({
     where: { id: req.params.id, workspaceId: req.candidateScope },
