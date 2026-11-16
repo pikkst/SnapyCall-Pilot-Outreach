@@ -109,6 +109,10 @@ export function observedPublicNamedContacts({ trustedPages, citationUrls, candid
         provenance: "SERVER_INSPECTED_PAGE", status: "REVIEW_REQUIRED",
         identityVerified: false, contactPermission: false,
         deliverabilityVerified: false,
+        // Proximity is not direct evidence linking a mailbox to one person.
+        personEmailLinked: false,
+        usableAsContact: false,
+        onboardingEligible: false,
       });
       if (result.length >= 20) return result;
     }
