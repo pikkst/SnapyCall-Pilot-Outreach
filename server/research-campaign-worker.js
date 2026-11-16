@@ -3,14 +3,14 @@
 // reservation/settlement and workspace-membership contracts.
 import { randomUUID } from "node:crypto";
 import { claimResearchTask, failResearchTask } from "./research-campaign-leases.js";
-import { commitCampaignResearchResult, CampaignLeaseConflict } from "./research-campaign-observations.js";
+import { commitCampaignResearchResult } from "./research-campaign-observations.js";
 import { lockActiveWorkspaceMembership, requireWorkspaceMembership } from "./workspace-access.js";
 import { lockedResearchPreferences, reserveResearchLease, reserveResearchAttempt,
   releaseResearchLease } from "./research-quota.js";
 import { reserveOwnerSpend, settleOwnerSpend } from "./research-budget.js";
 import { requireResearchPriceEnvelope, calculateVerifiedSpendCents } from "./research-price-policy.js";
 import { assertWebResearchModel } from "./research-provider-adapters.js";
-import { researchCandidates, ResearchProviderHttpError } from "./ai-research.js";
+import { researchCandidates } from "./ai-research.js";
 import { decryptKey } from "./security.js";
 
 export class ResearchWorkerPreflightError extends Error {
@@ -57,7 +57,7 @@ export async function runOneCampaignTask(db, {
 
   const scope = { campaignId, workspaceId, ownerId };
   const claim = await claimResearchTask(db, {
-    ...scope,
+    ...scope, now: now(),
     beforeLock: tx => lockActiveWorkspaceMembership(tx, { workspaceId, userId: ownerId }),
     reserveInTransaction: async (tx, task) => {
       const preferences = await lockedResearchPreferences(tx, ownerId);
@@ -133,10 +133,9 @@ export async function runOneCampaignTask(db, {
   } catch (error) {
     // Never retry a provider-invoked request automatically: a 429, timeout,
     // transport exception or DB write failure may already be billable.
-    failure = !invoked ? "PERMISSION_REVOKED" :
-      error instanceof CampaignLeaseConflict ? "PERMISSION_REVOKED" :
-      error instanceof ResearchProviderHttpError ? "BILLING_UNCERTAIN" :
-      "BILLING_UNCERTAIN";
+    // A stale lease is not evidence that membership was revoked.
+    // The provider may already have billed before any post-call failure.
+    failure = !invoked ? "PERMISSION_REVOKED" : "BILLING_UNCERTAIN";
     return { status: "PAUSED", attempted: invoked, code: failure };
   } finally {
     if (!settled) {
