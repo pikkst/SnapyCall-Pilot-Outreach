@@ -46,10 +46,19 @@ test("all other models remain blocked despite the pilot activation", () => {
   ]) assert.throws(() => requireResearchPriceEnvelope(config), ResearchPricingUnavailable);
 });
 
-test("caller-provided prices, approvals and forged identifiers cannot authorize billable search", () => {
+test("caller-provided pricing cannot override an approved exact-model policy", () => {
+  const policy = requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-2.5-flash",
+    priceVersion: "user-supplied", worstCaseCents: 1, enforcementReady: false,
+    expiresAt: new Date("2099-01-01"),
+  });
+  assert.equal(policy.worstCaseCents, 200);
+  assert.equal(policy.priceVersion, "gemini-2.5-flash-grounded-prompt-2026-11-16");
+});
+
+test("caller approvals and forged model identifiers cannot authorize unavailable models", () => {
   for (const config of [
     { provider: "openai", model: "gpt-4.1", worstCaseCents: 1, enforcementReady: true },
-    { provider: "gemini", model: "gemini-2.5-flash", priceVersion: "user-supplied", expiresAt: new Date("2099-01-01") },
     { provider: "anthropic", model: "__proto__" },
     { provider: "anthropic", model: "" },
     { provider: "", model: "claude-sonnet-4-6" },
