@@ -48,6 +48,7 @@ test("untrusted citation, invalid URL, oversized envelope fail closed", () => {
 test("task completion and evidence writing share a transaction and dedupe", async () => {
   const calls = [];
   const db = { $transaction: async callback => callback({
+    $queryRaw: async () => [{ id: "campaign-1" }],
     researchCampaignTask: { updateMany: async input => {
       calls.push(["fence", input.where.leaseToken, input.data.status]);
       return { count: 1 };
@@ -70,6 +71,7 @@ test("task completion and evidence writing share a transaction and dedupe", asyn
 test("stale leases cannot write observations", async () => {
   let inserted = false;
   const db = { $transaction: async callback => callback({
+    $queryRaw: async () => [{ id: "campaign-1" }],
     researchCampaignTask: { updateMany: async () => ({ count: 0 }) },
     researchCampaignObservation: { createMany: async () => {
       inserted = true;
