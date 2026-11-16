@@ -1604,12 +1604,28 @@ function App() {
                               : "not configured"} ·
                             Remaining daily requests: {researchLimits.dailyLimit} limit
                             (shared across manual and campaign research).</p>
+                          <label>Approved test batch size
+                            <select value={campaignBatchCount} disabled={campaignTestBusy}
+                              onChange={event => {
+                                setCampaignBatchCount(Number(event.target.value));
+                                setCampaignPaidConfirmed(false);
+                              }}>
+                              <option value={1}>1 task</option>
+                              <option value={3}>Up to 3 tasks</option>
+                              <option value={5}>Up to 5 tasks</option>
+                            </select>
+                          </label>
+                          <p className="muted">Each task may incur a separate AI provider
+                            charge. The server checks your remaining budget and daily
+                            quota before every task. This batch stops on any error,
+                            a paused task or exhausted budget; it does not retry.</p>
                           <label className="checkbox-review">
                             <input type="checkbox" checked={campaignPaidConfirmed}
                               disabled={campaignTestBusy}
                               onChange={event => setCampaignPaidConfirmed(event.target.checked)}/>
-                            I authorize exactly one billable AI research task using my
-                            personal API key, subject to configured budget and quota.
+                            I authorize up to {campaignBatchCount} billable AI research
+                            tasks with my personal API key and existing spend limits.
+                            I understand that stopping waits for the current task to finish.
                           </label>
                           <button type="button" disabled={campaignTestBusy ||
                             !campaignPaidConfirmed || !personalAi.keyConfigured ||
@@ -1618,8 +1634,16 @@ function App() {
                             researchBudget.reconciliation?.needsReview === true ||
                             budgetStatus !== "ready" || personalAiStatus !== "ready"}
                             onClick={() => void executeManualCampaignTask(p.id, campaignProgress.id)}>
-                            Run one paid research task
+                            Run approved batch (up to {campaignBatchCount})
                           </button>
+                          {campaignTestBusy && <button type="button" className="secondary"
+                            disabled={batchStopRequested.current}
+                            onClick={() => {
+                              batchStopRequested.current = true;
+                              setCampaignTestNotice("Stop requested. Current paid task may finish; no further task will start.");
+                            }}>
+                            Stop after current task ({campaignBatchCompleted} complete)
+                          </button>}
                           {(!personalAi.keyConfigured ||
                             !researchBudget.enforcedForPaidSearch) &&
                             <p className="muted">Configure your personal AI key and
