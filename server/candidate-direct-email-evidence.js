@@ -115,7 +115,7 @@ export async function inspectAndStoreDirectEmailObservation(db, {
         emailNormalized: finding.emailNormalized,
         profileUrl: finding.profileUrl, evidenceDigest: finding.evidenceDigest,
         inspectedAt, status: "REVIEW_REQUIRED" },
-      update: { workspaceId, personName: candidate.name,
+      update: { workspaceId, personName: candidate.name, reviewedAt: null, reviewedBy: null,
         emailNormalized: finding.emailNormalized,
         profileUrl: finding.profileUrl, evidenceDigest: finding.evidenceDigest,
         inspectedAt, status: "REVIEW_REQUIRED" },
@@ -141,9 +141,17 @@ export function visibleDirectEmailObservation(candidate, observation) {
       normalizedEmail(candidate.email) !== observation.emailNormalized ||
       candidate.name !== observation.personName ||
       publicCitationUrl(candidate.expertProfileUrl) !== observation.profileUrl ||
-      observation.status !== "REVIEW_REQUIRED") return null;
-  return Object.freeze({ status: "REVIEW_REQUIRED",
+      !["REVIEW_REQUIRED", "PERSON_EMAIL_REVIEWED"].includes(observation.status) ||
+      !(observation.inspectedAt instanceof Date) ||
+      !Number.isFinite(observation.inspectedAt.getTime())) return null;
+  const reviewed = observation.status === "PERSON_EMAIL_REVIEWED" &&
+    observation.reviewedAt instanceof Date &&
+    observation.reviewedAt >= observation.inspectedAt &&
+    observation.reviewedAt.getTime() <= Date.now() &&
+    typeof observation.reviewedBy === "string";
+  return Object.freeze({ status: observation.status,
     sourceUrl: observation.profileUrl, inspectedAt: observation.inspectedAt,
-    personEmailLinked: false, usableAsContact: false,
+    reviewedAt: reviewed ? observation.reviewedAt : null,
+    personEmailLinked: reviewed, usableAsContact: false,
     onboardingEligible: false });
 }
