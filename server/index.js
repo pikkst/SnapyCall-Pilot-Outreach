@@ -18,6 +18,7 @@ import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "./ai-research.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
+import { normalizeDiscoveryLeadSeed } from "./discovery-lead-seed.js";
 import { partnerSelfProfileInput, publicPartnerSelfProfile } from "./partner-self-profile.js";
 import { assertWebResearchModel } from "./research-provider-adapters.js";
 import {
@@ -1157,11 +1158,14 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
     return res.status(400).json({ error: "Candidate ownership cannot be set in request body" });
   }
   const manualSeed = req.body.manualSeed === true;
-  if (manualSeed && req.candidateScope === null) {
-    return res.status(403).json({ error: "Manual lead seed requires a partner workspace" });
+  const discoverySeed = req.body.discoverySeed === true;
+  if ((manualSeed || discoverySeed) && req.candidateScope === null) {
+    return res.status(403).json({ error: "Review intake requires a partner workspace" });
   }
-  const seed = manualSeed ? normalizeManualLeadSeed(req.body) : null;
-  const candidate = manualSeed ? normalizeCandidate(seed) : normalizeCandidate(req.body);
+  const seed = manualSeed ? normalizeManualLeadSeed(req.body) :
+    discoverySeed ? normalizeDiscoveryLeadSeed(req.body) : null;
+  const candidate = seed ? normalizeCandidate({ ...seed, discoverySeed }) :
+    normalizeCandidate(req.body);
   const actorId = req.candidateScope === null ? "admin" :
     verifyPartnerSession(req.cookies?.pilot_partner_session, env.SESSION_SIGNING_KEY);
   const row = await prisma.$transaction(async (tx) => {
@@ -1173,13 +1177,15 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
       });
       if (!active) return null;
     }
-    if (manualSeed) {
+    if (manualSeed || discoverySeed) {
       // Serialize manual seed submissions within one workspace to make a
       // repeated click/retry idempotent even across different app instances.
       await tx.$queryRaw`
         SELECT "id" FROM "Partner" WHERE "id" = ${req.candidateScope} FOR UPDATE`;
       const found = await tx.candidate.findFirst({
-        where: {
+        where: discoverySeed ? {
+          workspaceId: req.candidateScope, discoveryKey: seed.discoveryKey,
+        } : {
           workspaceId: req.candidateScope,
           sourceUrl: candidate.sourceUrl,
           name: { equals: candidate.name, mode: "insensitive" },
@@ -1196,13 +1202,18 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
         region: candidate.region, onlineEnglish: candidate.onlineEnglish,
         sourceUrl: candidate.sourceUrl, legalBasis: candidate.legalBasis,
         contactReviewed: candidate.contactReviewed, suppressed: candidate.suppressed,
-        ...(manualSeed ? { status: "REVIEW_PENDING" } : {}),
+        ...(discoverySeed ? {
+          discoveryKey: seed.discoveryKey, researchCitationUrl: seed.researchCitationUrl,
+        } : {}),
+        ...(manualSeed || discoverySeed ? { status: "REVIEW_PENDING" } : {}),
       },
     });
     await tx.auditEvent.create({ data: {
-      actorId, action: manualSeed ? "candidate.manual-seed.created" : "candidate.created",
+      actorId, action: discoverySeed ? "candidate.discovery-intake.created" :
+        manualSeed ? "candidate.manual-seed.created" : "candidate.created",
       entityId: created.id,
-      metadata: { sourceUrl: created.sourceUrl, workspaceId: req.candidateScope },
+      metadata: { sourceUrl: created.sourceUrl, workspaceId: req.candidateScope,
+        ...(discoverySeed ? { citationStatus: "UNVERIFIED_PROVIDER_CITATION" } : {}) },
     } });
     return manualSeed ? { id: created.id, created: true } : created;
   }).catch(error => {
@@ -1211,8 +1222,8 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
   });
   if (row === null) return res.status(403).json({ error: "Workspace membership revoked" });
   if (row === "DUPLICATE") return res.status(409).json({ error: "Candidate already exists in workspace" });
-  return res.status(manualSeed && !row.created ? 200 : 201).json(
-    manualSeed ? { id: row.id, created: row.created } : { id: row.id });
+  return res.status((manualSeed || discoverySeed) && !row.created ? 200 : 201).json(
+    manualSeed || discoverySeed ? { id: row.id, created: row.created } : { id: row.id });
 }));
 
 app.get("/api/ai-settings", aiOwnerAuthenticated, safe(async (req, res) => {
