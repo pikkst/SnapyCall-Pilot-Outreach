@@ -112,6 +112,11 @@ model PartnerUser {
   emailNormalized String @unique
   googleSub String? @unique
   displayName String?
+  jobTitle String?
+  organizationName String?
+  businessPhone String?
+  publicWebsite String?
+  emailSignature String? @db.VarChar(1000)
   memberships PartnerMembership[]
   googleConnections PartnerGoogleConnection[]
   gmailConnection PartnerGmailConnection?
