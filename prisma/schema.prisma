@@ -33,6 +33,7 @@ model Candidate {
   updatedAt DateTime @updatedAt
   drafts OutreachDraft[]
   evidence CandidateEvidence[]
+  directEmailObservation CandidateDirectEmailObservation?
   emailVerification CandidateEmailVerification?
   mailboxVerification CandidateMailboxVerification?
   @@unique([workspaceId, emailNormalized])
@@ -108,6 +109,7 @@ model Partner {
   researchCampaigns ResearchCampaign[]
   drafts OutreachDraft[]
   candidateEvidence CandidateEvidence[]
+  directEmailObservations CandidateDirectEmailObservation[]
   emailVerifications CandidateEmailVerification[]
   mailboxVerifications CandidateMailboxVerification[]
   googleConnections PartnerGoogleConnection[]
@@ -363,4 +365,25 @@ model CandidateMailboxVerification {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([workspaceId, expiresAt])
+}
+
+model CandidateDirectEmailObservation {
+  id String @id @default(cuid())
+  workspaceId String
+  workspace Partner @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  candidateId String @unique
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  personName String
+  emailNormalized String
+  profileUrl String
+  evidenceDigest String
+  // Explicit labeled name/email on an inspected page is a REVIEW hint,
+  // never confirmed individual identity or permission to send.
+  status String @default("REVIEW_REQUIRED")
+  inspectedAt DateTime
+  reviewedAt DateTime?
+  reviewedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([workspaceId, inspectedAt])
 }
