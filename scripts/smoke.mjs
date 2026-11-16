@@ -319,6 +319,7 @@ try {
     assert.equal(partnerResponse.status, 200);
     const partner = await partnerResponse.json();
     assert.equal(partner.authenticated, true);
+    assert.equal(partner.userId, member.id, "Partner session must identify its own user for cross-tab isolation");
     assert.deepEqual(partner.partners.map(p => p.name).sort(), ["Second workspace", "Test Partner"]);
     assert.equal(await partnerDb.partnerUser.count({ where: { emailNormalized: "partner@example.org" } }), 1);
     assert.equal(await partnerDb.partnerMembership.count({ where: { userId: member.id } }), 2);
@@ -1113,6 +1114,28 @@ try {
       "Successful admin sign-in must revoke the partner browser cookie");
     assert.ok(switchCookies.some(entry => /^pilot_session=[^.]+\./.test(entry)),
       "Successful admin sign-in must issue a new admin session");
+    // A failed Google identity check must not replace an existing admin
+    // identity or set an unverified partner cookie.
+    const rejectedStart = await call("/auth/google/start", {
+      headers: { cookie }, redirect: "manual",
+    });
+    assert.equal(rejectedStart.status, 302);
+    const rejectedOAuth = new URL(rejectedStart.headers.get("location"));
+    const rejectedFlowCookie = rejectedStart.headers.getSetCookie()
+      .find(entry => entry.startsWith("pilot_google_flow="))?.split(";")[0];
+    assert.ok(rejectedFlowCookie);
+    const rejectedCallback = await call("/auth/google/callback?state=" +
+      encodeURIComponent(rejectedOAuth.searchParams.get("state")) + "&code=" +
+      encodeURIComponent(rejectedOAuth.searchParams.get("nonce") + ":wrong-email"), {
+      headers: { cookie: cookie + "; " + rejectedFlowCookie },
+      redirect: "manual",
+    });
+    assert.equal(rejectedCallback.status, 403);
+    assert.equal(rejectedCallback.headers.getSetCookie()
+      .some(entry => entry.startsWith("pilot_session=") ||
+        entry.startsWith("pilot_partner_session=")), false,
+    "Failed invitation/OIDC verification must not mutate either session");
+
     // Exercise the real Google OIDC callback with the CI-only signed Google
     // mock, entering OAuth from a browser carrying a privileged admin cookie.
     // A valid invited Google account must replace, never inherit, admin access.
