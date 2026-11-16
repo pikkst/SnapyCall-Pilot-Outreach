@@ -17,6 +17,7 @@ import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "./ai-research.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
+import { partnerSelfProfileInput, publicPartnerSelfProfile } from "./partner-self-profile.js";
 import { assertWebResearchModel } from "./research-provider-adapters.js";
 import {
   reserveResearchAttempt, ResearchQuotaExceeded, lockedResearchPreferences,
@@ -344,6 +345,28 @@ app.get("/api/partner/session", safe(async (req, res) => {
     authenticated: true, displayName: user.displayName,
     partners: user.memberships.map(m => ({ id: m.partner.id, name: m.partner.name, role: m.role })),
   });
+}));
+// Profile belongs to the signed-in Google user, never a workspace or
+// arbitrary userId selected by the browser. This route does not grant send
+// permission, edit Google identity email, or change workspace membership.
+app.get("/api/partner/profile", safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Partner session required" });
+  return res.json(publicPartnerSelfProfile(user));
+}));
+app.put("/api/partner/profile", requireOrigin, safe(async (req, res) => {
+  const user = await partnerIdentity(req);
+  if (!user) return res.status(401).json({ error: "Partner session required" });
+  const parsed = partnerSelfProfileInput.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({
+    error: "Invalid profile details",
+    fields: parsed.error.issues.map(issue => issue.path.join(".")),
+  });
+  const saved = await prisma.partnerUser.update({
+    where: { id: user.id },
+    data: parsed.data,
+  });
+  return res.json(publicPartnerSelfProfile(saved));
 }));
 app.delete("/api/partner/session", requireOrigin, (_req, res) => {
   partnerCookie(res, "", 0);
