@@ -87,10 +87,60 @@ export async function commitCampaignResearchResult(db, claim, preview,
       })),
       skipDuplicates: true,
     }) : { count: 0 };
+
+    // The campaign row is already locked. Finalization must happen in the
+    // SAME transaction as the lease CAS and deduplicated evidence insert.
+    // Never mark terminal while another leased or uncertain-billing task
+    // still needs settlement/reconciliation.
+    const campaign = await tx.researchCampaign.findFirst({
+      where: { id: claim.campaignId, workspaceId: claim.workspaceId,
+        ownerId: claim.ownerId, status: "RUNNING" },
+      select: { targetCount: true },
+    });
+    if (!campaign) throw new CampaignLeaseConflict();
+    const unsettled = await tx.researchCampaignTask.count({
+      where: { campaignId: claim.campaignId,
+        status: { in: ["RUNNING", "PAUSED", "FAILED"] } },
+    });
+    let terminalStatus = null;
+    if (unsettled === 0) {
+      const unique = await tx.researchCampaignObservation.count({
+        where: { campaignId: claim.campaignId },
+      });
+      if (unique >= campaign.targetCount) {
+        // Prevent another paid claim after the threshold has been reached.
+        await tx.researchCampaignTask.updateMany({
+          where: { campaignId: claim.campaignId, status: "QUEUED" },
+          data: { status: "CANCELLED" },
+        });
+        terminalStatus = "COMPLETED";
+      } else {
+        const queued = await tx.researchCampaignTask.count({
+          where: { campaignId: claim.campaignId, status: "QUEUED" },
+        });
+        if (queued === 0) terminalStatus = "PARTIAL";
+      }
+    }
+    if (terminalStatus) {
+      const transition = await tx.researchCampaign.updateMany({
+        where: { id: claim.campaignId, workspaceId: claim.workspaceId,
+          ownerId: claim.ownerId, status: "RUNNING" },
+        data: { status: terminalStatus },
+      });
+      if (transition.count !== 1) throw new CampaignLeaseConflict();
+      await tx.auditEvent.create({ data: {
+        actorId: claim.ownerId, action: "research.campaign.finalized",
+        entityId: claim.campaignId, metadata: {
+          workspaceId: claim.workspaceId, status: terminalStatus,
+          contactVerification: "NOT_PERFORMED", sendingEnabled: false,
+        },
+      } });
+    }
     return Object.freeze({
       observed: observations.length,
       uniqueAdded: saved.count,
       duplicates: observations.length - saved.count,
+      ...(terminalStatus ? { campaignStatus: terminalStatus } : {}),
     });
   });
 }
