@@ -20,6 +20,7 @@ import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
+import { inspectAndStoreDirectEmailObservation, visibleDirectEmailObservation } from "./candidate-direct-email-evidence.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { normalizeDiscoveryLeadSeed } from "./discovery-lead-seed.js";
 import { partnerSelfProfileInput, publicPartnerSelfProfile } from "./partner-self-profile.js";
@@ -1119,6 +1120,52 @@ app.post("/api/candidates/:id/evidence", candidateReadScope, requireOrigin, safe
   });
   return res.status(result.status).json(result.body);
 }));
+// Independently inspect the candidate's existing public individual profile.
+// Only an explicit published Name + Email pair becomes REVIEW_REQUIRED evidence.
+// Client input cannot supply names, URLs, addresses, or inspection results.
+app.post("/api/candidates/:id/direct-email-evidence", candidateReadScope,
+  requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    z.object({}).strict().parse(req.body ?? {});
+    const outcome = await inspectAndStoreDirectEmailObservation(prisma, {
+      candidateId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(outcome.status).json(outcome.status === 200 ?
+      outcome : { code: outcome.code, error: "Person-email evidence unavailable" });
+  }));
+
+app.get("/api/candidates/:id/direct-email-evidence", candidateReadScope,
+  safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const row = await prisma.candidate.findFirst({
+      where: { id: req.params.id, workspaceId: req.candidateScope },
+      select: { id: true, email: true, expertProfileUrl: true },
+    });
+    if (!row) return res.status(404).json({ error: "Candidate not found" });
+    const stored = await prisma.candidateDirectEmailObservation.findUnique({
+      where: { candidateId: row.id },
+    });
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      candidateId: row.id,
+      observation: visibleDirectEmailObservation(row, stored),
+      personEmailLinked: false,
+      usableAsContact: false,
+      onboardingEligible: false,
+      sendingEnabled: false,
+    });
+  }));
+
 // Exact matches are review hints, not automatic identity merges. No name-only matches.
 app.get("/api/candidates/:id/possible-duplicates", candidateReadScope, safe(async (req, res) => {
   const candidate = await prisma.candidate.findFirst({
