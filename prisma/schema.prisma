@@ -336,6 +336,8 @@ model CandidateDirectEmailObservation {
   // never confirmed individual identity or permission to send.
   status String @default("REVIEW_REQUIRED")
   inspectedAt DateTime
+  reviewedAt DateTime?
+  reviewedBy String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([workspaceId, inspectedAt])
