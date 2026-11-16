@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { normalizeResearchEvidence } from "./research-evidence.js";
 import { discoverySearchGuidance } from "./research-discovery-guidance.js";
-import { searchWithOpenAI, searchWithGemini } from "./research-provider-adapters.js";
+import { searchWithOpenAI, searchWithGemini, ResearchEvidenceUnavailableError } from "./research-provider-adapters.js";
 
 // Preserve only provider HTTP status and a stable public error category.
 export class ResearchProviderHttpError extends Error {
@@ -15,9 +15,11 @@ export class ResearchProviderHttpError extends Error {
 }
 
 export class ResearchProviderExecutionError extends Error {
-  constructor() {
+  constructor(code = "RESEARCH_PROVIDER_EXECUTION_FAILED", phase = "PROVIDER") {
     super("AI provider search returned no usable result");
     this.name = "ResearchProviderExecutionError";
+    this.code = code;
+    this.phase = phase;
   }
 }
 
@@ -127,6 +129,11 @@ export async function researchCandidates({ query, limit = 10, provider = "anthro
     };
   } catch (error) {
     if (error instanceof ResearchProviderHttpError) throw error;
+    if (error instanceof ResearchEvidenceUnavailableError) {
+      // An HTTP-successful Gemini call may already be billable despite
+      // missing citations. Preserve the diagnostic, not the model payload.
+      throw new ResearchProviderExecutionError(error.code, error.phase);
+    }
     // Never forward provider payloads, network error details or arbitrary
     // text from external sources to the browser or application logs.
     throw new ResearchProviderExecutionError();
