@@ -14,7 +14,7 @@ import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { canonicalEvidenceUrl, EVIDENCE_KINDS, sameIdentityHints } from "../src/evidence.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
-import { researchCandidates, researchInput, ResearchProviderHttpError, publicResearchProviderFailure } from "./ai-research.js";
+import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "./ai-research.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { assertWebResearchModel } from "./research-provider-adapters.js";
@@ -853,6 +853,13 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
       // The user gets a stable category. Logs contain no key, body or URL.
       console.warn("[research] Provider rejected request; HTTP status:", error.status);
       return res.status(502).json(publicResearchProviderFailure(error.status));
+    }
+    if (error instanceof ResearchProviderExecutionError) {
+      console.warn("[research] Provider transport or response validation failed");
+      return res.status(502).json({
+        code: "RESEARCH_PROVIDER_RESULT_UNUSABLE",
+        error: "AI provider request or result validation failed. Check your provider connection and available credits before retrying.",
+      });
     }
     throw error;
   } finally {
