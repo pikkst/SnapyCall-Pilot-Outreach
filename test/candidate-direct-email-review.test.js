@@ -111,3 +111,14 @@ test("stale or changed profile never shows reviewed identity as usable contact",
     ...v, status: "REVIEW_REQUIRED", reviewedAt: null, reviewedBy: null,
   }, clock.now()).personEmailLinked, false);
 });
+
+test("malformed stored reviewer attestation cannot be replayed as linked", async () => {
+  const f = fixture({ evidenceChanges: {
+    status: "PERSON_EMAIL_REVIEWED", reviewedAt: null, reviewedBy: null,
+  } });
+  const out = await reviewCandidateDirectEmailEvidence(f.db,
+    { ...ids, expectedDigest: digest }, clock);
+  assert.equal(out.status, 409);
+  assert.equal(out.code, "REVIEW_ATTESTATION_INVALID");
+  assert.ok(!f.events.includes("review-write"));
+});
