@@ -93,6 +93,7 @@ test("server-inspected profile observation persists behind membership and row lo
   assert.deepEqual(m.events, ["membership", "candidate-lock", "shared-check", "save", "audit"]);
   assert.equal(m.getSaved().status, "REVIEW_REQUIRED");
   assert.equal(m.getSaved().emailNormalized, candidate.email);
+  assert.equal(m.getSaved().personName, candidate.name);
 });
 
 test("revocation, changed candidate, shared URL fail closed without writing", async () => {
@@ -121,12 +122,14 @@ test("unsafe or mismatched provider retrieval cannot generate persisted evidence
 });
 
 test("evidence read view invalidates after email or profile changes", () => {
-  const observation = { emailNormalized: candidate.email,
+  const observation = { emailNormalized: candidate.email, personName: candidate.name,
     profileUrl: url, status: "REVIEW_REQUIRED",
     inspectedAt: new Date("2026-11-16T16:00:00Z") };
   assert.equal(visibleDirectEmailObservation(candidate, observation).usableAsContact, false);
   assert.equal(visibleDirectEmailObservation({ ...candidate,
     email: "new@example.org" }, observation), null);
+  assert.equal(visibleDirectEmailObservation({ ...candidate,
+    name: "Morgan Field" }, observation), null);
   assert.equal(visibleDirectEmailObservation({ ...candidate,
     expertProfileUrl: "https://new.example.org" }, observation), null);
   assert.equal(visibleDirectEmailObservation(candidate, {
