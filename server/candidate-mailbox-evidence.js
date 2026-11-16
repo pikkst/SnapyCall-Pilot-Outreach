@@ -59,11 +59,27 @@ export async function persistCandidateMailboxEvidence(db, {
     }
     const existing = await tx.candidateMailboxVerification.findUnique({
       where: { candidateId },
-      select: { checkedAt: true },
+      select: { checkedAt: true, provider: true, adapterVersion: true,
+        emailNormalized: true, status: true, reason: true,
+        billableAttemptUncertain: true },
     });
     // An older response must never overwrite a newer provider observation.
     if (existing && existing.checkedAt > checked.checkedAt) {
       return { status: 409, code: "OLDER_VERIFICATION_REJECTED" };
+    }
+    if (existing && existing.checkedAt.getTime() === checked.checkedAt.getTime()) {
+      const same = existing.emailNormalized === checked.email &&
+        existing.provider === checked.provider &&
+        existing.adapterVersion === checked.adapterVersion &&
+        existing.status === checked.status &&
+        existing.reason === checked.reason &&
+        existing.billableAttemptUncertain === checked.billableAttemptUncertain;
+      if (!same) return { status: 409, code: "VERIFICATION_CONFLICT" };
+      return { status: 200, code: "MAILBOX_VERIFICATION_UNCHANGED",
+        provider: checked.provider, verificationStatus: checked.status,
+        checkedAt: checked.checkedAt, expiresAt: checked.expiresAt,
+        personEmailLinked: false, usableAsContact: false,
+        onboardingEligible: false, sendingEnabled: false };
     }
     const value = {
       workspaceId, emailNormalized: checked.email,
