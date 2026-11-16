@@ -68,3 +68,16 @@ test("user source edits need a fresh explicit review confirmation", () => {
     [ben]: "https://example.com/unreviewed-edited-profile",
   }, []).length, 0);
 });
+
+test("review source validity transitions from opaque citation to a usable public URL", () => {
+  const opaque = candidates[1];
+  assert.equal(resolvedReviewedSource(opaque, {}), null);
+  assert.deepEqual(reviewedSeedBatch([opaque], [ben], {}, []), []);
+  const reviewedUrls = { [ben]: "  https://consultants.example.com/ben#about  " };
+  assert.equal(resolvedReviewedSource(opaque, reviewedUrls),
+    "https://consultants.example.com/ben");
+  assert.equal(reviewedSeedBatch([opaque], [ben], reviewedUrls, []).length, 1);
+  reviewedUrls[ben] = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/opaque";
+  assert.equal(resolvedReviewedSource(opaque, reviewedUrls), null);
+  assert.deepEqual(reviewedSeedBatch([opaque], [ben], reviewedUrls, []), []);
+});
