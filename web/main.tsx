@@ -1260,7 +1260,7 @@ function App() {
                   {!readiness.ready && <p className="muted" role="status">
                     Paid AI search stays disabled until the server confirms it is available.
                     Adding credits directly to your AI provider does not configure this application.
-                  </p>
+                  </p>}
                   {researchStatus === "error" && <>
                     <p role="alert">{researchError}</p>
                     <p className="muted">An unsuccessful provider request may still have
