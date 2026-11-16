@@ -110,6 +110,9 @@ test("named professional email observation requires source citation and nearby f
     provenance: "SERVER_INSPECTED_PAGE", status: "REVIEW_REQUIRED",
     identityVerified: false, contactPermission: false,
     deliverabilityVerified: false,
+    personEmailLinked: false,
+    usableAsContact: false,
+    onboardingEligible: false,
   }]);
   assert.equal(result.publicBusinessContacts.length, 0);
 });
@@ -142,4 +145,19 @@ test("multiple names near the same mailbox never produce claimed individual owne
     "MULTIPLE_NAMES_NEAR_EMAIL_AMBIGUOUS");
   assert.equal(output.publicNamedContactObservations[0].identityVerified, false);
   assert.equal(output.publicNamedContactObservations[0].contactPermission, false);
+});
+
+test("proximity-only named email stays unusable for onboarding", async () => {
+  const source = "https://experts.example.org/team/ada";
+  const output = await inspectResearchPreview({
+    candidates: [{ name: "Ada Mentor", sourceUrl: source }],
+    sources: [{ url: source }],
+  }, { retrieve: async url => ({
+    url, text: "Ada Mentor | ada.mentor@experts.example.org",
+  }) });
+  assert.equal(output.publicNamedContactObservations.length, 1);
+  const item = output.publicNamedContactObservations[0];
+  assert.equal(item.personEmailLinked, false);
+  assert.equal(item.usableAsContact, false);
+  assert.equal(item.onboardingEligible, false);
 });
