@@ -875,11 +875,13 @@ function App() {
                   </section>
                   <section aria-label="AI web research preview" className="review-panel">
                   <h3>Find experts with AI web search</h3>
-                  <p className="muted">Optional paid search using your selected
-                    { " " + personalAi.provider + " " + personalAi.model } model, with up to
-                    3 provider web searches per request. Research is review-only;
-                    no candidates are imported or contacted. Daily attempts are limited,
-                    including failed searches; provider charges may still apply.</p>
+                  <p className="muted">Paid public-web research with your selected
+                    { " " + personalAi.provider + " " + personalAi.model } model.
+                    Only explicitly priced models can run. Claude and OpenAI permit at most
+                    three built-in web searches per request; Gemini 2.5 is billed by
+                    grounded prompt, not by query count. Every call reserves a conservative
+                    amount from your owner-wide application USD budget. Review-only:
+                    no candidates are imported or contacted. Failed requests may still be charged.</p>
                   <form onSubmit={event => void runResearch(p.id, event)}>
                     <label>Research criteria
                       <input value={researchQuery} maxLength={350} minLength={12} required
@@ -894,6 +896,9 @@ function App() {
                   {!personalAi.keyConfigured &&
                     <p className="muted">Configure a personal Gemini, OpenAI or Claude API key
                       under My AI provider first.</p>}
+                  {researchBudget.monthlyLimitCents === null &&
+                    <p className="muted">Set your monthly USD budget in My AI provider
+                      before web research; otherwise provider calls are blocked.</p>}
                   {researchLimitsStatus !== "ready" && <p className="muted">
                     Personal research limits are unavailable; search is disabled until loaded.</p>}
                   {researchStatus === "error" && <p role="alert">{researchError}</p>}
