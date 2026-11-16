@@ -937,6 +937,9 @@ function App() {
                     grounded prompt, not by query count. Every call reserves a conservative
                     amount from your owner-wide application USD budget. Review-only:
                     no candidates are imported or contacted. Failed requests may still be charged.</p>
+                  <p className="muted">Safety rate limit: at most 2 research requests
+                    per 60 seconds, regardless of the saved daily attempt limit.
+                    Wait at least one minute before another test to avoid HTTP 429.</p>
                   <form onSubmit={event => void runResearch(p.id, event)}>
                     <label>Research criteria
                       <input value={researchQuery} maxLength={350} minLength={12} required
