@@ -20,6 +20,7 @@ import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
 import { runBoundedCampaignSlice } from "./research-campaign-slice.js";
+import { skipPausedResearchTask } from "./research-campaign-reconciliation.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { inspectAndStoreDirectEmailObservation } from "./candidate-direct-email-evidence.js";
 import { reviewCandidateDirectEmailEvidence, directEmailReviewSnapshot } from "./candidate-direct-email-review.js";
@@ -1370,7 +1371,8 @@ app.get("/api/research-campaigns/:id/progress", candidateReadScope,
       select: { id: true, status: true, targetCount: true,
         _count: { select: { observations: true } },
         tasks: { select: { status: true, observedCount: true,
-          resultLimit: true, leaseUntil: true, nextAttemptAt: true } } },
+          resultLimit: true, leaseUntil: true, nextAttemptAt: true,
+          taskIndex: true, lastErrorCode: true } } },
     });
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
     res.set("Cache-Control", "no-store");
@@ -1470,6 +1472,33 @@ app.post("/api/research-campaigns/:id/execute-next",
       }
       throw error;
     }
+  }));
+
+// Explicit human skip of one already-uncertain, conservatively settled
+// task. It NEVER replays the billable call or refunds its reservation.
+app.post("/api/research-campaigns/:id/skip-uncertain-task",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (env.AI_AGENT_RESEARCH_ENABLED !== "true" ||
+        env.AI_AGENT_EXECUTOR_ENABLED !== "true") {
+      return res.status(503).json({ code: "RESEARCH_EXECUTOR_DISABLED",
+        error: "Research campaign execution is disabled" });
+    }
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const input = z.object({
+      taskIndex: z.number().int().min(0).max(99),
+      confirmNoRetry: z.literal(true),
+      acceptConservativeCharge: z.literal(true),
+    }).strict().parse(req.body);
+    const result = await skipPausedResearchTask(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id, ...input,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
   }));
 
 app.post("/api/research-campaigns/:id/cancel", candidateReadScope,
