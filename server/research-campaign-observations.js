@@ -64,6 +64,16 @@ export async function commitCampaignResearchResult(db, claim, preview,
     // Recheck live workspace membership inside the evidence write transaction.
     // A revoked user cannot commit provider findings after a paid search.
     if (beforeCommit && !(await beforeCommit(tx))) throw new CampaignLeaseConflict();
+    // Serialize provider results with subsequent target-count checks before
+    // another paid task is claimed. Claim uses the same campaign row lock.
+    const campaignRows = await tx.$queryRaw`
+      SELECT "id" FROM "ResearchCampaign"
+      WHERE "id" = ${claim.campaignId}
+        AND "workspaceId" = ${claim.workspaceId}
+        AND "ownerId" = ${claim.ownerId}
+        AND "status" = 'RUNNING'
+      FOR UPDATE`;
+    if (campaignRows.length !== 1) throw new CampaignLeaseConflict();
     const applied = await completeResearchTask(tx, claim, {
       observedCount: observations.length, now,
     });
