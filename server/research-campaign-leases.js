@@ -35,13 +35,19 @@ export function classifyTaskFailure(code, attempt, now = new Date()) {
 // two workers from claiming the same task across instances. Expired RUNNING
 // leases are intentionally NOT auto-retried: the upstream may already bill.
 export async function claimResearchTask(db, { campaignId, workspaceId, ownerId,
-  now = new Date() }) {
+  now = new Date(), beforeLock = null, reserveInTransaction = null }) {
   if (![campaignId, workspaceId, ownerId].every(value =>
     typeof value === "string" && /^c[a-z0-9]{10,40}$/.test(value)) ||
     !(now instanceof Date) || !Number.isFinite(now.getTime())) {
     throw new TypeError("Verified campaign scope and clock required");
   }
+  if ((beforeLock !== null && typeof beforeLock !== "function") ||
+      (reserveInTransaction !== null && typeof reserveInTransaction !== "function")) {
+    throw new TypeError("Invalid research lease hooks");
+  }
   return db.$transaction(async tx => {
+    // Lock membership BEFORE the campaign row to preserve cancel/revoke order.
+    if (beforeLock && !(await beforeLock(tx))) return null;
     // Lock the campaign row so cancellation and claims serialize.
     const campaigns = await tx.$queryRaw`
       SELECT "id" FROM "ResearchCampaign"
@@ -61,6 +67,10 @@ export async function claimResearchTask(db, { campaignId, workspaceId, ownerId,
       LIMIT 1 FOR UPDATE SKIP LOCKED`;
     if (rows.length !== 1) return null;
     const task = rows[0];
+    // Monetary reservation, daily quota and concurrency lease share the
+    // claim transaction. Any failure rolls back the task claim too.
+    const reservation = reserveInTransaction ?
+      await reserveInTransaction(tx, { taskId: task.id, limit: task.resultLimit }) : null;
     const token = randomUUID();
     const leaseUntil = new Date(now.getTime() + LEASE_MS);
     await tx.researchCampaignTask.update({
@@ -75,7 +85,8 @@ export async function claimResearchTask(db, { campaignId, workspaceId, ownerId,
     });
     return { taskId: task.id, campaignId, workspaceId, ownerId,
       query: task.query, limit: task.resultLimit,
-      attempt: task.attempts + 1, leaseToken: token, leaseUntil };
+      attempt: task.attempts + 1, leaseToken: token, leaseUntil,
+      ...(reservation === null ? {} : { reservation }) };
   });
 }
 
