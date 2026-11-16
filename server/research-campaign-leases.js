@@ -66,15 +66,22 @@ export async function claimResearchTask(db, { campaignId, workspaceId, ownerId,
       GROUP BY c."id"`;
     if (totals.length !== 1) throw new Error("Campaign count unavailable");
     if (totals[0].uniqueCount >= totals[0].targetCount) {
-      await tx.researchCampaignTask.updateMany({
-        where: { campaignId, status: "QUEUED" },
-        data: { status: "CANCELLED" },
+      // An already claimed task can be chargeable. Never finalize the
+      // campaign while a RUNNING or PAUSED task needs settlement/review.
+      const unresolved = await tx.researchCampaignTask.count({
+        where: { campaignId, status: { in: ["RUNNING", "PAUSED", "FAILED"] } },
       });
-      await tx.researchCampaign.updateMany({
-        where: { id: campaignId, workspaceId, ownerId,
-          status: { in: ["QUEUED", "RUNNING"] } },
-        data: { status: "COMPLETED" },
-      });
+      if (unresolved === 0) {
+        await tx.researchCampaignTask.updateMany({
+          where: { campaignId, status: "QUEUED" },
+          data: { status: "CANCELLED" },
+        });
+        await tx.researchCampaign.updateMany({
+          where: { id: campaignId, workspaceId, ownerId,
+            status: { in: ["QUEUED", "RUNNING"] } },
+          data: { status: "COMPLETED" },
+        });
+      }
       return null;
     }
     const rows = await tx.$queryRaw`
