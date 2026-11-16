@@ -239,6 +239,11 @@ export function summarizeCampaignProgress(campaign) {
     rawCandidateObservations: rawObservations,
     duplicateObservations: Math.max(0, rawObservations - unique),
     plannedTasks: campaign.tasks.length, tasks: byStatus,
+    pausedTaskReview: campaign.tasks.filter(task =>
+      task.status === "PAUSED" && Number.isInteger(task.taskIndex) &&
+      task.lastErrorCode === "BILLING_UNCERTAIN").map(task => ({
+      taskIndex: task.taskIndex, lastErrorCode: "BILLING_UNCERTAIN",
+    })),
     contactVerification: "NOT_PERFORMED",
     sendingEnabled: false,
   });
