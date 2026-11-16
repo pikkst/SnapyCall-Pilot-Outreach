@@ -54,7 +54,7 @@ test("no eligible campaign or task cannot create a lease", async () => {
     $queryRaw: async () => [],
   }) };
   assert.equal(await claimResearchTask(db, scope), null);
-  assert.rejects(() => claimResearchTask(db, { ...scope, workspaceId: "wrong" }));
+  await assert.rejects(() => claimResearchTask(db, { ...scope, workspaceId: "wrong" }));
 });
 
 test("completion requires matching lease, status and bounded result count", async () => {
