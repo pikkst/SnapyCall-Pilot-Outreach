@@ -26,7 +26,22 @@ export async function runBoundedCampaignSlice(input, { runTask } = {}) {
   }
   const results = [];
   for (let index = 0; index < maxTasks; index++) {
-    const result = await runTask();
+    let result;
+    try {
+      result = await runTask();
+    } catch {
+      // A later call can fail preflight after earlier tasks committed. Never
+      // lose that partial progress, retry the call or leak provider errors.
+      return Object.freeze({
+        status: "REVIEW_REQUIRED",
+        attemptedTasks: results.length,
+        completedTasks: results.length,
+        taskResults: Object.freeze(results),
+        code: "RESEARCH_SLICE_HALTED",
+        attempted: false,
+        sendingEnabled: false,
+      });
+    }
     if (!result || typeof result.status !== "string") {
       throw new TypeError("Invalid campaign worker outcome");
     }
