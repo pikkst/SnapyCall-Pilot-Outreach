@@ -14,6 +14,13 @@ export class ResearchProviderHttpError extends Error {
   }
 }
 
+export class ResearchProviderExecutionError extends Error {
+  constructor() {
+    super("AI provider search returned no usable result");
+    this.name = "ResearchProviderExecutionError";
+  }
+}
+
 export function publicResearchProviderFailure(status) {
   if (status === 400) return {
     code: "RESEARCH_PROVIDER_INVALID_REQUEST",
@@ -118,5 +125,10 @@ export async function researchCandidates({ query, limit = 10, provider = "anthro
       },
       imported: false, reviewRequired: true, sendingEnabled: false,
     };
+  } catch (error) {
+    if (error instanceof ResearchProviderHttpError) throw error;
+    // Never forward provider payloads, network error details or arbitrary
+    // text from external sources to the browser or application logs.
+    throw new ResearchProviderExecutionError();
   } finally { clearTimeout(timeout); }
 }
