@@ -16,6 +16,7 @@ import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSessi
 import { sessionIdentityState, canUseAdminSession } from "./session-isolation.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "./ai-research.js";
+import { planResearchCampaign } from "./research-campaign-planner.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { normalizeDiscoveryLeadSeed } from "./discovery-lead-seed.js";
@@ -1138,6 +1139,132 @@ app.get("/api/candidates/:id/possible-duplicates", candidateReadScope, safe(asyn
   const suggestions = sameIdentityHints(candidate, others.slice(0, MAX_IDENTITY_CANDIDATES));
   return res.json({ suggestions, automaticallyMerged: false, incomplete });
 }));
+// Planning is inert: it persists tasks but makes no provider request.
+// Feature flag defaults off until a leased executor and spending gates ship.
+app.post("/api/research-campaigns", candidateReadScope, requireOrigin,
+  safe(async (req, res) => {
+    if (env.AI_AGENT_RESEARCH_ENABLED !== "true") {
+      return res.status(503).json({ code: "RESEARCH_CAMPAIGNS_DISABLED",
+        error: "Research campaigns are not enabled" });
+    }
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const plan = planResearchCampaign(req.body);
+    const result = await prisma.$transaction(async tx => {
+      if (!await lockActiveWorkspaceMembership(tx, {
+        workspaceId: req.candidateScope, userId: identity.id,
+      })) return null;
+      // Serialize an identical request against the workspace row. No new
+      // campaign or duplicate tasks are created when the client retries.
+      await tx.$queryRaw`SELECT "id" FROM "Partner"
+        WHERE "id" = ${req.candidateScope} FOR UPDATE`;
+      const existing = await tx.researchCampaign.findUnique({
+        where: { workspaceId_ownerId_idempotencyKey: {
+          workspaceId: req.candidateScope, ownerId: identity.id,
+          idempotencyKey: plan.idempotencyKey,
+        } },
+      });
+      if (existing) {
+        if (existing.query !== plan.query || existing.targetCount !== plan.targetCount ||
+            existing.planVersion !== plan.planVersion) {
+          return { conflict: true };
+        }
+        return { campaign: existing, created: false };
+      }
+      const campaign = await tx.researchCampaign.create({ data: {
+        workspaceId: req.candidateScope, ownerId: identity.id,
+        idempotencyKey: plan.idempotencyKey, query: plan.query,
+        targetCount: plan.targetCount, planVersion: plan.planVersion,
+        tasks: { create: plan.tasks.map(task => ({
+          taskIndex: task.index, taskKey: task.key, query: task.query,
+          region: task.region, facet: task.facet, resultLimit: task.limit,
+        })) },
+      } });
+      await tx.auditEvent.create({ data: {
+        actorId: identity.id, action: "research.campaign.planned",
+        entityId: campaign.id,
+        metadata: { workspaceId: req.candidateScope,
+          planVersion: plan.planVersion, tasks: plan.tasks.length,
+          targetCount: plan.targetCount },
+      } });
+      return { campaign, created: true };
+    });
+    if (!result) return res.status(403).json({ error: "Workspace membership revoked" });
+    if (result.conflict) return res.status(409).json({
+      error: "Idempotency key already used for different campaign criteria",
+    });
+    return res.status(result.created ? 201 : 200).json({
+      id: result.campaign.id, created: result.created,
+      status: result.campaign.status, targetCount: result.campaign.targetCount,
+      plannedTasks: plan.tasks.length, providerCallsAuthorized: false,
+      sendingEnabled: false,
+    });
+  }));
+
+app.get("/api/research-campaigns", candidateReadScope, safe(async (req, res) => {
+  if (req.candidateScope === null) {
+    return res.status(403).json({ error: "Partner workspace required" });
+  }
+  const identity = await partnerIdentity(req);
+  if (!identity) return res.status(401).json({ error: "Unauthorized" });
+  const items = await prisma.researchCampaign.findMany({
+    where: { workspaceId: req.candidateScope, ownerId: identity.id },
+    select: { id: true, query: true, targetCount: true, planVersion: true,
+      status: true, createdAt: true, _count: { select: { tasks: true } } },
+    orderBy: { createdAt: "desc" }, take: 30,
+  });
+  return res.json(items.map(item => ({
+    id: item.id, query: item.query, targetCount: item.targetCount,
+    planVersion: item.planVersion, status: item.status,
+    createdAt: item.createdAt, plannedTasks: item._count.tasks,
+    providerCallsAuthorized: false,
+  })));
+}));
+
+app.post("/api/research-campaigns/:id/cancel", candidateReadScope,
+  requireOrigin, safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const outcome = await prisma.$transaction(async tx => {
+      if (!await lockActiveWorkspaceMembership(tx, {
+        workspaceId: req.candidateScope, userId: identity.id,
+      })) return { forbidden: true };
+      const campaign = await tx.researchCampaign.findFirst({
+        where: { id: req.params.id, workspaceId: req.candidateScope,
+          ownerId: identity.id },
+      });
+      if (!campaign) return { missing: true };
+      if (campaign.status === "CANCELLED") return { cancelled: true, changed: false };
+      if (campaign.status !== "QUEUED") return { conflict: true };
+      await tx.researchCampaign.update({
+        where: { id: campaign.id }, data: { status: "CANCELLED" },
+      });
+      await tx.researchCampaignTask.updateMany({
+        where: { campaignId: campaign.id, status: "QUEUED" },
+        data: { status: "CANCELLED" },
+      });
+      await tx.auditEvent.create({ data: {
+        actorId: identity.id, action: "research.campaign.cancelled",
+        entityId: campaign.id, metadata: { workspaceId: req.candidateScope },
+      } });
+      return { cancelled: true, changed: true };
+    });
+    if (outcome.forbidden) return res.status(403).json({
+      error: "Workspace membership revoked",
+    });
+    if (outcome.missing) return res.status(404).json({ error: "Campaign not found" });
+    if (outcome.conflict) return res.status(409).json({
+      error: "Campaign cannot be cancelled in current state",
+    });
+    return res.json(outcome);
+  }));
+
 app.get("/api/candidates", candidateReadScope, safe(async (req, res) => {
   const items = await prisma.candidate.findMany({
     where: { workspaceId: req.candidateScope },
