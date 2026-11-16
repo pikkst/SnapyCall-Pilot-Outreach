@@ -56,6 +56,34 @@ export async function claimResearchTask(db, { campaignId, workspaceId, ownerId,
         AND "status" IN ('QUEUED', 'RUNNING')
       FOR UPDATE`;
     if (campaigns.length !== 1) return null;
+    // The target check is inside the campaign lock, before monetary/quota
+    // reservations. Already-sourced candidates must not trigger more calls.
+    const totals = await tx.$queryRaw`
+      SELECT c."targetCount", COUNT(o."id")::int AS "uniqueCount"
+      FROM "ResearchCampaign" c
+      LEFT JOIN "ResearchCampaignObservation" o ON o."campaignId" = c."id"
+      WHERE c."id" = ${campaignId}
+      GROUP BY c."id"`;
+    if (totals.length !== 1) throw new Error("Campaign count unavailable");
+    if (totals[0].uniqueCount >= totals[0].targetCount) {
+      // An already claimed task can be chargeable. Never finalize the
+      // campaign while a RUNNING or PAUSED task needs settlement/review.
+      const unresolved = await tx.researchCampaignTask.count({
+        where: { campaignId, status: { in: ["RUNNING", "PAUSED", "FAILED"] } },
+      });
+      if (unresolved === 0) {
+        await tx.researchCampaignTask.updateMany({
+          where: { campaignId, status: "QUEUED" },
+          data: { status: "CANCELLED" },
+        });
+        await tx.researchCampaign.updateMany({
+          where: { id: campaignId, workspaceId, ownerId,
+            status: { in: ["QUEUED", "RUNNING"] } },
+          data: { status: "COMPLETED" },
+        });
+      }
+      return null;
+    }
     const rows = await tx.$queryRaw`
       SELECT "id", "attempts", "query", "resultLimit"
       FROM "ResearchCampaignTask"

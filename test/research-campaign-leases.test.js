@@ -32,8 +32,13 @@ test("only transient bounded failures retry and uncertain billing never retries"
 test("claim is scope-locked and returns a finite fenced lease", async () => {
   let reads = 0;
   const db = { $transaction: async handler => handler({
-    $queryRaw: async () => ++reads === 1 ? [{ id: scope.campaignId }] :
-      [{ id: "task-1", attempts: 0, query: "Source-backed experts", resultLimit: 10 }],
+    $queryRaw: async () => {
+      reads++;
+      if (reads === 1) return [{ id: scope.campaignId }];
+      if (reads === 2) return [{ targetCount: 100, uniqueCount: 0 }];
+      return [{ id: "task-1", attempts: 0,
+        query: "Source-backed experts", resultLimit: 10 }];
+    },
     researchCampaignTask: { update: async ({ data }) => {
       assert.equal(data.status, "RUNNING");
       assert.equal(data.attempts.increment, 1);
@@ -41,7 +46,7 @@ test("claim is scope-locked and returns a finite fenced lease", async () => {
     researchCampaign: { updateMany: async () => ({ count: 1 }) },
   }) };
   const result = await claimResearchTask(db, scope);
-  assert.equal(reads, 2);
+  assert.equal(reads, 3);
   assert.equal(result.taskId, "task-1");
   assert.equal(result.attempt, 1);
   assert.equal(result.limit, 10);
@@ -73,4 +78,41 @@ test("completion requires matching lease, status and bounded result count", asyn
   const result = await failResearchTask(tx, claim, "PROVIDER_429", now);
   assert.equal(result.applied, false);
   assert.equal(result.status, "QUEUED");
+});
+
+test("target met prevents a new paid lease and closes only fully settled tasks", async () => {
+  const events = [];
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async strings => {
+      const sql = strings.join("?");
+      return sql.includes('COUNT(o."id")')
+        ? [{ targetCount: 100, uniqueCount: 104 }]
+        : [{ id: scope.campaignId }];
+    },
+    researchCampaignTask: {
+      count: async () => 0,
+      updateMany: async ({ data }) => { events.push("tasks-" + data.status); return { count: 20 }; },
+      update: async () => { throw new Error("Paid task must not be claimed"); },
+    },
+    researchCampaign: { updateMany: async ({ data }) => {
+      events.push("campaign-" + data.status); return { count: 1 };
+    } },
+  }) };
+  assert.equal(await claimResearchTask(db, scope), null);
+  assert.deepEqual(events, ["tasks-CANCELLED", "campaign-COMPLETED"]);
+});
+
+test("unsettled in-flight task blocks terminal state even when target is reached", async () => {
+  let writes = 0;
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async strings => strings.join("?").includes('COUNT(o."id")') ?
+      [{ targetCount: 100, uniqueCount: 101 }] : [{ id: scope.campaignId }],
+    researchCampaignTask: {
+      count: async () => 1,
+      updateMany: async () => { writes++; },
+    },
+    researchCampaign: { updateMany: async () => { writes++; } },
+  }) };
+  assert.equal(await claimResearchTask(db, scope), null);
+  assert.equal(writes, 0);
 });
