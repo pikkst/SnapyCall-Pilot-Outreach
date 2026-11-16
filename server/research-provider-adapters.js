@@ -115,6 +115,7 @@ export async function searchWithGemini({ query, limit, model, apiKey }, post, si
   if (!Array.isArray(metadata?.webSearchQueries) ||
       metadata.webSearchQueries.length < 1 || metadata.webSearchQueries.length > 100 ||
       !Array.isArray(metadata.groundingChunks) ||
+      metadata.groundingChunks.length < 1 ||
       metadata.groundingChunks.length > 200) {
     throw new ResearchEvidenceUnavailableError();
   }
