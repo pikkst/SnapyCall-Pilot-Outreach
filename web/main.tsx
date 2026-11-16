@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./style.css";
 import { manualIndependentResearch } from "../src/manual-research.js";
 import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch, selectedDiscoverySeedBatch } from "../src/research-review-batch.js";
+import { researchReadiness } from "../src/research-readiness.js";
 
 type CampaignSummary = { id: string; query: string; targetCount: number; status: string; plannedTasks: number; createdAt: string; providerCallsAuthorized: false };
 type PartnerTab = "dashboard" | "candidates" | "discovery" | "drafts" | "profile" | "settings";
@@ -686,6 +687,8 @@ function App() {
       }) });
       setPersonalApiKey("");
       await loadPersonalAiSettings();
+      // The selected model may change the authoritative server budget readiness.
+      await loadResearchBudget();
       setNotice("Your AI key was saved to your account (encrypted). No AI request was made.");
     });
   }
@@ -695,6 +698,7 @@ function App() {
       await api("/ai-settings", { method: "DELETE" });
       setPersonalApiKey("");
       await loadPersonalAiSettings();
+      await loadResearchBudget();
       setNotice("Your personal AI key was removed.");
     });
   }
@@ -993,6 +997,15 @@ function App() {
     });
   }
 
+  const readiness = researchReadiness({
+    aiStatus: personalAiStatus,
+    keyConfigured: personalAi.keyConfigured,
+    budgetStatus,
+    monthlyLimitCents: researchBudget.monthlyLimitCents,
+    enforcedForPaidSearch: researchBudget.enforcedForPaidSearch,
+    limitsStatus: researchLimitsStatus,
+  });
+
   if (sessionConflict) return (
     <main className="login-shell">
       <section className="panel login" role="alert">
@@ -1123,12 +1136,11 @@ function App() {
                     <h3>Next steps</h3>
                     <ol className="getting-started">
                       <li><strong>Configure AI search</strong>
-                        <p>{personalAi.keyConfigured && researchBudget.monthlyLimitCents !== null
-                          ? "AI key and monthly budget are configured."
-                          : "Set up your personal AI key and monthly spending limit before paid research."}</p>
+                        <p>{readiness.ready
+                          ? "AI web research is available for your current model and application budget."
+                          : "Complete the AI key, application budget and server readiness checks."}</p>
                         <button type="button" className="secondary" onClick={() => setPartnerTab("settings")}>
-                          {personalAi.keyConfigured && researchBudget.monthlyLimitCents !== null
-                            ? "Review AI settings" : "Configure AI settings"}
+                          {readiness.ready ? "Review AI settings" : "Configure AI settings"}
                         </button>
                       </li>
                       <li><strong>Find and save experts</strong>
@@ -1204,31 +1216,51 @@ function App() {
                     per 60 seconds, regardless of the saved daily attempt limit.
                     Wait at least one minute before another test to avoid HTTP 429.</p>
                   </details>
+                  <section aria-label="Research setup checklist" className="research-readiness">
+                    <div className="research-readiness-heading">
+                      <h4>Ready to search?</h4>
+                      <span className={readiness.ready ? "research-ready-label" : "research-pending-label"}>
+                        {readiness.ready ? "Ready" : "Setup needed"}
+                      </span>
+                    </div>
+                    <ol className="research-readiness-steps">
+                      {readiness.steps.map(step => <li key={step.key}
+                        className={"research-readiness-step " + step.state}>
+                        <strong>{step.title}</strong>
+                        <p className="muted">{step.description}</p>
+                        {step.state === "action" && <button type="button"
+                          className="secondary" onClick={() => setPartnerTab("settings")}>
+                            Open AI settings
+                          </button>}
+                      </li>)}
+                    </ol>
+                    {!readiness.ready && <button type="button" className="secondary"
+                      disabled={personalAiStatus === "loading" || budgetStatus === "loading" ||
+                        researchLimitsStatus === "loading"}
+                      onClick={() => void Promise.allSettled([
+                        loadPersonalAiSettings(), loadResearchBudget(), loadResearchLimits(),
+                      ])}>
+                      Refresh search readiness
+                    </button>}
+                    {readiness.ready && <p className="muted">
+                      This authorizes only a single bounded search request. Results require
+                      manual review and no emails are sent.
+                    </p>}
+                  </section>
                   <form onSubmit={event => void runResearch(p.id, event)}>
                     <label>Research criteria
                       <input value={researchQuery} maxLength={350} minLength={12} required
                         onChange={event => setResearchQuery(event.target.value)}/>
                     </label>
                     <button type="submit" disabled={researchStatus === "loading" ||
-                      !personalAi.keyConfigured || personalAiStatus !== "ready" ||
-                      researchLimitsStatus !== "ready"}>
+                      !readiness.ready}>
                       {researchStatus === "loading" ? "Researching…" : "Search public web"}
                     </button>
                   </form>
-                  {!personalAi.keyConfigured && <div className="research-setup-notice" role="status">
-                    <p>Set up a personal Gemini, OpenAI or Claude API key before searching.</p>
-                    <button type="button" className="secondary" onClick={() => setPartnerTab("settings")}>
-                      Open AI settings
-                    </button>
-                  </div>}
-                  {researchBudget.monthlyLimitCents === null && <div className="research-setup-notice" role="status">
-                    <p>Set your monthly USD spending limit to enable paid research.</p>
-                    <button type="button" className="secondary" onClick={() => setPartnerTab("settings")}>
-                      Set spending limit
-                    </button>
-                  </div>}
-                  {researchLimitsStatus !== "ready" && <p className="muted">
-                    Personal research limits are unavailable; search is disabled until loaded.</p>}
+                  {!readiness.ready && <p className="muted" role="status">
+                    Paid AI search stays disabled until the server confirms it is available.
+                    Adding credits directly to your AI provider does not configure this application.
+                  </p>
                   {researchStatus === "error" && <>
                     <p role="alert">{researchError}</p>
                     <p className="muted">An unsuccessful provider request may still have
@@ -1515,7 +1547,9 @@ function App() {
             {connectionStatus === "loading" ? <p className="muted">Checking Google connection…</p>
               : connectionStatus === "unavailable" ? <p className="muted">Connection status unknown</p>
               : connection ? <>
-                <p className="muted">Google Forms & Sheets: authorized (read-only). Sync is not yet enabled.</p>
+                <p className="muted">Google access is authorized (read-only), but no specific
+                  spreadsheet has been selected or synchronized into this workspace.
+                  Contact and outreach data remain in the application database.</p>
                 <button className="secondary" disabled={busy}
                   onClick={() => disconnectGoogle(p.id)}>Disconnect Google</button>
               </> : !googleConfigured ? <p className="muted">Google connection is not configured for this environment.</p>
