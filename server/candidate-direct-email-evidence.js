@@ -108,10 +108,12 @@ export async function inspectAndStoreDirectEmailObservation(db, {
     if (shared) return { status: 409, code: "SHARED_PROFILE_REVIEW_REQUIRED" };
     await tx.candidateDirectEmailObservation.upsert({
       where: { candidateId },
-      create: { workspaceId, candidateId, emailNormalized: finding.emailNormalized,
+      create: { workspaceId, candidateId, personName: candidate.name,
+        emailNormalized: finding.emailNormalized,
         profileUrl: finding.profileUrl, evidenceDigest: finding.evidenceDigest,
         inspectedAt, status: "REVIEW_REQUIRED" },
-      update: { workspaceId, emailNormalized: finding.emailNormalized,
+      update: { workspaceId, personName: candidate.name,
+        emailNormalized: finding.emailNormalized,
         profileUrl: finding.profileUrl, evidenceDigest: finding.evidenceDigest,
         inspectedAt, status: "REVIEW_REQUIRED" },
     });
@@ -134,6 +136,7 @@ export async function inspectAndStoreDirectEmailObservation(db, {
 export function visibleDirectEmailObservation(candidate, observation) {
   if (!candidate || !observation ||
       normalizedEmail(candidate.email) !== observation.emailNormalized ||
+      candidate.name !== observation.personName ||
       publicCitationUrl(candidate.expertProfileUrl) !== observation.profileUrl ||
       observation.status !== "REVIEW_REQUIRED") return null;
   return Object.freeze({ status: "REVIEW_REQUIRED",
