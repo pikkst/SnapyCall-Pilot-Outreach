@@ -81,7 +81,13 @@ export async function searchWithGemini({ query, limit, model, apiKey }, post, si
     {
       contents: [{ parts: [{ text: instructions(query, limit) }] }],
       tools: [{ google_search: {} }],
-      generationConfig: { maxOutputTokens: 3200 },
+      // Gemini 2.5 Flash defaults to dynamic thinking; thinking tokens count
+      // toward maxOutputTokens and can truncate a grounded JSON response.
+      // This deterministic extraction task does not require reasoning tokens.
+      generationConfig: {
+        maxOutputTokens: 3200,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
     }, signal);
   const items = result?.candidates;
   if (!Array.isArray(items) || items.length !== 1 ||
@@ -90,10 +96,14 @@ export async function searchWithGemini({ query, limit, model, apiKey }, post, si
   }
   const candidate = items[0];
   const metadata = candidate.groundingMetadata;
-  // Grounding chunks without search queries are not proof of an executed query.
+  // Gemini 2.5 Search Grounding is billed by grounded prompt, not by
+  // individual webSearchQueries. Do not reject a valid paid response merely
+  // because Google executed >3 internal searches. Limit response metadata
+  // size defensively; do not interpret these as separately billable calls.
   if (!Array.isArray(metadata?.webSearchQueries) ||
-      metadata.webSearchQueries.length < 1 || metadata.webSearchQueries.length > 3 ||
-      !Array.isArray(metadata.groundingChunks)) {
+      metadata.webSearchQueries.length < 1 || metadata.webSearchQueries.length > 100 ||
+      !Array.isArray(metadata.groundingChunks) ||
+      metadata.groundingChunks.length > 200) {
     throw new Error("Gemini Google Search grounding unavailable or unbounded");
   }
   const textParts = candidate.content?.parts;
