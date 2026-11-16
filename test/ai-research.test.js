@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { researchCandidates, researchInput } from "../server/ai-research.js";
+import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "../server/ai-research.js";
 
 const args = {
   query: "Find English-speaking professional AI automation consultants in the UK",
@@ -64,4 +64,51 @@ test("research criteria and candidate limits are bounded", () => {
   assert.equal(researchInput.safeParse({ query: "short", limit: 10 }).success, false);
   assert.equal(researchInput.safeParse({ query: "A reasonable expert search", limit: 21 }).success, false);
   assert.equal(researchInput.safeParse({ query: "A reasonable expert search", limit: 1, workspaceId: "forged" }).success, false);
+});
+
+test("provider rejection is classified without leaking sensitive upstream text", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false, status: 403,
+    json: async () => ({ error: { message: "sk-test-secret-do-not-log" } }),
+  });
+  try {
+    await assert.rejects(
+      () => researchCandidates(args),
+      error => error instanceof ResearchProviderHttpError &&
+        error.status === 403 &&
+        !String(error.message).includes("sk-test-secret"),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("provider failures map to safe and actionable public error codes", () => {
+  const cases = [
+    [400, "RESEARCH_PROVIDER_INVALID_REQUEST"],
+    [401, "RESEARCH_PROVIDER_ACCESS_DENIED"],
+    [403, "RESEARCH_PROVIDER_ACCESS_DENIED"],
+    [402, "RESEARCH_PROVIDER_CREDITS_REQUIRED"],
+    [429, "RESEARCH_PROVIDER_RATE_LIMITED"],
+    [500, "RESEARCH_PROVIDER_UNAVAILABLE"],
+    [503, "RESEARCH_PROVIDER_UNAVAILABLE"],
+  ];
+  for (const [status, code] of cases) {
+    const value = publicResearchProviderFailure(status);
+    assert.equal(value.code, code);
+    assert.equal(typeof value.error, "string");
+    assert.ok(value.error.length > 15);
+    assert.doesNotMatch(JSON.stringify(value), /secret|bearer|sk-test/i);
+  }
+});
+
+test("upstream transport and invalid responses become sanitized execution errors", async () => {
+  await assert.rejects(() => researchCandidates(args, {
+    post: async () => { throw new Error("secret raw external transport error"); },
+  }), error => error instanceof ResearchProviderExecutionError &&
+    !String(error.message).includes("secret"));
+  await assert.rejects(() => researchCandidates(args, {
+    post: async () => ({ stop_reason: "max_tokens", content: [] }),
+  }), ResearchProviderExecutionError);
 });

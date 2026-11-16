@@ -419,6 +419,9 @@ function App() {
       if (workspaceRequest.current !== generation) return;
       setResearchStatus("error");
       setResearchError(error instanceof Error ? error.message : "Research unavailable");
+    } finally {
+      // Provider calls can be billed even when an upstream error occurs.
+      if (workspaceRequest.current === generation) void loadResearchBudget();
     }
   }
 
@@ -901,7 +904,12 @@ function App() {
                       before web research; otherwise provider calls are blocked.</p>}
                   {researchLimitsStatus !== "ready" && <p className="muted">
                     Personal research limits are unavailable; search is disabled until loaded.</p>}
-                  {researchStatus === "error" && <p role="alert">{researchError}</p>}
+                  {researchStatus === "error" && <>
+                    <p role="alert">{researchError}</p>
+                    <p className="muted">An unsuccessful provider request may still have
+                      reserved application budget. Review the refreshed budget
+                      before retrying.</p>
+                  </>}
                   {researchResult && <>
                     <p className="muted">{researchResult.candidates.length} candidates for manual review
                       from {researchResult.provider} ({researchResult.model}).
@@ -1189,7 +1197,8 @@ function App() {
           <p className="muted">Your limits apply to your personal API key in each
             authorized workspace. Limits count attempts, including failed provider calls.
             This is not a monetary cap and does not guarantee a maximum provider bill.
-            Paid web search is still disabled until a separate release approval.</p>
+            Paid web research is available for approved models only when a
+            sufficient owner-wide application spending budget is configured.</p>
           {researchLimitsStatus === "loading" ? <p>Loading research limits…</p>
             : researchLimitsStatus === "error" ?
               <button type="button" className="secondary"
@@ -1216,9 +1225,9 @@ function App() {
               <p className="muted">Server safety ceilings: 100 attempts per
                 workspace/day and five concurrent workspace searches. Active-run
                 slots recover automatically after process failures.
-                Daily attempt limits are active. Monetary ledger controls are implemented,
-                but paid web research remains disabled until provider prices and
-                actual billable usage can be fully verified.</p>
+                Daily attempt limits and server-owned monetary reservations are active
+                for approved exact models. Incomplete provider usage retains the
+                full reserved amount; this does not cap external invoices.</p>
               <button type="submit" disabled={busy || !personalAi.keyConfigured}>
                 Save my research limits
               </button>
@@ -1227,8 +1236,9 @@ function App() {
         <section aria-label="Personal AI monthly budget" className="review-panel">
           <h2>Monthly research budget</h2>
           <p className="muted">Required USD application spending limit for your personal API key across
-            every workspace. The initial pilot allows only an explicitly priced Claude Sonnet 4.6
-            search, reserving up to $4.00 USD per attempt; other model/tool combinations remain blocked.
+            every workspace. Approved exact models are Claude Sonnet 4.6 (up to $4.00),
+            OpenAI GPT-4.1 mini (up to $1.50) and Gemini 2.5 Flash (up to $2.00)
+            per attempt; other models and tools remain blocked.
             The application ledger is conservative, not a provider invoice or external billing cap.</p>
           <p role="status">{researchBudget.enforcedForPaidSearch
             ? "Approved web research is enabled within your saved application budget."

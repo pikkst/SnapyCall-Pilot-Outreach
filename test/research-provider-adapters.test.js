@@ -47,6 +47,8 @@ test("Gemini Search Grounding only accepts provider grounding chunks", async () 
     assert.equal(url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
     assert.equal(headers["x-goog-api-key"], "gemini-test-user-key");
     assert.deepEqual(payload.tools, [{ google_search: {} }]);
+    assert.deepEqual(payload.generationConfig.thinkingConfig, { thinkingBudget: 0 });
+    assert.equal(payload.generationConfig.maxOutputTokens, 3200);
     assert.match(payload.contents[0].parts[0].text, /public internet broadly/);
     return {
       candidates: [{
@@ -114,4 +116,47 @@ test("unsupported models and providers are rejected before billable provider cal
     provider, model, query, apiKey: "test-user-api-key",
   }, { post }));
   assert.equal(calls, 0);
+});
+
+test("Gemini 2.5 grounded prompt may contain more than three internal search queries", async () => {
+  const queries = Array.from({ length: 8 }, (_, i) => "Consultant search " + i);
+  const result = await researchCandidates({
+    provider: "gemini", model: "gemini-2.5-flash",
+    apiKey: "gemini-test-user-key", query,
+  }, { post: async (_url, _headers, payload) => {
+    assert.deepEqual(payload.generationConfig.thinkingConfig, { thinkingBudget: 0 });
+    return {
+      candidates: [{
+        finishReason: "STOP",
+        content: { parts: [{ text: raw }] },
+        groundingMetadata: {
+          webSearchQueries: queries,
+          groundingChunks: [{ web: { uri: source, title: "Verified expert" } }],
+        },
+      }],
+      usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 155 },
+    };
+  } });
+  assert.deepEqual(result.candidates.map(c => c.name), ["Verified Professional"]);
+  assert.equal(result.usage.searchRequests, 8,
+    "Research telemetry may count search queries; Gemini 2.5 billing is per grounded prompt");
+});
+
+test("Gemini bounded metadata still rejects pathological query and citation arrays", async () => {
+  const args = {
+    provider: "gemini", model: "gemini-2.5-flash",
+    apiKey: "gemini-test-user-key", query,
+  };
+  const makeResponse = (queries, chunks) => ({
+    candidates: [{
+      finishReason: "STOP", content: { parts: [{ text: raw }] },
+      groundingMetadata: { webSearchQueries: queries, groundingChunks: chunks },
+    }],
+  });
+  await assert.rejects(() => researchCandidates(args, {
+    post: async () => makeResponse(Array(101).fill("query"), []),
+  }));
+  await assert.rejects(() => researchCandidates(args, {
+    post: async () => makeResponse(["query"], Array(201).fill({ web: { uri: source } })),
+  }));
 });

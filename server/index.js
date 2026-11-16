@@ -14,7 +14,7 @@ import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { canonicalEvidenceUrl, EVIDENCE_KINDS, sameIdentityHints } from "../src/evidence.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
-import { researchCandidates, researchInput } from "./ai-research.js";
+import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "./ai-research.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { assertWebResearchModel } from "./research-provider-adapters.js";
@@ -729,6 +729,17 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
     }
     throw error;
   }
+  // Validate stored BYOK material before reserving any billable amount.
+  // A local decryption/configuration failure cannot have reached the provider.
+  let apiKey;
+  try {
+    apiKey = decryptKey(setting.encryptedApiKey, env.AI_ENCRYPTION_KEY);
+  } catch {
+    return res.status(409).json({
+      code: "RESEARCH_KEY_UNAVAILABLE",
+      error: "Your saved personal API key cannot be used. Re-save it under My AI provider before searching.",
+    });
+  }
   let quota;
   try {
     quota = await prisma.$transaction(async tx => {
@@ -815,7 +826,6 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
       await settle(0);
       return res.status(403).json({ error: "Workspace membership revoked" });
     }
-    const apiKey = decryptKey(setting.encryptedApiKey, env.AI_ENCRYPTION_KEY);
     const output = await researchCandidates({
       ...input, provider: setting.provider, model: setting.model, apiKey,
     });
@@ -838,6 +848,20 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
     return res.json({ ...output, ...(inspection ?? {}),
       workspaceId: req.candidateScope,
       quota: { dayUtc: quota.dayUtc, remaining: quota.remaining } });
+  } catch (error) {
+    if (error instanceof ResearchProviderHttpError) {
+      // The user gets a stable category. Logs contain no key, body or URL.
+      console.warn("[research] Provider rejected request; HTTP status:", error.status);
+      return res.status(502).json(publicResearchProviderFailure(error.status));
+    }
+    if (error instanceof ResearchProviderExecutionError) {
+      console.warn("[research] Provider transport or response validation failed");
+      return res.status(502).json({
+        code: "RESEARCH_PROVIDER_RESULT_UNUSABLE",
+        error: "AI provider request or result validation failed. Check your provider connection and available credits before retrying.",
+      });
+    }
+    throw error;
   } finally {
     if (!settled) {
       try {

@@ -5,6 +5,45 @@ import { normalizeResearchEvidence } from "./research-evidence.js";
 import { discoverySearchGuidance } from "./research-discovery-guidance.js";
 import { searchWithOpenAI, searchWithGemini } from "./research-provider-adapters.js";
 
+// Preserve only provider HTTP status and a stable public error category.
+export class ResearchProviderHttpError extends Error {
+  constructor(status) {
+    super("AI provider HTTP request rejected");
+    this.name = "ResearchProviderHttpError";
+    this.status = status;
+  }
+}
+
+export class ResearchProviderExecutionError extends Error {
+  constructor() {
+    super("AI provider search returned no usable result");
+    this.name = "ResearchProviderExecutionError";
+  }
+}
+
+export function publicResearchProviderFailure(status) {
+  if (status === 400) return {
+    code: "RESEARCH_PROVIDER_INVALID_REQUEST",
+    error: "AI provider rejected the research request. Check model support and web-search access in the provider console.",
+  };
+  if (status === 401 || status === 403) return {
+    code: "RESEARCH_PROVIDER_ACCESS_DENIED",
+    error: "AI provider denied access. Check your personal API key, account permissions and web-search entitlement.",
+  };
+  if (status === 402) return {
+    code: "RESEARCH_PROVIDER_CREDITS_REQUIRED",
+    error: "AI provider requires available credits or billing configuration on your personal account.",
+  };
+  if (status === 429) return {
+    code: "RESEARCH_PROVIDER_RATE_LIMITED",
+    error: "Your AI provider rate limit was reached. Check your provider usage dashboard before retrying.",
+  };
+  return {
+    code: "RESEARCH_PROVIDER_UNAVAILABLE",
+    error: "AI provider request failed. Check provider status before retrying.",
+  };
+}
+
 export const researchInput = z.object({
   query: z.string().trim().min(12).max(350),
   limit: z.number().int().min(1).max(20).default(10),
@@ -43,7 +82,7 @@ export async function researchCandidates({ query, limit = 10, provider = "anthro
         method: "POST", headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify(payload), signal,
       });
-      if (!response.ok) throw new Error("AI provider request failed (HTTP " + response.status + ")");
+      if (!response.ok) throw new ResearchProviderHttpError(response.status);
       return response.json();
     });
     if (provider === "openai") {
@@ -86,5 +125,10 @@ export async function researchCandidates({ query, limit = 10, provider = "anthro
       },
       imported: false, reviewRequired: true, sendingEnabled: false,
     };
+  } catch (error) {
+    if (error instanceof ResearchProviderHttpError) throw error;
+    // Never forward provider payloads, network error details or arbitrary
+    // text from external sources to the browser or application logs.
+    throw new ResearchProviderExecutionError();
   } finally { clearTimeout(timeout); }
 }
