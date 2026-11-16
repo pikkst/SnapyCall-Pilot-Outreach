@@ -36,7 +36,10 @@ test("region and category do not determine suitability or numeric merit", () => 
       const q = scoreCandidate({ ...candidate, category, region });
       assert.equal(q.eligible, true);
       assert.equal(q.score, null);
-      assert.deepEqual(q.reasons, ["legal_basis_missing", "contact_review_pending"]);
+      assert.deepEqual(q.reasons, [
+      "legal_basis_missing", "contact_review_pending",
+      "person_email_link_unverified", "mailbox_deliverability_unconfirmed",
+    ]);
     }
   }
 });
