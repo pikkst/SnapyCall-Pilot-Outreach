@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 import { manualIndependentResearch } from "../src/manual-research.js";
-import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch } from "../src/research-review-batch.js";
+import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch, selectedDiscoverySeedBatch } from "../src/research-review-batch.js";
 
 type PartnerSession = { authenticated: boolean; conflict?: boolean; userId?: string; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
@@ -19,7 +19,7 @@ type PartnerSelfProfile = {
 type Candidate = {
   id: string; name: string; email: string | null; category: string;
   region: string | null; onlineEnglish: boolean; status: string;
-  sourceUrl: string; discoveryKey: string | null; expertProfileUrl: string | null;
+  sourceUrl: string | null; researchCitationUrl?: string | null; discoveryKey: string | null; expertProfileUrl: string | null;
   profileReviewed: boolean; suppressed: boolean;
   score: { score: number | null; eligible: boolean; stage: string };
   qualification: { stage: string; qualified: boolean; score: null; blockers: string[] };
@@ -180,6 +180,7 @@ function App() {
   // User-confirmed inspection is required before reusing the manual review
   // endpoint; an AI citation alone is not a verified source or contact.
   const [reviewedResearchSources, setReviewedResearchSources] = useState<string[]>([]);
+  const [selectedResearchCandidates, setSelectedResearchCandidates] = useState<string[]>([]);
   const [reviewedResearchUrls, setReviewedResearchUrls] = useState<Record<string, string>>({});
   const [savingResearchCandidate, setSavingResearchCandidate] = useState<string | null>(null);
   const researchSaveInFlight = useRef(false);
@@ -474,7 +475,8 @@ function App() {
 
   function prepareIndependentResearch(item: Candidate) {
     try {
-      const research = manualIndependentResearch(item.name, item.category, item.sourceUrl);
+      const research = manualIndependentResearch(item.name, item.category,
+        item.sourceUrl ?? item.researchCitationUrl ?? "");
       // No AI call, no source fetch and no provider charge on this action.
       setResearchQuery(research.criteria);
       setResearchResult(null);
@@ -508,6 +510,7 @@ function App() {
     setResearchResult(null);
     setResearchError("");
     setReviewedResearchSources([]);
+    setSelectedResearchCandidates([]);
     setReviewedResearchUrls({});
     setSavedResearchCandidates([]);
     try {
@@ -517,6 +520,7 @@ function App() {
       });
       if (workspaceRequest.current !== generation || result.workspaceId !== workspaceId) return;
       setResearchResult(result);
+      setSelectedResearchCandidates(result.candidates.map(reviewedCandidateKey));
       setResearchStatus("idle");
     } catch (error) {
       if (workspaceRequest.current !== generation) return;
@@ -536,9 +540,11 @@ function App() {
     // than introducing a second candidate ownership or persistence contract.
     if (!researchResult || activeWorkspaceId !== workspaceId ||
         researchSaveInFlight.current) return;
-    const batch = reviewedSeedBatch(researchResult.candidates,
-      reviewedResearchSources, reviewedResearchUrls, savedResearchCandidates)
-      .filter(seed => !onlyKey || seed.key === onlyKey);
+    const batch = onlyKey
+      ? reviewedSeedBatch(researchResult.candidates, reviewedResearchSources,
+          reviewedResearchUrls, savedResearchCandidates).filter(seed => seed.key === onlyKey)
+      : selectedDiscoverySeedBatch(researchResult.candidates,
+          selectedResearchCandidates, savedResearchCandidates);
     if (!batch.length) return;
     const generation = workspaceRequest.current;
     researchSaveInFlight.current = true;
@@ -569,8 +575,8 @@ function App() {
       }
       if (workspaceRequest.current !== generation) return;
       if (completed) setNotice(
-        completed + " reviewed candidates processed (" + created +
-        " new). All remain REVIEW_PENDING; no contacts approved or emails sent.");
+        completed + " candidates queued (" + created +
+        " new). Sources, email ownership and outreach remain UNVERIFIED. No emails sent.");
       if (failure) setError(failure + ". Previously saved candidates remain saved. Retry only unsaved reviewed entries.");
       if (completed) {
         // A list refresh failure must not invalidate successful writes.
@@ -1203,25 +1209,45 @@ function App() {
                         </li>)}</ol>
                     </> : null}
                     <div className="review-batch-actions">
+                      <label className="checkbox-review">
+                        <input type="checkbox"
+                          checked={researchResult.candidates.length > 0 &&
+                            researchResult.candidates.every(item =>
+                              selectedResearchCandidates.includes(reviewedCandidateKey(item)) ||
+                              savedResearchCandidates.includes(reviewedCandidateKey(item)))}
+                          disabled={savingResearchCandidate !== null}
+                          onChange={event => setSelectedResearchCandidates(event.target.checked
+                            ? researchResult.candidates.map(reviewedCandidateKey) : [])}/>
+                        <span>Select all discovered candidates</span>
+                      </label>
                       <button type="button"
                         disabled={savingResearchCandidate !== null ||
-                          reviewedSeedBatch(researchResult.candidates, reviewedResearchSources,
-                            reviewedResearchUrls, savedResearchCandidates).length === 0}
+                          selectedDiscoverySeedBatch(researchResult.candidates,
+                            selectedResearchCandidates, savedResearchCandidates).length === 0}
                         onClick={() => void saveReviewedResearchCandidates(p.id)}>
-                        {savingResearchCandidate === "__batch__" ? "Saving reviewed candidates…" :
-                          "Save all reviewed (" + reviewedSeedBatch(researchResult.candidates,
-                            reviewedResearchSources, reviewedResearchUrls,
+                        {savingResearchCandidate === "__batch__" ? "Saving selected candidates…" :
+                          "Save selected to review queue (" + selectedDiscoverySeedBatch(
+                            researchResult.candidates, selectedResearchCandidates,
                             savedResearchCandidates).length + ")"}
                       </button>
-                      <p className="muted">Only entries whose public source you explicitly
-                        reviewed are saved. All remain pending further contact review;
-                        this does not approve a campaign or send messages.</p>
+                      <p className="muted">You can queue candidates without opening every profile.
+                        Source links and observed emails are unverified; queueing never approves
+                        identities, contact permission or outreach.</p>
                     </div>
                     <ul>{researchResult.candidates.map(item => {
                       const reviewKey = reviewedCandidateKey(item);
                       const reviewed = reviewedResearchSources.includes(reviewKey);
                       const saved = savedResearchCandidates.includes(reviewKey);
+                      const selected = selectedResearchCandidates.includes(reviewKey);
                       return <li key={reviewKey}>
+                        <label className="checkbox-review">
+                          <input type="checkbox" checked={selected || saved}
+                            disabled={saved || savingResearchCandidate !== null}
+                            onChange={event => setSelectedResearchCandidates(prev =>
+                              event.target.checked ? [...new Set([...prev, reviewKey])] :
+                                prev.filter(key => key !== reviewKey))}/>
+                          <span>{saved ? "In review queue" : "Include in review queue"}</span>
+                        </label>
                         <strong>{item.name}</strong> — {item.category}
                         <p>{item.rationale}</p>
                         <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">
@@ -1624,7 +1650,9 @@ function App() {
         <section className="panel"><h2>Candidate pipeline</h2><div className="table-scroll"><table><thead><tr><th>Candidate</th><th>Category</th><th>Region</th><th>Next action</th><th>Action</th></tr></thead><tbody>
           {candidates.map(c => <tr key={c.id}><td>
               <strong>{c.name}</strong><small>{c.email ?? "No email"}</small>
-              <small><a href={c.sourceUrl} target="_blank" rel="noopener noreferrer">{c.discoveryKey ? "Source article (unverified author)" : "Source profile"}</a></small>
+              <small>{c.sourceUrl ? <a href={c.sourceUrl} target="_blank" rel="noopener noreferrer">
+                    {c.discoveryKey ? "Public source (unverified)" : "Source profile"}</a> :
+                    "Durable public source pending review"}</small>
               {c.discoveryKey && <small>{c.profileReviewed && c.expertProfileUrl
                 ? <a href={c.expertProfileUrl} target="_blank" rel="noopener noreferrer">Reviewed expert profile</a>
                 : "Expert profile not reviewed"}</small>}
