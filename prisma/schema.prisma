@@ -284,10 +284,17 @@ model ResearchCampaignTask {
   resultLimit Int
   status String @default("QUEUED")
   attempts Int @default(0)
-  // No provider execution until a separately reviewed bounded worker exists.
+  // A lease is a fencing token; stale workers must not commit results.
+  leaseToken String?
+  leaseUntil DateTime?
+  nextAttemptAt DateTime?
+  lastErrorCode String?
+  observedCount Int @default(0)
+  completedAt DateTime?
+  // No provider execution until a separately reviewed budgeted executor exists.
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@unique([campaignId, taskIndex])
   @@unique([campaignId, taskKey])
-  @@index([status, createdAt])
+  @@index([status, nextAttemptAt, leaseUntil])
 }
