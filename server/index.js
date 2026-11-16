@@ -1214,13 +1214,14 @@ app.get("/api/research-campaigns", candidateReadScope, safe(async (req, res) => 
   const items = await prisma.researchCampaign.findMany({
     where: { workspaceId: req.candidateScope, ownerId: identity.id },
     select: { id: true, query: true, targetCount: true, planVersion: true,
-      status: true, createdAt: true, _count: { select: { tasks: true } } },
+      status: true, createdAt: true, _count: { select: { tasks: true, observations: true } } },
     orderBy: { createdAt: "desc" }, take: 30,
   });
   return res.json(items.map(item => ({
     id: item.id, query: item.query, targetCount: item.targetCount,
     planVersion: item.planVersion, status: item.status,
     createdAt: item.createdAt, plannedTasks: item._count.tasks,
+    uniqueSourcedCandidates: item._count.observations,
     providerCallsAuthorized: false,
   })));
 }));
