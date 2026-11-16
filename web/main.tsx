@@ -459,7 +459,14 @@ function App() {
       setNotice(receipt.created
         ? "Candidate saved to workspace review queue. Contact and outreach are not approved."
         : "Candidate already exists in this workspace; no duplicate created.");
-      await viewWorkspace(workspaceId);
+      // Refresh only candidate data: viewWorkspace() would clear this paid
+      // research preview, preventing review of the remaining suggestions.
+      const updated = await api<Candidate[]>(
+        "/candidates?workspaceId=" + encodeURIComponent(workspaceId));
+      if (workspaceRequest.current === generation) {
+        setWorkspaceCandidates(updated);
+        setWorkspaceDataStatus("ready");
+      }
     } catch (error) {
       if (workspaceRequest.current !== generation) return;
       setError(error instanceof Error ? error.message :
