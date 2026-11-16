@@ -1305,9 +1305,10 @@ app.post("/api/research-campaigns/:id/execute-next",
         return res.status(409).json({ code: "RESEARCH_NO_READY_TASK",
           error: "No queued task is ready; check campaign progress" });
       }
-      if (output.status === "PAUSED") {
-        return res.status(409).json({ code: output.code,
-          error: "Task paused; review search usage and job status before retrying" });
+      if (output.status !== "COMPLETED") {
+        return res.status(409).json({ code: output.code ?? "RESEARCH_TASK_UNCONFIRMED",
+          status: output.status,
+          error: "Task needs manual review; inspect campaign progress and spend before retrying" });
       }
       return res.json(output);
     } catch (error) {
