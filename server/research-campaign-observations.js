@@ -54,9 +54,16 @@ export function normalizeCampaignObservations(preview, limit) {
 // One transaction fences the lease AND commits the provider's cited records.
 // A stale worker cannot insert observations. Uniqueness is enforced across
 // campaign tasks by PostgreSQL, not by process-local memory.
-export async function commitCampaignResearchResult(db, claim, preview, now = new Date()) {
+export async function commitCampaignResearchResult(db, claim, preview,
+  now = new Date(), { beforeCommit = null } = {}) {
   const observations = normalizeCampaignObservations(preview, claim.limit);
+  if (beforeCommit !== null && typeof beforeCommit !== "function") {
+    throw new TypeError("Invalid membership guard");
+  }
   return db.$transaction(async tx => {
+    // Recheck live workspace membership inside the evidence write transaction.
+    // A revoked user cannot commit provider findings after a paid search.
+    if (beforeCommit && !(await beforeCommit(tx))) throw new CampaignLeaseConflict();
     const applied = await completeResearchTask(tx, claim, {
       observedCount: observations.length, now,
     });

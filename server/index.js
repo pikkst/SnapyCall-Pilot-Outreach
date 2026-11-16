@@ -18,6 +18,7 @@ import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "./ai-research.js";
 import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
+import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { normalizeDiscoveryLeadSeed } from "./discovery-lead-seed.js";
@@ -1277,6 +1278,56 @@ app.get("/api/research-campaigns/:id/observations", candidateReadScope,
       verifiedContacts: 0,
       sendingEnabled: false,
     });
+  }));
+
+// Explicitly invoked one-task executor. Both flags are OFF by default;
+// nothing schedules background work or permits autonomous paid requests.
+app.post("/api/research-campaigns/:id/execute-next",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (env.AI_AGENT_RESEARCH_ENABLED !== "true" ||
+        env.AI_AGENT_EXECUTOR_ENABLED !== "true") {
+      return res.status(503).json({ code: "RESEARCH_EXECUTOR_DISABLED",
+        error: "Research campaign execution is disabled" });
+    }
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    // No ownership or credentials are ever accepted from the request body.
+    z.object({}).strict().parse(req.body ?? {});
+    try {
+      const output = await runOneCampaignTask(prisma, {
+        campaignId: req.params.id, workspaceId: req.candidateScope,
+        ownerId: identity.id, encryptionKey: env.AI_ENCRYPTION_KEY,
+      });
+      if (output.status === "NO_READY_TASK") {
+        return res.status(409).json({ code: "RESEARCH_NO_READY_TASK",
+          error: "No queued task is ready; check campaign progress" });
+      }
+      if (output.status !== "COMPLETED") {
+        return res.status(409).json({ code: output.code ?? "RESEARCH_TASK_UNCONFIRMED",
+          status: output.status,
+          error: "Task needs manual review; inspect campaign progress and spend before retrying" });
+      }
+      return res.json(output);
+    } catch (error) {
+      if (error instanceof ResearchWorkerPreflightError) {
+        return res.status(409).json({ code: error.code,
+          error: "AI research settings or limits require attention" });
+      }
+      if (error instanceof ResearchQuotaExceeded ||
+          error instanceof ResearchConcurrencyExceeded) {
+        return res.status(429).json({ code: error.name,
+          error: "Research quota or concurrency limit reached" });
+      }
+      if (error instanceof ResearchBudgetExceeded ||
+          error instanceof ResearchPricingUnavailable) {
+        return res.status(409).json({ code: error.name,
+          error: "Research monetary budget or pricing is unavailable" });
+      }
+      throw error;
+    }
   }));
 
 app.post("/api/research-campaigns/:id/cancel", candidateReadScope,
