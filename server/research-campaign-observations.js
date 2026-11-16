@@ -95,6 +95,71 @@ export async function commitCampaignResearchResult(db, claim, preview,
   });
 }
 
+// Read-only operational projection. Persisted terminal transitions and
+// spend reconciliation are separate explicitly authorized operations.
+export function deriveCampaignOperationalState(campaign, now = new Date()) {
+  if (!campaign || !Array.isArray(campaign.tasks) ||
+      !(now instanceof Date) || !Number.isFinite(now.getTime()) ||
+      !Number.isInteger(campaign._count?.observations) ||
+      campaign._count.observations < 0 ||
+      !Number.isInteger(campaign.targetCount) || campaign.targetCount < 1) {
+    throw new TypeError("Invalid campaign operational state");
+  }
+  const allowed = new Set(["QUEUED", "RUNNING", "COMPLETED",
+    "PAUSED", "FAILED", "CANCELLED"]);
+  if (campaign.tasks.some(task => !allowed.has(task.status))) {
+    throw new TypeError("Invalid campaign task status");
+  }
+  const expired = campaign.tasks.filter(task => task.status === "RUNNING" &&
+    (!(task.leaseUntil instanceof Date) || task.leaseUntil <= now));
+  const unresolved = campaign.tasks.filter(task =>
+    task.status === "PAUSED" || task.status === "FAILED");
+  const running = campaign.tasks.filter(task => task.status === "RUNNING");
+  const queued = campaign.tasks.filter(task => task.status === "QUEUED");
+  const targetReached = campaign._count.observations >= campaign.targetCount;
+  // A persisted cancelled campaign is final even if old task leases
+  // still need monetary reconciliation; surface both independently.
+  if (campaign.status === "CANCELLED") {
+    return { operationalState: "CANCELLED",
+      action: expired.length || unresolved.length ? "RECONCILE_SPEND" : "NONE",
+      expiredLeases: expired.length, needsReconciliation: !!(expired.length || unresolved.length) };
+  }
+  // A persisted terminal record must not be accidentally re-opened by a
+  // presentation-only read. Flag inconsistent task state for reconciliation.
+  if (["COMPLETED", "PARTIAL", "FAILED"].includes(campaign.status)) {
+    return { operationalState: running.length || unresolved.length ?
+      "RECOVERY_REQUIRED" : campaign.status,
+    action: running.length || unresolved.length ? "RECONCILE_SPEND" : "NONE",
+    expiredLeases: expired.length,
+    needsReconciliation: !!(running.length || unresolved.length) };
+  }
+  if (expired.length) return { operationalState: "RECOVERY_REQUIRED",
+    action: "RECONCILE_EXPIRED_LEASES",
+    expiredLeases: expired.length, needsReconciliation: true };
+  if (unresolved.length || campaign.status === "PAUSED") {
+    return { operationalState: "PAUSED_REVIEW",
+      action: "REVIEW_FAILED_TASKS", expiredLeases: 0,
+      needsReconciliation: true };
+  }
+  if (running.length) return { operationalState: "RUNNING",
+    action: "CHECK_PROGRESS", expiredLeases: 0,
+    needsReconciliation: false };
+  if (targetReached) return { operationalState: "TARGET_REACHED",
+    action: "FINALIZE_CAMPAIGN", expiredLeases: 0,
+    needsReconciliation: false };
+  if (!queued.length) return { operationalState: "PARTIAL",
+    action: "FINALIZE_CAMPAIGN", expiredLeases: 0,
+    needsReconciliation: false };
+  const ready = queued.some(task => task.nextAttemptAt == null ||
+    (task.nextAttemptAt instanceof Date && task.nextAttemptAt <= now));
+  if (!ready) return { operationalState: "WAITING_RETRY",
+    action: "WAIT_FOR_NEXT_ELIGIBLE_TASK", expiredLeases: 0,
+    needsReconciliation: false };
+  return { operationalState: "READY",
+    action: "EXECUTE_EXPLICIT_BOUNDED_SLICE", expiredLeases: 0,
+    needsReconciliation: false };
+}
+
 export function summarizeCampaignProgress(campaign) {
   if (!campaign || !Array.isArray(campaign.tasks) ||
       !Number.isInteger(campaign.targetCount) || campaign.targetCount < 1 ||
@@ -118,6 +183,7 @@ export function summarizeCampaignProgress(campaign) {
   const unique = campaign._count.observations;
   return Object.freeze({
     id: campaign.id, status: campaign.status, targetCount: campaign.targetCount,
+    ...deriveCampaignOperationalState(campaign),
     uniqueSourcedCandidates: unique,
     targetReached: unique >= campaign.targetCount,
     rawCandidateObservations: rawObservations,

@@ -39,7 +39,8 @@ test("claim is scope-locked and returns a finite fenced lease", async () => {
       return [{ id: "task-1", attempts: 0,
         query: "Source-backed experts", resultLimit: 10 }];
     },
-    researchCampaignTask: { update: async ({ data }) => {
+    researchCampaignTask: { count: async () => 0,
+      update: async ({ data }) => {
       assert.equal(data.status, "RUNNING");
       assert.equal(data.attempts.increment, 1);
     } },
@@ -115,4 +116,27 @@ test("unsettled in-flight task blocks terminal state even when target is reached
   }) };
   assert.equal(await claimResearchTask(db, scope), null);
   assert.equal(writes, 0);
+});
+
+test("unresolved paid task prevents another provider claim before reservation", async () => {
+  let reservationCalled = false;
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async strings => strings.join("?").includes('COUNT(o."id")')
+      ? [{ targetCount: 100, uniqueCount: 20 }]
+      : [{ id: scope.campaignId }],
+    researchCampaignTask: {
+      count: async ({ where }) => {
+        assert.equal(where.campaignId, scope.campaignId);
+        assert.equal(where.OR[0].status.in[0], "PAUSED");
+        assert.equal(where.OR[1].status, "RUNNING");
+        return 1;
+      },
+      update: async () => { throw new Error("Must not claim"); },
+    },
+  }) };
+  const result = await claimResearchTask(db, {
+    ...scope, reserveInTransaction: async () => { reservationCalled = true; },
+  });
+  assert.equal(result, null);
+  assert.equal(reservationCalled, false);
 });

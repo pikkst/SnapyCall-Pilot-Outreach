@@ -19,6 +19,7 @@ import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchP
 import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
+import { runBoundedCampaignSlice } from "./research-campaign-slice.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { inspectAndStoreDirectEmailObservation } from "./candidate-direct-email-evidence.js";
 import { reviewCandidateDirectEmailEvidence, directEmailReviewSnapshot } from "./candidate-direct-email-review.js";
@@ -1368,7 +1369,8 @@ app.get("/api/research-campaigns/:id/progress", candidateReadScope,
         ownerId: identity.id },
       select: { id: true, status: true, targetCount: true,
         _count: { select: { observations: true } },
-        tasks: { select: { status: true, observedCount: true, resultLimit: true } } },
+        tasks: { select: { status: true, observedCount: true,
+          resultLimit: true, leaseUntil: true, nextAttemptAt: true } } },
     });
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
     res.set("Cache-Control", "no-store");
@@ -1421,13 +1423,26 @@ app.post("/api/research-campaigns/:id/execute-next",
     }
     const identity = await partnerIdentity(req);
     if (!identity) return res.status(401).json({ error: "Unauthorized" });
-    // No ownership or credentials are ever accepted from the request body.
-    z.object({}).strict().parse(req.body ?? {});
+    // Explicit maxTasks is bounded to 3 paid calls. Omitted maxTasks
+    // preserves the existing single-task response contract.
+    const input = z.object({ maxTasks: z.number().int().min(1).max(3).optional() })
+      .strict().parse(req.body ?? {});
     try {
-      const output = await runOneCampaignTask(prisma, {
+      const runTask = () => runOneCampaignTask(prisma, {
         campaignId: req.params.id, workspaceId: req.candidateScope,
         ownerId: identity.id, encryptionKey: env.AI_ENCRYPTION_KEY,
       });
+      if ((input.maxTasks ?? 1) > 1) {
+        const slice = await runBoundedCampaignSlice({ maxTasks: input.maxTasks },
+          { runTask });
+        if (slice.status !== "SLICE_COMPLETED") {
+          return res.status(409).json({
+            ...slice, error: "Campaign halted; inspect progress, lease and spend before retrying",
+          });
+        }
+        return res.json(slice);
+      }
+      const output = await runTask();
       if (output.status === "NO_READY_TASK") {
         return res.status(409).json({ code: "RESEARCH_NO_READY_TASK",
           error: "No queued task is ready; check campaign progress" });

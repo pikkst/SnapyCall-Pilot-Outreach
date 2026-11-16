@@ -38,6 +38,7 @@ function fakeDatabase({ queued = true, member = true,
     },
     $executeRaw: async () => { events.push("concurrency-reserved"); return 1; },
     researchCampaignTask: {
+      count: async () => 0,
       update: async () => { events.push("task-claimed"); },
       updateMany: async ({ data }) => {
         events.push("task-" + data.status.toLowerCase());

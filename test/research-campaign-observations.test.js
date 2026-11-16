@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeCampaignObservations, commitCampaignResearchResult,
-  summarizeCampaignProgress, CampaignLeaseConflict
+  summarizeCampaignProgress, deriveCampaignOperationalState, CampaignLeaseConflict
 } from "../server/research-campaign-observations.js";
 
 const url1 = "https://example.org/expert/ada";
@@ -110,4 +110,91 @@ test("progress distinguishes unique candidates from raw observations", () => {
     _count: { observations: 1 },
     tasks: [{ status: "FORGED", observedCount: 0, resultLimit: 10 }],
   }));
+});
+
+const progressNow = new Date("2026-11-16T15:00:00Z");
+const baseProgress = {
+  id: "campaign-1", status: "RUNNING", targetCount: 100,
+  _count: { observations: 70 },
+  tasks: [{ status: "COMPLETED", observedCount: 10, resultLimit: 10 },
+    { status: "QUEUED", observedCount: 0, resultLimit: 10 }],
+};
+
+test("campaign status differentiates readiness from actual target completion", () => {
+  const ready = deriveCampaignOperationalState(baseProgress, progressNow);
+  assert.equal(ready.operationalState, "READY");
+  assert.equal(ready.action, "EXECUTE_EXPLICIT_BOUNDED_SLICE");
+  const target = deriveCampaignOperationalState({
+    ...baseProgress, _count: { observations: 100 },
+  }, progressNow);
+  assert.equal(target.operationalState, "TARGET_REACHED");
+  assert.equal(target.action, "FINALIZE_CAMPAIGN");
+  const partial = deriveCampaignOperationalState({
+    ...baseProgress, tasks: [{ status: "COMPLETED", observedCount: 5, resultLimit: 10 }],
+  }, progressNow);
+  assert.equal(partial.operationalState, "PARTIAL");
+  assert.equal(partial.action, "FINALIZE_CAMPAIGN");
+});
+
+test("expired lease takes precedence over a satisfied target and needs manual reconciliation", () => {
+  const state = deriveCampaignOperationalState({
+    ...baseProgress, _count: { observations: 101 },
+    tasks: [{ status: "RUNNING", observedCount: 0, resultLimit: 10,
+      leaseUntil: new Date(progressNow.getTime() - 1) }],
+  }, progressNow);
+  assert.equal(state.operationalState, "RECOVERY_REQUIRED");
+  assert.equal(state.expiredLeases, 1);
+  assert.equal(state.needsReconciliation, true);
+  assert.equal(state.action, "RECONCILE_EXPIRED_LEASES");
+});
+
+test("unsettled, running and terminal states are never silently promoted", () => {
+  const paused = deriveCampaignOperationalState({
+    ...baseProgress, tasks: [{ status: "PAUSED", observedCount: 0, resultLimit: 10 }],
+  }, progressNow);
+  assert.equal(paused.operationalState, "PAUSED_REVIEW");
+  assert.equal(paused.needsReconciliation, true);
+  const running = deriveCampaignOperationalState({
+    ...baseProgress, tasks: [{ status: "RUNNING", observedCount: 0, resultLimit: 10,
+      leaseUntil: new Date(progressNow.getTime() + 10000) }],
+  }, progressNow);
+  assert.equal(running.operationalState, "RUNNING");
+  const cancelled = deriveCampaignOperationalState({
+    ...baseProgress, status: "CANCELLED",
+    tasks: [{ status: "PAUSED", observedCount: 0, resultLimit: 10 }],
+  }, progressNow);
+  assert.equal(cancelled.operationalState, "CANCELLED");
+  assert.equal(cancelled.needsReconciliation, true);
+});
+
+test("progress snapshot exposes recovery metadata but does not imply verified email", () => {
+  const view = summarizeCampaignProgress({
+    ...baseProgress, tasks: [{ status: "RUNNING", observedCount: 0,
+      resultLimit: 10, leaseUntil: new Date("2020-01-01T00:00:00Z") }],
+  });
+  assert.equal(view.operationalState, "RECOVERY_REQUIRED");
+  assert.equal(view.contactVerification, "NOT_PERFORMED");
+  assert.equal(view.sendingEnabled, false);
+});
+
+test("future retry window cannot be presented as immediately executable", () => {
+  const view = deriveCampaignOperationalState({
+    ...baseProgress, tasks: [{ status: "QUEUED", observedCount: 0,
+      resultLimit: 10, nextAttemptAt: new Date(progressNow.getTime() + 60000) }],
+  }, progressNow);
+  assert.equal(view.operationalState, "WAITING_RETRY");
+  assert.equal(view.action, "WAIT_FOR_NEXT_ELIGIBLE_TASK");
+  const ready = deriveCampaignOperationalState({
+    ...baseProgress, tasks: [{ status: "QUEUED", observedCount: 0,
+      resultLimit: 10, nextAttemptAt: new Date(progressNow.getTime() - 1) }],
+  }, progressNow);
+  assert.equal(ready.operationalState, "READY");
+});
+
+test("persisted PAUSED campaign cannot be offered as READY", () => {
+  const view = deriveCampaignOperationalState({
+    ...baseProgress, status: "PAUSED",
+  }, progressNow);
+  assert.equal(view.operationalState, "PAUSED_REVIEW");
+  assert.equal(view.needsReconciliation, true);
 });
