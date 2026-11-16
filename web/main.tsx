@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./style.css";
 import { manualIndependentResearch } from "../src/manual-research.js";
 
-type PartnerSession = { authenticated: boolean; conflict?: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
+type PartnerSession = { authenticated: boolean; conflict?: boolean; userId?: string; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
 type PartnerInvitation = { id: string; workspaceId: string; workspace: string;
   email: string; status: string; sentAt: string | null; acceptedAt: string | null;
@@ -297,7 +297,8 @@ function App() {
         if (disposed) return;
         if (admin.conflict || partner.conflict ||
             (loggedIn && !admin.authenticated) ||
-            (partnerSession?.authenticated && !partner.authenticated)) {
+            (partnerSession?.authenticated &&
+              (!partner.authenticated || partner.userId !== partnerSession.userId))) {
           // Reload re-evaluates the authoritative cookie state; no stale
           // workspace data remains mounted from the previous browser identity.
           window.location.reload();
