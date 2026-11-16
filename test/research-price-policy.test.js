@@ -19,10 +19,27 @@ test("only Claude Sonnet 4.6 has a dated server-authorized bounded pricing envel
   assert.ok(policy.expiresAt > new Date("2026-11-16T00:00:00Z"));
 });
 
+test("provider-specific paid search policies price Gemini grounded prompts and OpenAI tool calls", () => {
+  const openai = requireResearchPriceEnvelope({ provider: "openai", model: "gpt-4.1-mini" });
+  assert.equal(openai.worstCaseCents, 150);
+  assert.equal(openai.pricing.billingUnit, "search_requests");
+  assert.equal(openai.usageLimits.maxSearchRequests, 3);
+  assert.ok(calculateBoundedWorstCaseCents(openai.pricing, openai.usageLimits) <= 150);
+
+  const gemini = requireResearchPriceEnvelope({ provider: "gemini", model: "gemini-2.5-flash" });
+  assert.equal(gemini.worstCaseCents, 200);
+  assert.equal(gemini.pricing.billingUnit, "grounded_prompts");
+  assert.equal(gemini.usageLimits.maxGroundedPrompts, 1);
+  assert.ok(calculateBoundedWorstCaseCents(gemini.pricing, gemini.usageLimits) <= 200);
+  assert.equal(calculateVerifiedSpendCents(gemini, {
+    inputTokens: 1, outputTokens: 1, searchRequests: 1,
+  }), null, "Gemini must retain the full reservation, never infer prompt fees from query counts");
+});
+
 test("all other models remain blocked despite the pilot activation", () => {
   for (const config of [
     { provider: "openai", model: "gpt-4.1" },
-    { provider: "gemini", model: "gemini-2.5-flash" },
+    { provider: "gemini", model: "gemini-3.1-pro-preview" },
     { provider: "anthropic", model: "claude-sonnet-4-5" },
     { provider: "anthropic", model: "arbitrary-custom-model" },
     { provider: "unknown", model: "gpt-4.1" },
