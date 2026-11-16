@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./style.css";
 import { manualIndependentResearch } from "../src/manual-research.js";
 import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch, selectedDiscoverySeedBatch } from "../src/research-review-batch.js";
+import { singleAuthorizedWorkspaceId } from "../src/partner-workspace-navigation.js";
 
 type CampaignSummary = { id: string; query: string; targetCount: number; status: string; plannedTasks: number; createdAt: string; providerCallsAuthorized: false };
 type PartnerTab = "dashboard" | "candidates" | "discovery" | "drafts" | "profile" | "settings";
@@ -407,6 +408,16 @@ function App() {
       setWorkspaceDataStatus("error");
     }
   }
+
+  const onlyWorkspaceId = singleAuthorizedWorkspaceId(partnerSession);
+  useEffect(() => {
+    // Auto-open only when the authenticated user has exactly one workspace.
+    // A new session or workspace identity changes this dependency; switching
+    // workspaces still uses viewWorkspace's generation-fenced API requests.
+    if (onlyWorkspaceId && activeWorkspaceId !== onlyWorkspaceId) {
+      void viewWorkspace(onlyWorkspaceId);
+    }
+  }, [partnerSession?.userId, onlyWorkspaceId]);
 
   async function openPartnerEvidence(workspaceId: string, candidateId: string) {
     if (workspaceId !== activeWorkspaceId) return;
@@ -1386,7 +1397,7 @@ function App() {
                     })}</ul>
                   </>}
                 </section></>}
-                {partnerTab !== "discovery" && <>
+                {(partnerTab === "candidates" || partnerTab === "drafts") && <>
                 <h3>My candidates and outreach drafts</h3>
                 <p className="muted">Workspace-isolated read-only preview. Editing,
                   discovery import, AI drafting and sending are not enabled for Google users yet.</p>
