@@ -493,6 +493,10 @@ function App() {
   }
 
   function openIndependentManualSearch(item: Candidate) {
+    if (!item.sourceUrl) {
+      setError("This candidate has no durable public source to search from yet.");
+      return;
+    }
     try {
       const research = manualIndependentResearch(item.name, item.category, item.sourceUrl);
       // Browser navigation only, initiated by a human; the app does no scraping.
