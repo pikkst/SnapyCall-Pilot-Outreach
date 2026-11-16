@@ -101,3 +101,12 @@ All the best,
 - Manual mobile and desktop smoke with actual approved sources and operator role, with costs capped.
 - Sending feature separately approved; dry-run and provider sandbox tests; authenticated sender verification, opt-out/suppression, idempotent event attribution, no duplicate delivery.
 - Only release features whose CI and staging evidence are verified. No automatic sending in current pilot.
+
+## 9. Agentic research campaign — implementation decision (2026-11-16)
+The worldwide 100+ candidate goal uses a **durable task orchestrator**, not a giant prompt or open-ended autonomous browsing. Tracking issue: #62.
+
+Agent stages: (1) deterministic planner partitions by specialty/region/approved source, (2) bounded discovery workers invoke the existing provider-neutral search adapter, (3) authorized evidence resolver produces durable public URLs or explicit unresolved provenance, (4) contact enrichment distinguishes organization inboxes from person-associated addresses, (5) workspace-scoped identity/dedupe resolves collisions without name-only merges, (6) quality gate retains pending evidence and non-sendable state, (7) reporter exposes live progress, cost, and cited sources.
+
+The orchestrator persists job/task/attempt/cursor/lease/heartbeat/status and payment reservation in Neon. All tasks must be retry-safe and cancelable; budget and workspace authorization rechecked before every paid call and write. Bound work by provider calls, time, tokens, overall USD cost, source policies and concurrency. A 100-candidate search may require more than five 20-result calls; return partial trustworthy results with exhaustion reasons rather than fabricate candidates.
+
+Success metrics are strictly separated: sourced candidate count, inspected profile count, observed professional contact count, person-associated contact count, outreach-eligible count, and actual replies. A 100+ goal applies to **sourced discovery candidates**; never claim 100+ verified professional emails until separately evidenced.
