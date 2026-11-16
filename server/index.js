@@ -585,7 +585,17 @@ app.get("/api/discovery/sources", authenticated, (_req, res) => {
 });
 // Paid research preview is opt-in, authenticated and read-only. It never
 // modifies candidate, evidence or draft state and cannot send outreach.
-const researchLimiter = rateLimit({ windowMs: 60_000, limit: 2, standardHeaders: "draft-7", legacyHeaders: false });
+// Separate short-window abuse protection from configurable daily research
+// quota. A JSON 429 preserves the frontend API error contract and does not
+// consume an AI provider call or a monetary reservation.
+const researchLimiter = rateLimit({
+  windowMs: 60_000, limit: 2,
+  standardHeaders: "draft-7", legacyHeaders: false,
+  handler: (_req, res) => res.status(429).json({
+    code: "RESEARCH_MINUTE_RATE_LIMIT",
+    error: "Research allows at most 2 requests per 60 seconds. Wait a minute before retrying. The daily attempt setting does not change this rate limit.",
+  }),
+});
 // Preferences can be set only by the Google partner who owns the BYOK key.
 // An admin's separate AI setting never grants tenant research authorization.
 // Personal BYOK budget is denominated in USD, the providers' billing
