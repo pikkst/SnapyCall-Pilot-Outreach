@@ -21,6 +21,7 @@ import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { inspectEmailDomain, onboardingEmailEligibility } from "./email-deliverability.js";
+import { inspectAndPersistCandidateDns, visibleCandidateDnsSnapshot } from "./candidate-email-dns.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { normalizeDiscoveryLeadSeed } from "./discovery-lead-seed.js";
 import { partnerSelfProfileInput, publicPartnerSelfProfile } from "./partner-self-profile.js";
@@ -1135,8 +1136,12 @@ app.get("/api/candidates/:id/email-check", candidateReadScope,
         contactReviewed: true, legalBasis: true },
     });
     if (!row) return res.status(404).json({ error: "Candidate not found" });
-    const inspection = await inspectEmailDomain(row.email);
-    // Identity linkage and mailbox-level verification are not persisted yet.
+    const saved = await prisma.candidateEmailVerification.findUnique({
+      where: { candidateId: row.id },
+    });
+    const cached = visibleCandidateDnsSnapshot(row, saved);
+    const inspection = cached ?? await inspectEmailDomain(row.email);
+    // Domain routing does not establish verified mailbox ownership.
     // Neither a VALID syntax nor an MX record grants onboarding eligibility.
     const eligibility = onboardingEmailEligibility(row, {
       email: row.email, status: inspection.status, checkedAt: new Date(),
@@ -1144,10 +1149,30 @@ app.get("/api/candidates/:id/email-check", candidateReadScope,
     res.set("Cache-Control", "no-store");
     return res.json({
       candidateId: row.id, syntaxAndDomain: inspection,
+      cachedDnsVerification: cached !== null,
       mailboxVerified: false, personEmailLinked: false,
       usableAsContact: false, onboardingEligible: false,
       blockers: eligibility.blockers, sendingEnabled: false,
     });
+  }));
+
+// Explicit DNS check writes only an email-bound domain-routing observation.
+// It never validates a mailbox or enrolls a recipient.
+app.post("/api/candidates/:id/email-check", candidateReadScope,
+  requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    z.object({}).strict().parse(req.body ?? {});
+    const outcome = await inspectAndPersistCandidateDns(prisma, {
+      candidateId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(outcome.status).json(outcome.status === 200 ?
+      outcome : { code: outcome.code, error: "Candidate DNS check unavailable" });
   }));
 
 app.get("/api/candidates/:id/possible-duplicates", candidateReadScope, safe(async (req, res) => {
