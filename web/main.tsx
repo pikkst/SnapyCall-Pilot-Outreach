@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./style.css";
 import { manualIndependentResearch } from "../src/manual-research.js";
 
-type PartnerSession = { authenticated: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
+type PartnerSession = { authenticated: boolean; conflict?: boolean; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
 type PartnerInvitation = { id: string; workspaceId: string; workspace: string;
   email: string; status: string; sentAt: string | null; acceptedAt: string | null;
@@ -125,6 +125,7 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [sessionConflict, setSessionConflict] = useState(false);
   const [operatorResearch, setOperatorResearch] = useState<ResearchReconciliationOverview | null>(null);
   const [operatorResearchStatus, setOperatorResearchStatus] =
     useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -250,20 +251,32 @@ function App() {
   }
 
   useEffect(() => {
-    Promise.all([api<{ authenticated: boolean }>("/session"),
+    // Authentication status and subsequent data loading are different phases:
+    // a failure in a workspace API must not be reported as an auth outage.
+    Promise.all([api<{ authenticated: boolean; conflict?: boolean }>("/session"),
       api<PartnerSession>("/partner/session")])
-      .then(async ([session, partner]) => {
-        if (session.authenticated) { setLoggedIn(true); await load(); }
-        else if (partner.authenticated) {
-          setPartnerSession(partner);
-          await loadGoogleConnections();
-          await loadGmailStatus();
-          await loadPersonalAiSettings();
-          await loadResearchLimits();
-          await loadResearchBudget();
-          await loadMyProfile();
+      .then(([session, partner]) => {
+        if (session.conflict || partner.conflict ||
+            (session.authenticated && partner.authenticated)) {
+          setLoggedIn(false);
+          setPartnerSession(null);
+          setSessionConflict(true);
+          return;
         }
-      }).catch(() => setError("Unable to reach the authentication API"));
+        setSessionConflict(false);
+        if (session.authenticated) {
+          setLoggedIn(true);
+          void load().catch(error =>
+            setError(error instanceof Error ? error.message : "Admin data could not load"));
+        } else if (partner.authenticated) {
+          setPartnerSession(partner);
+          void Promise.allSettled([
+            loadGoogleConnections(), loadGmailStatus(), loadPersonalAiSettings(),
+            loadResearchLimits(), loadResearchBudget(), loadMyProfile(),
+          ]);
+        }
+      })
+      .catch(() => setError("Unable to reach the authentication API"));
   }, []);
 
   async function loadMyProfile() {
@@ -898,6 +911,25 @@ function App() {
       setNotice(result.created ? "Imported for manual review — no email sent." : "Already imported; no duplicate created.");
     });
   }
+
+  if (sessionConflict) return (
+    <main className="login-shell">
+      <section className="panel login" role="alert">
+        <h1>Session conflict</h1>
+        <p>Both an administrator session and a Google partner session are
+          active in this browser. Access is blocked until both are cleared.
+          This does not grant administrator access to the invited partner.</p>
+        {error && <p className="error">{error}</p>}
+        <button type="button" disabled={busy} onClick={() => void execute(async () => {
+          // Reuse both existing sign-out endpoints; no new privileged
+          // browser identity-switch API and no implicit role selection.
+          await api("/session", { method: "DELETE" });
+          await api("/partner/session", { method: "DELETE" });
+          window.location.reload();
+        })}>Sign out of both sessions</button>
+      </section>
+    </main>
+  );
 
   if (partnerSession?.authenticated && !loggedIn) return (
     <main className="layout">
