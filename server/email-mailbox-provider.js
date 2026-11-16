@@ -3,7 +3,7 @@
 // A provider must be explicitly approved before a server-only adapter is wired.
 import { normalizeVerificationAddress } from "./email-deliverability.js";
 
-const PROVIDER_CODES = new Set(["ABSTRACT", "EMAILABLE", "NEVERBOUNCE", "ZEROBOUNCE"]);
+const PROVIDER_ID = /^[A-Z][A-Z0-9_]{2,31}$/;
 const VERDICTS = new Set(["DELIVERABLE", "UNDELIVERABLE", "RISKY", "UNKNOWN"]);
 const EVIDENCE_TYPES = new Set(["MAILBOX_REACHABILITY", "PROVIDER_ACCEPTANCE"]);
 
@@ -26,7 +26,7 @@ export function normalizeMailboxProviderEvidence(raw, {
   if (!expected || !observed || expected.email !== observed.email) {
     throw new MailboxVerificationContractError("EMAIL_MISMATCH");
   }
-  if (!PROVIDER_CODES.has(provider) ||
+  if (typeof provider !== "string" || !PROVIDER_ID.test(provider) ||
       typeof adapterVersion !== "string" ||
       !/^v[1-9][0-9]{0,2}$/.test(adapterVersion) ||
       raw?.provider !== provider || raw?.adapterVersion !== adapterVersion) {
@@ -66,7 +66,7 @@ export async function verifyMailboxWithApprovedAdapter(email, {
   const normalized = normalizeVerificationAddress(email);
   if (!normalized) throw new MailboxVerificationContractError("INVALID_EMAIL");
   if (approved !== true || !adapter ||
-      !PROVIDER_CODES.has(adapter.provider) ||
+      typeof adapter.provider !== "string" || !PROVIDER_ID.test(adapter.provider) ||
       typeof adapter.version !== "string" ||
       !/^v[1-9][0-9]{0,2}$/.test(adapter.version) ||
       typeof adapter.verify !== "function") {
@@ -81,10 +81,22 @@ export async function verifyMailboxWithApprovedAdapter(email, {
     throw new TypeError("Invalid verification timestamp");
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timer;
+  // Race the deadline even if a defective adapter ignores AbortSignal.
+  // This prevents the request from hanging indefinitely.
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("PROVIDER_TIMEOUT"));
+    }, timeoutMs);
+  });
   let raw;
   try {
-    raw = await adapter.verify(normalized.email, { signal: controller.signal });
+    raw = await Promise.race([
+      Promise.resolve().then(() =>
+        adapter.verify(normalized.email, { signal: controller.signal })),
+      timeout,
+    ]);
     if (controller.signal.aborted) throw new Error("PROVIDER_TIMEOUT");
   } catch {
     // Provider might have charged before a timeout; no silent retry or
