@@ -1113,6 +1113,40 @@ try {
       "Successful admin sign-in must revoke the partner browser cookie");
     assert.ok(switchCookies.some(entry => /^pilot_session=[^.]+\./.test(entry)),
       "Successful admin sign-in must issue a new admin session");
+    // Exercise the real Google OIDC callback with the CI-only signed Google
+    // mock, entering OAuth from a browser carrying a privileged admin cookie.
+    // A valid invited Google account must replace, never inherit, admin access.
+    const oauthStart = await call("/auth/google/start", {
+      headers: { cookie }, redirect: "manual",
+    });
+    assert.equal(oauthStart.status, 302);
+    const oauthUrl = new URL(oauthStart.headers.get("location"));
+    const flowCookie = oauthStart.headers.getSetCookie()
+      .find(entry => entry.startsWith("pilot_google_flow="))?.split(";")[0];
+    assert.ok(flowCookie);
+    assert.equal(oauthUrl.origin, "https://accounts.google.com");
+    const callback = await call("/auth/google/callback?state=" +
+      encodeURIComponent(oauthUrl.searchParams.get("state")) + "&code=" +
+      encodeURIComponent(oauthUrl.searchParams.get("nonce") + ":good"), {
+      headers: { cookie: cookie + "; " + flowCookie },
+      redirect: "manual",
+    });
+    assert.equal(callback.status, 303, "Verified Google invitation should activate workspace");
+    const callbackCookies = callback.headers.getSetCookie();
+    assert.ok(callbackCookies.some(entry => /^pilot_session=;/.test(entry)),
+      "Google callback must remove an existing admin cookie");
+    const authenticatedPartner = callbackCookies.find(entry =>
+      entry.startsWith("pilot_partner_session="))?.split(";")[0];
+    assert.ok(authenticatedPartner);
+    assert.equal((await call("/admin/partners", {
+      headers: { cookie: authenticatedPartner },
+    })).status, 401, "Google partner must never acquire legacy admin privileges");
+    const identity = await (await call("/partner/session", {
+      headers: { cookie: authenticatedPartner },
+    })).json();
+    assert.equal(identity.authenticated, true);
+    assert.ok(identity.partners.some(workspace => workspace.id === firstWorkspace));
+
 
 
 
