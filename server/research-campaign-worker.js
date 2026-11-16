@@ -101,53 +101,72 @@ export async function runOneCampaignTask(db, {
     settled = true;
   };
 
+  let outcome;
+  let reconciliationRequired = false;
   try {
     // Membership may have been revoked after the reservation transaction.
     // This is the final authorization gate before the external paid call.
     if (!await membership(db, { workspaceId, userId: ownerId })) {
       await settle(0);
       failure = "PERMISSION_REVOKED";
-      return { status: "PAUSED", attempted: false, code: failure };
-    }
-    // A lease may have expired before this process reaches the provider.
-    if (now().getTime() >= claim.leaseUntil.getTime()) {
+      outcome = { status: "PAUSED", attempted: false, code: failure };
+    } else if (now().getTime() >= claim.leaseUntil.getTime()) {
+      // No upstream call was made. Fail closed without charging provider funds.
       await settle(0);
-      failure = "BILLING_UNCERTAIN";
-      return { status: "PAUSED", attempted: false, code: failure };
+      failure = "UNCLASSIFIED";
+      outcome = { status: "PAUSED", attempted: false, code: failure };
+    } else {
+      invoked = true;
+      const result = await search({
+        query: claim.query, limit: claim.limit,
+        provider: setting.provider, model: setting.model, apiKey,
+      });
+      // Missing certified billing evidence keeps the full reserved ceiling.
+      await settle(calculateVerifiedSpendCents(price, result.usage));
+      const write = await commitCampaignResearchResult(db, claim, result, now(), {
+        beforeCommit: tx => lockActiveWorkspaceMembership(tx, {
+          workspaceId, userId: ownerId,
+        }),
+      });
+      outcome = { status: "COMPLETED", attempted: true, taskId: claim.taskId,
+        ...write, sendingEnabled: false };
     }
-    invoked = true;
-    const result = await search({
-      query: claim.query, limit: claim.limit,
-      provider: setting.provider, model: setting.model, apiKey,
-    });
-    // Billing evidence may be incomplete. The existing policy then charges
-    // the full reserved ceiling; never trust model-reported search costs.
-    await settle(calculateVerifiedSpendCents(price, result.usage));
-    const write = await commitCampaignResearchResult(db, claim, result, now(), {
-      beforeCommit: tx => lockActiveWorkspaceMembership(tx, {
-        workspaceId, userId: ownerId,
-      }),
-    });
-    return { status: "COMPLETED", attempted: true, taskId: claim.taskId,
-      ...write, sendingEnabled: false };
-  } catch (error) {
-    // Never retry a provider-invoked request automatically: a 429, timeout,
-    // transport exception or DB write failure may already be billable.
-    // A stale lease is not evidence that membership was revoked.
-    // The provider may already have billed before any post-call failure.
-    failure = !invoked ? "PERMISSION_REVOKED" : "BILLING_UNCERTAIN";
-    return { status: "PAUSED", attempted: invoked, code: failure };
+  } catch {
+    // Any failure AFTER invoking a provider may already have incurred costs.
+    // No automatic replay is allowed, including 429, timeout and DB errors.
+    failure = invoked ? "BILLING_UNCERTAIN" : "UNCLASSIFIED";
+    outcome = { status: "PAUSED", attempted: invoked, code: failure };
   } finally {
     if (!settled) {
       try { await settle(invoked ? null : 0); }
-      catch { /* Preserve unresolved reservation for explicit reconciliation. */ }
+      catch {
+        // Preserve unresolved reservation. A subsequent reconciliation must
+        // inspect the ledger instead of assuming that settlement succeeded.
+        reconciliationRequired = true;
+        console.warn("[research-campaign] Spend reservation needs reconciliation");
+      }
     }
     if (failure) {
       try {
-        await db.$transaction(tx => failResearchTask(tx, claim, failure, now()));
-      } catch { /* Expired lease remains fenced; never automatically replay. */ }
+        const state = await db.$transaction(tx =>
+          failResearchTask(tx, claim, failure, now()));
+        if (!state.applied) {
+          outcome = { status: "RECOVERY_REQUIRED", attempted: invoked,
+            code: "TASK_LEASE_STATE_UNCONFIRMED" };
+        }
+      } catch {
+        outcome = { status: "RECOVERY_REQUIRED", attempted: invoked,
+          code: "TASK_LEASE_STATE_UNCONFIRMED" };
+      }
     }
     try { await releaseResearchLease(db, leaseId, workspaceId, ownerId); }
-    catch { /* Existing durable concurrency lease expires on its own. */ }
+    catch {
+      console.warn("[research-campaign] Concurrency lease will expire automatically");
+    }
   }
+  if (reconciliationRequired) {
+    return { status: "RECONCILIATION_REQUIRED", attempted: invoked,
+      code: "RESEARCH_SPEND_RECONCILIATION_REQUIRED" };
+  }
+  return outcome;
 }
