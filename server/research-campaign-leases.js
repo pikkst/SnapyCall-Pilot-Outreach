@@ -84,6 +84,18 @@ export async function claimResearchTask(db, { campaignId, workspaceId, ownerId,
       }
       return null;
     }
+    // Never start another chargeable task while a prior task requires manual
+    // cost/lease reconciliation. The campaign row lock serializes this check
+    // with claims and evidence commits.
+    const unresolved = await tx.researchCampaignTask.count({
+      where: { campaignId, OR: [
+        { status: { in: ["PAUSED", "FAILED"] } },
+        { status: "RUNNING", OR: [
+          { leaseUntil: null }, { leaseUntil: { lte: now } },
+        ] },
+      ] },
+    });
+    if (unresolved > 0) return null;
     const rows = await tx.$queryRaw`
       SELECT "id", "attempts", "query", "resultLimit"
       FROM "ResearchCampaignTask"
