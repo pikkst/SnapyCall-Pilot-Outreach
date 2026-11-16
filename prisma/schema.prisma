@@ -103,6 +103,7 @@ model Partner {
   name String
   memberships PartnerMembership[]
   candidates Candidate[]
+  researchCampaigns ResearchCampaign[]
   drafts OutreachDraft[]
   candidateEvidence CandidateEvidence[]
   googleConnections PartnerGoogleConnection[]
@@ -251,4 +252,42 @@ model ResearchReconciliationOutbox {
   providerId String?
   errorCode String?
   @@index([status, firstDetectedAt])
+}
+
+model ResearchCampaign {
+  id String @id @default(cuid())
+  workspaceId String
+  workspace Partner @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  ownerId String
+  idempotencyKey String
+  query String
+  targetCount Int
+  planVersion String
+  status String @default("QUEUED")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tasks ResearchCampaignTask[]
+  @@unique([workspaceId, ownerId, idempotencyKey])
+  @@index([workspaceId, createdAt])
+  @@index([status, createdAt])
+}
+
+model ResearchCampaignTask {
+  id String @id @default(cuid())
+  campaignId String
+  campaign ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  taskIndex Int
+  taskKey String
+  query String
+  region String
+  facet String
+  resultLimit Int
+  status String @default("QUEUED")
+  attempts Int @default(0)
+  // No provider execution until a separately reviewed bounded worker exists.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([campaignId, taskIndex])
+  @@unique([campaignId, taskKey])
+  @@index([status, createdAt])
 }
