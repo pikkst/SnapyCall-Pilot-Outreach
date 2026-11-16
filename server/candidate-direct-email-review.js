@@ -49,11 +49,15 @@ export async function reviewCandidateDirectEmailEvidence(db, {
       return { status: 409, code: "EVIDENCE_REINSPECTION_REQUIRED" };
     }
     // Reuse the exact same display guard for canonical candidate identity.
-    if (!visibleDirectEmailObservation(candidate, evidence, clock)) {
+    const visibility = visibleDirectEmailObservation(candidate, evidence, clock);
+    if (!visibility) {
       return { status: 409, code: "CANDIDATE_EVIDENCE_MISMATCH" };
     }
 
     if (evidence.status === "PERSON_EMAIL_REVIEWED") {
+      if (!visibility.personEmailLinked) {
+        return { status: 409, code: "REVIEW_ATTESTATION_INVALID" };
+      }
       return { status: 200, code: "PERSON_EMAIL_REVIEW_UNCHANGED",
         personEmailLinked: true, usableAsContact: false,
         onboardingEligible: false, sendingEnabled: false };
