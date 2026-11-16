@@ -34,6 +34,7 @@ model Candidate {
   drafts OutreachDraft[]
   evidence CandidateEvidence[]
   emailVerification CandidateEmailVerification?
+  mailboxVerification CandidateMailboxVerification?
   @@unique([workspaceId, emailNormalized])
   @@unique([workspaceId, discoveryKey])
   @@index([workspaceId, createdAt])
@@ -108,6 +109,7 @@ model Partner {
   drafts OutreachDraft[]
   candidateEvidence CandidateEvidence[]
   emailVerifications CandidateEmailVerification[]
+  mailboxVerifications CandidateMailboxVerification[]
   googleConnections PartnerGoogleConnection[]
   createdAt DateTime @default(now())
 }
@@ -335,6 +337,27 @@ model CandidateEmailVerification {
   status String @default("UNKNOWN")
   reason String
   domainAcceptsMail Boolean?
+  checkedAt DateTime
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([workspaceId, expiresAt])
+}
+
+model CandidateMailboxVerification {
+  // Provider result is a technical signal; person identity, consent and
+  // invitation eligibility are independent gates and never set by this row.
+  id String @id @default(cuid())
+  workspaceId String
+  workspace Partner @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  candidateId String @unique
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  emailNormalized String
+  provider String
+  adapterVersion String
+  status String @default("UNKNOWN")
+  reason String
+  billableAttemptUncertain Boolean @default(false)
   checkedAt DateTime
   expiresAt DateTime
   createdAt DateTime @default(now())
