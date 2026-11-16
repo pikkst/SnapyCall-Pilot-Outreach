@@ -1295,8 +1295,7 @@ app.post("/api/research-campaigns/:id/execute-next",
     const identity = await partnerIdentity(req);
     if (!identity) return res.status(401).json({ error: "Unauthorized" });
     // No ownership or credentials are ever accepted from the request body.
-    const input = z.object({}).strict().parse(req.body);
-    void input;
+    z.object({}).strict().parse(req.body ?? {});
     try {
       const output = await runOneCampaignTask(prisma, {
         campaignId: req.params.id, workspaceId: req.candidateScope,
