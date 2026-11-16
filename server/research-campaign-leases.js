@@ -42,13 +42,14 @@ export async function claimResearchTask(db, { campaignId, workspaceId, ownerId,
     throw new TypeError("Verified campaign scope and clock required");
   }
   return db.$transaction(async tx => {
-    const campaign = await tx.researchCampaign.findFirst({
-      where: { id: campaignId, workspaceId, ownerId, status: {
-        in: ["QUEUED", "RUNNING"],
-      } },
-      select: { id: true },
-    });
-    if (!campaign) return null;
+    // Lock the campaign row so cancellation and claims serialize.
+    const campaigns = await tx.$queryRaw`
+      SELECT "id" FROM "ResearchCampaign"
+      WHERE "id" = ${campaignId} AND "workspaceId" = ${workspaceId}
+        AND "ownerId" = ${ownerId}
+        AND "status" IN ('QUEUED', 'RUNNING')
+      FOR UPDATE`;
+    if (campaigns.length !== 1) return null;
     const rows = await tx.$queryRaw`
       SELECT "id", "attempts", "query", "resultLimit"
       FROM "ResearchCampaignTask"
