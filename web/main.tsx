@@ -601,6 +601,9 @@ function App() {
 
   async function openCampaignProgress(workspaceId: string, campaignId: string) {
     if (activeWorkspaceId !== workspaceId) return;
+    // Acknowledgement is task/snapshot-specific, never sticky across
+    // refreshes, workspaces or a different campaign.
+    setSkipChargeConfirmed(false);
     const workspaceGeneration = workspaceRequest.current;
     const request = ++campaignProgressRequest.current;
     setCampaignProgressId(campaignId);
