@@ -13,6 +13,7 @@ import { parseApprovedSources, discoverFeed, normalizeFeedAuthor, DiscoverySourc
 import { signScanEntry, verifyScanEntry } from "./discovery-proof.js";
 import { canonicalEvidenceUrl, EVIDENCE_KINDS, sameIdentityHints } from "../src/evidence.js";
 import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSession, verifySession, validWriteOrigin } from "./security.js";
+import { sessionIdentityState, canUseAdminSession } from "./session-isolation.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "./ai-research.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
@@ -65,7 +66,12 @@ function sessionCookie(res, value, maxAge) {
 }
 
 function authenticated(req, res, next) {
-  if (!verifySession(req.cookies?.pilot_session, env.SESSION_SIGNING_KEY)) {
+  const state = sessionIdentityState(req.cookies, env.SESSION_SIGNING_KEY);
+  if (state.conflict) return res.status(409).json({
+    code: "SESSION_IDENTITY_CONFLICT",
+    error: "Both admin and partner sessions are active. Sign out of both before continuing.",
+  });
+  if (!canUseAdminSession(req.cookies, env.SESSION_SIGNING_KEY)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   return next();
@@ -100,10 +106,16 @@ const loginLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 8, standardHeader
 app.post("/api/session", requireOrigin, loginLimiter, safe(async (req, res) => {
   const input = z.object({ email: z.string().email(), password: z.string().min(1).max(256) }).parse(req.body);
   if (!await verifyAdmin(input.email, input.password, prisma)) return res.status(401).json({ error: "Invalid credentials" });
+  // A successful administrator login replaces any existing Google partner
+  // session in this browser; it must never inherit another tenant's identity.
+  partnerCookie(res, "", 0);
   sessionCookie(res, makeSession(env.SESSION_SIGNING_KEY), 8 * 60 * 60 * 1000);
   return res.json({ authenticated: true });
 }));
-app.get("/api/session", (req, res) => res.json({ authenticated: verifySession(req.cookies?.pilot_session, env.SESSION_SIGNING_KEY) }));
+app.get("/api/session", (req, res) => {
+  const state = sessionIdentityState(req.cookies, env.SESSION_SIGNING_KEY);
+  return res.json({ authenticated: state.admin && !state.conflict, conflict: state.conflict });
+});
 app.delete("/api/session", requireOrigin, (_req, res) => {
   sessionCookie(res, "", 0);
   res.json({ authenticated: false });
@@ -339,6 +351,9 @@ app.delete("/api/partner/google/gmail", requireOrigin, safe(async (req, res) => 
 }));
 
 app.get("/api/partner/session", safe(async (req, res) => {
+  if (sessionIdentityState(req.cookies, env.SESSION_SIGNING_KEY).conflict) {
+    return res.json({ authenticated: false, conflict: true });
+  }
   const user = await partnerIdentity(req);
   if (!user) return res.json({ authenticated: false });
   return res.json({
@@ -555,6 +570,9 @@ app.get("/api/auth/google/callback", safe(async (req, res) => {
     where: { userId: user.id, revokedAt: null, acceptedAt: null },
     data: { acceptedAt: new Date() },
   });
+  // Only after verified OIDC identity + active invitation, replace any
+  // existing administrator cookie. Failed OAuth attempts do not mutate it.
+  sessionCookie(res, "", 0);
   partnerCookie(res, createPartnerSession(user.id, env.SESSION_SIGNING_KEY), 8 * 60 * 60_000);
   return res.redirect(303, "/");
 }));
