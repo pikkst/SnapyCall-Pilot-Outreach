@@ -460,12 +460,16 @@ function App() {
         ? "Candidate saved to workspace review queue. Contact and outreach are not approved."
         : "Candidate already exists in this workspace; no duplicate created.");
       // Refresh only candidate data: viewWorkspace() would clear this paid
-      // research preview, preventing review of the remaining suggestions.
-      const updated = await api<Candidate[]>(
-        "/candidates?workspaceId=" + encodeURIComponent(workspaceId));
-      if (workspaceRequest.current === generation) {
-        setWorkspaceCandidates(updated);
-        setWorkspaceDataStatus("ready");
+      // research preview. A failed refresh cannot undo the successful save.
+      try {
+        const updated = await api<Candidate[]>(
+          "/candidates?workspaceId=" + encodeURIComponent(workspaceId));
+        if (workspaceRequest.current === generation) {
+          setWorkspaceCandidates(updated);
+          setWorkspaceDataStatus("ready");
+        }
+      } catch {
+        if (workspaceRequest.current === generation) setWorkspaceDataStatus("error");
       }
     } catch (error) {
       if (workspaceRequest.current !== generation) return;
