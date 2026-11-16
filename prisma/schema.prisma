@@ -267,6 +267,7 @@ model ResearchCampaign {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   tasks ResearchCampaignTask[]
+  observations ResearchCampaignObservation[]
   @@unique([workspaceId, ownerId, idempotencyKey])
   @@index([workspaceId, createdAt])
   @@index([status, createdAt])
@@ -294,7 +295,27 @@ model ResearchCampaignTask {
   // No provider execution until a separately reviewed budgeted executor exists.
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  observations ResearchCampaignObservation[]
   @@unique([campaignId, taskIndex])
   @@unique([campaignId, taskKey])
   @@index([status, nextAttemptAt, leaseUntil])
+}
+
+model ResearchCampaignObservation {
+  id String @id @default(cuid())
+  campaignId String
+  campaign ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  taskId String
+  task ResearchCampaignTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  // A citation is provider-grounded research, not independent profile or email verification.
+  evidenceKey String
+  name String
+  category String
+  citationUrl String
+  rationale String
+  status String @default("UNVERIFIED")
+  observedAt DateTime @default(now())
+  @@unique([campaignId, evidenceKey])
+  @@index([campaignId, observedAt, id])
+  @@index([taskId])
 }
