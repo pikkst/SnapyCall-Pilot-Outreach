@@ -24,7 +24,11 @@ export function normalizeCandidate(input) {
   if (!name || !Object.hasOwn(EXPERT_CATEGORIES, category)) {
     throw new TypeError("Candidate name and a supported category are required");
   }
-  if (!isPublicHttpUrl(sourceUrl)) {
+  // Discovery intake can queue an unverified candidate before a durable public
+  // reference has been independently established. Other intake stays strict.
+  const sourcePending = (input.discoverySeed === true ||
+    (input.status === "REVIEW_PENDING" && Boolean(input.discoveryKey))) && !sourceUrl;
+  if (!sourcePending && !isPublicHttpUrl(sourceUrl)) {
     throw new TypeError("A valid http(s) provenance URL is required");
   }
   const email = text(input.email, 254).toLowerCase();
@@ -38,7 +42,7 @@ export function normalizeCandidate(input) {
   return Object.freeze({
     name,
     category,
-    sourceUrl,
+    sourceUrl: sourceUrl || null,
     email: email || null,
     region: Object.hasOwn(REGION_PRIORITIES, region) ? region : null,
     onlineEnglish,
