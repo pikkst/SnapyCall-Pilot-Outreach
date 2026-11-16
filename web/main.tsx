@@ -4,6 +4,8 @@ import "./style.css";
 import { manualIndependentResearch } from "../src/manual-research.js";
 import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch, selectedDiscoverySeedBatch } from "../src/research-review-batch.js";
 
+type CampaignSummary = { id: string; query: string; targetCount: number; status: string; plannedTasks: number; createdAt: string; providerCallsAuthorized: false };
+type PartnerTab = "dashboard" | "candidates" | "discovery" | "drafts" | "profile" | "settings";
 type PartnerSession = { authenticated: boolean; conflict?: boolean; userId?: string; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
 type PartnerInvitation = { id: string; workspaceId: string; workspace: string;
@@ -130,7 +132,7 @@ function App() {
   const [operatorResearch, setOperatorResearch] = useState<ResearchReconciliationOverview | null>(null);
   const [operatorResearchStatus, setOperatorResearchStatus] =
     useState<"idle" | "loading" | "ready" | "error">("idle");
-  const [partnerTab, setPartnerTab] = useState<"candidates" | "discovery" | "drafts" | "profile" | "settings">("candidates");
+  const [partnerTab, setPartnerTab] = useState<PartnerTab>("dashboard");
   const [partnerSession, setPartnerSession] = useState<PartnerSession | null>(null);
   const [myProfile, setMyProfile] = useState<PartnerSelfProfile | null>(null);
   const [profileState, setProfileState] = useState<"loading" | "ready" | "error">("loading");
@@ -168,6 +170,8 @@ function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [workspaceCandidates, setWorkspaceCandidates] = useState<Candidate[]>([]);
   const [workspaceDrafts, setWorkspaceDrafts] = useState<Draft[]>([]);
+  const [workspaceCampaigns, setWorkspaceCampaigns] = useState<CampaignSummary[]>([]);
+  const [campaignListStatus, setCampaignListStatus] = useState<"idle" | "ready" | "error">("idle");
   const [workspaceDataStatus, setWorkspaceDataStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [researchQuery, setResearchQuery] = useState("Find experienced English-speaking AI automation consultants offering online consultations");
   const [seedName, setSeedName] = useState("");
@@ -371,6 +375,8 @@ function App() {
     setResearchError("");
     setWorkspaceCandidates([]);
     setWorkspaceDrafts([]);
+    setWorkspaceCampaigns([]);
+    setCampaignListStatus("idle");
     setWorkspaceDataStatus("loading");
     try {
       const q = "?workspaceId=" + encodeURIComponent(workspaceId);
@@ -382,10 +388,22 @@ function App() {
       setWorkspaceCandidates(leads);
       setWorkspaceDrafts(messages);
       setWorkspaceDataStatus("ready");
+      // Campaign status is supplemental: a failure must not hide valid leads.
+      try {
+        const campaigns = await api<CampaignSummary[]>("/research-campaigns" + q);
+        if (workspaceRequest.current !== generation) return;
+        setWorkspaceCampaigns(campaigns);
+        setCampaignListStatus("ready");
+      } catch {
+        if (workspaceRequest.current !== generation) return;
+        setCampaignListStatus("error");
+      }
     } catch {
       if (workspaceRequest.current !== generation) return;
       setWorkspaceCandidates([]);
       setWorkspaceDrafts([]);
+      setWorkspaceCampaigns([]);
+      setCampaignListStatus("error");
       setWorkspaceDataStatus("error");
     }
   }
@@ -772,6 +790,8 @@ function App() {
       setPartnerEvidenceRows([]);
       setPartnerEvidenceState("idle");
       setActiveWorkspaceId(null);
+      setWorkspaceCampaigns([]);
+      setCampaignListStatus("idle");
       setWorkspaceCandidates([]);
       setWorkspaceDrafts([]);
       setWorkspaceDataStatus("idle");
@@ -998,11 +1018,12 @@ function App() {
         <div className="brand">SNAPYCALL<span> / PILOT</span></div>
         <p className="sidebar-label">WORKSPACE</p>
         <nav aria-label="Workspace sections">
-          {(["candidates", "discovery", "drafts", "profile", "settings"] as const).map(item =>
+          {(["dashboard", "discovery", "candidates", "drafts", "profile", "settings"] as const).map(item =>
             <button type="button" key={item} className={partnerTab === item ? "active" : ""}
               onClick={() => setPartnerTab(item)}>
-              {item === "profile" ? "My profile" : item === "settings" ? "AI configuration" : item === "drafts" ? "Outreach drafts" :
-                item === "discovery" ? "Free discovery" : "Candidates"}
+              {item === "dashboard" ? "Dashboard" : item === "profile" ? "My profile" :
+                item === "settings" ? "AI settings" : item === "drafts" ? "Outreach drafts" :
+                item === "discovery" ? "Research" : "Candidates"}
             </button>)}
         </nav>
         <div className="sidebar-bottom">
@@ -1013,9 +1034,9 @@ function App() {
       </aside>
       <section className="content" aria-label="Partner workspace">
         <header><div><span className="eyebrow">SNAPYCALL • PARTNER</span>
-          <h1>{partnerTab === "candidates" ? "Expert candidates" : partnerTab === "discovery" ?
-            "Free lead discovery" : partnerTab === "drafts" ? "Outreach drafts" :
-            partnerTab === "profile" ? "My profile" : "Your AI provider"}</h1>
+          <h1>{partnerTab === "dashboard" ? "Workspace dashboard" : partnerTab === "candidates" ? "Expert candidates" :
+            partnerTab === "discovery" ? "Find experts" : partnerTab === "drafts" ? "Outreach drafts" :
+            partnerTab === "profile" ? "My profile" : "AI settings"}</h1>
           <p className="muted">Welcome{partnerSession.displayName ? ", " + partnerSession.displayName : ""}.
             Your access is limited to your authorized workspaces.</p>
         </div><span className="pill">No automatic sending</span></header>
@@ -1060,7 +1081,7 @@ function App() {
             You may manually save inspected AI-research candidates for further review.
             Contact verification, automated importing, AI drafting and sending
             remain disabled until their separate authorization gates are released.</p>
-        <h2>My workspaces</h2>
+        <h2>{partnerTab === "dashboard" ? "Choose your workspace" : "My workspaces"}</h2>
         {connectionStatus === "unavailable" && <div role="alert">
           <p>Google connection status is unavailable. No connection changes have been assumed.</p>
           <button className="secondary" disabled={busy} onClick={() => void loadGoogleConnections()}>
@@ -1073,10 +1094,68 @@ function App() {
             <p><strong>{p.name}</strong> · {p.role}</p>
             <button type="button" className="secondary" disabled={busy}
               onClick={() => void viewWorkspace(p.id)}>
-              View my workspace
+              {activeWorkspaceId === p.id ? "Refresh workspace" : "Open workspace"}
             </button>
             {activeWorkspaceId === p.id &&
               <section aria-label={"Workspace " + p.name}>
+                {partnerTab === "dashboard" && <div className="workspace-dashboard" aria-label="Workspace overview">
+                  <div className="dashboard-intro">
+                    <h3>Get started with expert research</h3>
+                    <p className="muted">Find experts, save candidates for review and prepare outreach.
+                      Nothing is sent automatically.</p>
+                    <button type="button" onClick={() => setPartnerTab("discovery")}>
+                      Find experts
+                    </button>
+                  </div>
+                  {workspaceDataStatus === "loading" && <p role="status">Loading workspace data…</p>}
+                  {workspaceDataStatus === "error" && <div role="alert">
+                    <p>Workspace data could not be loaded. No totals are shown.</p>
+                    <button type="button" className="secondary" onClick={() => void viewWorkspace(p.id)}>
+                      Retry loading
+                    </button>
+                  </div>}
+                  {workspaceDataStatus === "ready" && <>
+                    <div className="metrics dashboard-metrics" aria-label="Workspace totals">
+                      <div className="metric"><strong>{workspaceCandidates.length}</strong><span>Saved candidates</span></div>
+                      <div className="metric"><strong>{workspaceCandidates.filter(c => c.status === "REVIEW_PENDING").length}</strong><span>Pending review</span></div>
+                      <div className="metric"><strong>{workspaceDrafts.length}</strong><span>Saved draft emails</span></div>
+                    </div>
+                    <h3>Next steps</h3>
+                    <ol className="getting-started">
+                      <li><strong>Configure AI search</strong>
+                        <p>{personalAi.keyConfigured && researchBudget.monthlyLimitCents !== null
+                          ? "AI key and monthly budget are configured."
+                          : "Set up your personal AI key and monthly spending limit before paid research."}</p>
+                        <button type="button" className="secondary" onClick={() => setPartnerTab("settings")}>
+                          {personalAi.keyConfigured && researchBudget.monthlyLimitCents !== null
+                            ? "Review AI settings" : "Configure AI settings"}
+                        </button>
+                      </li>
+                      <li><strong>Find and save experts</strong>
+                        <p>Search public sources and save selected candidates together. Their contact details remain unverified.</p>
+                        <button type="button" className="secondary" onClick={() => setPartnerTab("discovery")}>Open Research</button>
+                      </li>
+                      <li><strong>Review your candidates</strong>
+                        <p>Check source evidence before approving any future outreach.</p>
+                        <button type="button" className="secondary" onClick={() => setPartnerTab("candidates")}>Open Candidates</button>
+                      </li>
+                    </ol>
+                  </>}
+                  <div className="campaign-overview">
+                    <h3>Research campaigns</h3>
+                    <p className="muted">Multi-step research execution is still in development.
+                      Planned campaigns do not run AI searches automatically.</p>
+                    {campaignListStatus === "error" && <p role="status">
+                      Campaign status is unavailable. Candidate data remains accessible.
+                    </p>}
+                    {campaignListStatus === "ready" && (workspaceCampaigns.length
+                      ? <ul>{workspaceCampaigns.map(item => <li key={item.id}>
+                          <strong>{item.query}</strong> — {item.status.toLowerCase()}
+                          <small>Target {item.targetCount} · {item.plannedTasks} planned tasks · No automatic execution</small>
+                        </li>)}</ul>
+                      : <p className="muted">No research campaigns planned in this workspace.</p>)}
+                  </div>
+                </div>}
                 {partnerTab === "discovery" && <>
                   <section aria-label="Manual expert lead" className="review-panel">
                     <h3>Add an expert manually</h3>
@@ -1109,7 +1188,12 @@ function App() {
                   </section>
                   <section aria-label="AI web research preview" className="review-panel">
                   <h3>Find experts with AI web search</h3>
-                  <p className="muted">Paid public-web research with your selected
+                  <p className="muted">Describe the type of experts you need. Run a source-backed search,
+                    then select candidates to save in your review queue. A single search supports up to
+                    20 results; automated 100+ campaigns are not available yet.</p>
+                  <details className="research-technical-details">
+                    <summary>Search limits and costs</summary>
+                    <p className="muted">Paid public-web research with your selected
                     { " " + personalAi.provider + " " + personalAi.model } model.
                     Only explicitly priced models can run. Claude and OpenAI permit at most
                     three built-in web searches per request; Gemini 2.5 is billed by
@@ -1119,6 +1203,7 @@ function App() {
                   <p className="muted">Safety rate limit: at most 2 research requests
                     per 60 seconds, regardless of the saved daily attempt limit.
                     Wait at least one minute before another test to avoid HTTP 429.</p>
+                  </details>
                   <form onSubmit={event => void runResearch(p.id, event)}>
                     <label>Research criteria
                       <input value={researchQuery} maxLength={350} minLength={12} required
@@ -1130,12 +1215,18 @@ function App() {
                       {researchStatus === "loading" ? "Researching…" : "Search public web"}
                     </button>
                   </form>
-                  {!personalAi.keyConfigured &&
-                    <p className="muted">Configure a personal Gemini, OpenAI or Claude API key
-                      under My AI provider first.</p>}
-                  {researchBudget.monthlyLimitCents === null &&
-                    <p className="muted">Set your monthly USD budget in My AI provider
-                      before web research; otherwise provider calls are blocked.</p>}
+                  {!personalAi.keyConfigured && <div className="research-setup-notice" role="status">
+                    <p>Set up a personal Gemini, OpenAI or Claude API key before searching.</p>
+                    <button type="button" className="secondary" onClick={() => setPartnerTab("settings")}>
+                      Open AI settings
+                    </button>
+                  </div>}
+                  {researchBudget.monthlyLimitCents === null && <div className="research-setup-notice" role="status">
+                    <p>Set your monthly USD spending limit to enable paid research.</p>
+                    <button type="button" className="secondary" onClick={() => setPartnerTab("settings")}>
+                      Set spending limit
+                    </button>
+                  </div>}
                   {researchLimitsStatus !== "ready" && <p className="muted">
                     Personal research limits are unavailable; search is disabled until loaded.</p>}
                   {researchStatus === "error" && <>

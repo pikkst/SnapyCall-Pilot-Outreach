@@ -38,3 +38,28 @@ td button+button{margin-left:6px}
   .layout aside .sidebar-bottom .state { width:100%; margin-left:0; }
   .layout aside .sidebar-bottom button { flex:1 1 180px; min-width:0; }
 }
+
+
+/* Partner onboarding: primary actions and workspace status stay readable on mobile. */
+.workspace-dashboard{display:grid;gap:22px;margin-top:18px}
+.workspace-dashboard h3{font-size:17px;margin:0 0 9px}
+.workspace-dashboard .dashboard-intro{padding:24px;border:1px solid #d6e1fb;background:#f4f7ff;border-radius:14px}
+.workspace-dashboard .dashboard-intro p{max-width:680px;margin:0 0 18px}
+.workspace-dashboard .dashboard-metrics{margin:0}
+.workspace-dashboard .getting-started{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;list-style:none;counter-reset:step;padding:0;margin:0}
+.getting-started li{counter-increment:step;min-width:0;border:1px solid #e1e8f2;background:#fff;border-radius:12px;padding:18px}
+.getting-started li::before{content:counter(step);display:inline-grid;place-items:center;width:27px;height:27px;margin-bottom:14px;border-radius:50%;background:#e8efff;color:#2848a5;font-weight:800}
+.getting-started li strong{display:block;color:#18243b}
+.getting-started li p{color:#6d7c94;font-size:13px;line-height:1.55;min-height:65px}
+.getting-started li button{width:100%;white-space:normal}
+.campaign-overview{border-top:1px solid #e1e8f2;padding-top:20px}
+.campaign-overview ul{padding-left:22px}
+.campaign-overview li{margin:10px 0;overflow-wrap:anywhere}
+.campaign-overview small{display:block;margin-top:4px;color:#6d7c94}
+.research-technical-details{margin:12px 0 20px;border:1px solid #d6dfec;border-radius:9px;padding:12px}
+.research-technical-details summary{font-size:13px;font-weight:700;cursor:pointer}
+.research-technical-details .muted{margin:12px 0 0}
+.research-setup-notice{margin:12px 0;padding:14px 16px;border:1px solid #e0e6f0;border-radius:10px;background:#f7f9fd}
+.research-setup-notice p{margin:0 0 9px;font-size:13px}
+@media(max-width:900px){.workspace-dashboard .getting-started{grid-template-columns:1fr}.getting-started li p{min-height:0}}
+@media(max-width:600px){.workspace-dashboard .dashboard-metrics{grid-template-columns:1fr}.workspace-dashboard .dashboard-intro{padding:18px}.getting-started li{padding:15px}.research-setup-notice button{width:100%}}
