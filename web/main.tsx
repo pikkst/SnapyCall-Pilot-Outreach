@@ -279,6 +279,46 @@ function App() {
       .catch(() => setError("Unable to reach the authentication API"));
   }, []);
 
+  useEffect(() => {
+    // Cookies are browser-wide. An OAuth login in another tab can replace the
+    // current role without rerendering this already mounted React tree.
+    // Revalidate on returning to this tab and discard stale privileged data.
+    if (!loggedIn && !partnerSession?.authenticated) return;
+    let inFlight = false;
+    let disposed = false;
+    const checkChangedIdentity = async () => {
+      if (disposed || inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      try {
+        const [admin, partner] = await Promise.all([
+          api<{ authenticated: boolean; conflict?: boolean }>("/session"),
+          api<PartnerSession>("/partner/session"),
+        ]);
+        if (disposed) return;
+        if (admin.conflict || partner.conflict ||
+            (loggedIn && !admin.authenticated) ||
+            (partnerSession?.authenticated && !partner.authenticated)) {
+          // Reload re-evaluates the authoritative cookie state; no stale
+          // workspace data remains mounted from the previous browser identity.
+          window.location.reload();
+        }
+      } catch {
+        // Network failure must not silently replace an identity or authorize
+        // privileged actions; server-side authorization remains authoritative.
+      } finally {
+        inFlight = false;
+      }
+    };
+    const onVisibility = () => { void checkChangedIdentity(); };
+    window.addEventListener("focus", onVisibility);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", onVisibility);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [loggedIn, partnerSession?.authenticated]);
+
   async function loadMyProfile() {
     setProfileState("loading");
     try {
