@@ -1215,7 +1215,7 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
       metadata: { sourceUrl: created.sourceUrl, workspaceId: req.candidateScope,
         ...(discoverySeed ? { citationStatus: "UNVERIFIED_PROVIDER_CITATION" } : {}) },
     } });
-    return manualSeed ? { id: created.id, created: true } : created;
+    return manualSeed || discoverySeed ? { id: created.id, created: true } : created;
   }).catch(error => {
     if (error?.code === "P2002") return "DUPLICATE";
     throw error;
