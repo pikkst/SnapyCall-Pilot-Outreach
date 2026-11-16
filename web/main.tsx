@@ -208,6 +208,12 @@ function App() {
   const [workspaceDrafts, setWorkspaceDrafts] = useState<Draft[]>([]);
   const [workspaceCampaigns, setWorkspaceCampaigns] = useState<CampaignSummary[]>([]);
   const [campaignListStatus, setCampaignListStatus] = useState<"idle" | "ready" | "error">("idle");
+  const [campaignTestQuery, setCampaignTestQuery] =
+    useState("Find English-speaking AI automation consultants who offer online consulting, with public professional profiles");
+  const [campaignTestBusy, setCampaignTestBusy] = useState(false);
+  const [campaignTestNotice, setCampaignTestNotice] = useState("");
+  const [campaignPaidConfirmed, setCampaignPaidConfirmed] = useState(false);
+  const campaignCreateIdempotency = useRef<string | null>(null);
   const [campaignProgressId, setCampaignProgressId] = useState<string | null>(null);
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress | null>(null);
   const [campaignProgressStatus, setCampaignProgressStatus] =
@@ -401,6 +407,10 @@ function App() {
     // An earlier response must never render under a newly selected workspace.
     const generation = ++workspaceRequest.current;
     ++campaignProgressRequest.current;
+    setCampaignTestBusy(false);
+    setCampaignPaidConfirmed(false);
+    setCampaignTestNotice("");
+    campaignCreateIdempotency.current = null;
     setCampaignProgressId(null);
     setCampaignProgress(null);
     setCampaignProgressStatus("idle");
@@ -466,6 +476,89 @@ function App() {
       void viewWorkspace(onlyWorkspaceId);
     }
   }, [partnerSession?.userId, onlyWorkspaceId]);
+
+  async function refreshCampaignList(workspaceId: string, generation: number) {
+    const items = await api<CampaignSummary[]>("/research-campaigns?workspaceId=" +
+      encodeURIComponent(workspaceId));
+    if (workspaceRequest.current !== generation) return;
+    setWorkspaceCampaigns(items);
+    setCampaignListStatus("ready");
+  }
+
+  async function createManualTestCampaign(workspaceId: string) {
+    if (campaignTestBusy || activeWorkspaceId !== workspaceId ||
+        campaignTestQuery.trim().length < 12 || campaignTestQuery.trim().length > 240) return;
+    const generation = workspaceRequest.current;
+    setCampaignTestBusy(true);
+    setCampaignTestNotice("");
+    try {
+      // Retain this UUID when a request outcome is uncertain so a repeat
+      // click cannot create an unintended second campaign.
+      const idempotencyKey = campaignCreateIdempotency.current ??
+        crypto.randomUUID();
+      campaignCreateIdempotency.current = idempotencyKey;
+      const result = await api<{ id: string }>("/research-campaigns?workspaceId=" +
+        encodeURIComponent(workspaceId), {
+        method: "POST",
+        body: JSON.stringify({ query: campaignTestQuery.trim(),
+          targetCount: 100, idempotencyKey }),
+      });
+      if (generation !== workspaceRequest.current) return;
+      campaignCreateIdempotency.current = null;
+      await refreshCampaignList(workspaceId, generation);
+      setCampaignTestNotice("100-candidate research plan saved. No paid AI calls have run.");
+      await openCampaignProgress(workspaceId, result.id);
+    } catch (error) {
+      if (generation === workspaceRequest.current) setCampaignTestNotice(
+        "Campaign planning failed: " +
+        (error instanceof Error ? error.message : "Unknown error") +
+        ". Retrying uses the same idempotency key.");
+    } finally {
+      if (generation === workspaceRequest.current) setCampaignTestBusy(false);
+    }
+  }
+
+  async function executeManualCampaignTask(workspaceId: string, campaignId: string) {
+    if (campaignTestBusy || !campaignPaidConfirmed ||
+        activeWorkspaceId !== workspaceId ||
+        !personalAi.keyConfigured ||
+        !researchBudget.enforcedForPaidSearch ||
+        researchBudget.monthlyLimitCents == null ||
+        researchBudget.reconciliation?.needsReview === true ||
+        budgetStatus !== "ready" || personalAiStatus !== "ready") return;
+    const generation = workspaceRequest.current;
+    setCampaignTestBusy(true);
+    setCampaignPaidConfirmed(false);
+    setCampaignTestNotice("");
+    try {
+      // One task per click deliberately avoids an unbounded paid loop.
+      await api("/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/execute-next?workspaceId=" + encodeURIComponent(workspaceId), {
+        method: "POST", body: JSON.stringify({ maxTasks: 1 }),
+      });
+      if (generation !== workspaceRequest.current) return;
+      setCampaignTestNotice("One paid task finished. Review the sourced evidence before continuing.");
+    } catch (error) {
+      if (generation === workspaceRequest.current) setCampaignTestNotice(
+        "Execution stopped: " + (error instanceof Error ? error.message : "Unknown") +
+        ". Inspect progress and spend before any retry.");
+    } finally {
+      if (generation === workspaceRequest.current) {
+        setCampaignTestBusy(false);
+        // Refreshing is read-only and never replays a possibly chargeable call.
+        await openCampaignProgress(workspaceId, campaignId);
+        try { await refreshCampaignList(workspaceId, generation); } catch {
+          setCampaignListStatus("error");
+        }
+        try {
+          const budget = await api<ResearchBudget>("/research-budget");
+          if (generation === workspaceRequest.current) setResearchBudget(budget);
+        } catch {
+          if (generation === workspaceRequest.current) setBudgetStatus("error");
+        }
+      }
+    }
+  }
 
   async function openCampaignProgress(workspaceId: string, campaignId: string) {
     if (activeWorkspaceId !== workspaceId) return;
@@ -921,6 +1014,10 @@ function App() {
       await api("/partner/session", { method: "DELETE" });
       ++workspaceRequest.current;
       ++campaignProgressRequest.current;
+      setCampaignPaidConfirmed(false);
+      setCampaignTestBusy(false);
+      setCampaignTestNotice("");
+      campaignCreateIdempotency.current = null;
       setCampaignProgressId(null);
       setCampaignProgress(null);
       setCampaignProgressStatus("idle");
@@ -1304,8 +1401,27 @@ function App() {
                   </>}
                   <div className="campaign-overview">
                     <h3>Research campaigns</h3>
-                    <p className="muted">Multi-step research execution is still in development.
-                      Planned campaigns do not run AI searches automatically.</p>
+                    <p className="muted">Plan a 100-candidate research test using your
+                      own AI provider. A plan costs nothing; each manually approved
+                      work unit can generate a paid provider call. Results are
+                      <strong> unverified expert candidates</strong>, not usable email contacts.
+                      Nothing runs automatically and no invitations are sent.</p>
+                    <div className="form-grid">
+                      <label>100-candidate search criteria
+                        <textarea rows={2} minLength={12} maxLength={240}
+                          disabled={campaignTestBusy} value={campaignTestQuery}
+                          onChange={event => {
+                            setCampaignTestQuery(event.target.value);
+                            campaignCreateIdempotency.current = null;
+                          }} />
+                      </label>
+                      <button type="button" disabled={campaignTestBusy ||
+                        campaignTestQuery.trim().length < 12}
+                        onClick={() => void createManualTestCampaign(p.id)}>
+                        Plan 100-candidate test (free)
+                      </button>
+                    </div>
+                    {campaignTestNotice && <p role="status">{campaignTestNotice}</p>}
                     {campaignListStatus === "error" && <p role="status">
                       Campaign status is unavailable. Candidate data remains accessible.
                     </p>}
@@ -1355,6 +1471,35 @@ function App() {
                           Do not restart paid research until the spend ledger is checked.</p>}
                         <p className="muted">Next step: {campaignProgress.action}.
                           No email checks or messages were sent by this view.</p>
+                        {campaignProgress.operationalState === "READY" && <>
+                          <p>Personal AI key: {personalAi.keyConfigured ? "configured" : "missing"} ·
+                            Paid search budget: {researchBudget.enforcedForPaidSearch &&
+                              researchBudget.monthlyLimitCents != null
+                              ? "$" + (researchBudget.monthlyLimitCents / 100).toFixed(2)
+                              : "not configured"} ·
+                            Remaining daily requests: {researchLimits.dailyLimit} limit
+                            (shared across manual and campaign research).</p>
+                          <label className="checkbox-review">
+                            <input type="checkbox" checked={campaignPaidConfirmed}
+                              disabled={campaignTestBusy}
+                              onChange={event => setCampaignPaidConfirmed(event.target.checked)}/>
+                            I authorize exactly one billable AI research task using my
+                            personal API key, subject to configured budget and quota.
+                          </label>
+                          <button type="button" disabled={campaignTestBusy ||
+                            !campaignPaidConfirmed || !personalAi.keyConfigured ||
+                            !researchBudget.enforcedForPaidSearch ||
+                            researchBudget.monthlyLimitCents == null ||
+                            researchBudget.reconciliation?.needsReview === true ||
+                            budgetStatus !== "ready" || personalAiStatus !== "ready"}
+                            onClick={() => void executeManualCampaignTask(p.id, campaignProgress.id)}>
+                            Run one paid research task
+                          </button>
+                          {(!personalAi.keyConfigured ||
+                            !researchBudget.enforcedForPaidSearch) &&
+                            <p className="muted">Configure your personal AI key and
+                              monthly paid research budget in Settings first.</p>}
+                        </>}
                         <button type="button" className="secondary"
                           onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
                           Refresh progress</button>
