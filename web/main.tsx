@@ -1236,8 +1236,9 @@ function App() {
         <section aria-label="Personal AI monthly budget" className="review-panel">
           <h2>Monthly research budget</h2>
           <p className="muted">Required USD application spending limit for your personal API key across
-            every workspace. The initial pilot allows only an explicitly priced Claude Sonnet 4.6
-            search, reserving up to $4.00 USD per attempt; other model/tool combinations remain blocked.
+            every workspace. Approved exact models are Claude Sonnet 4.6 (up to $4.00),
+            OpenAI GPT-4.1 mini (up to $1.50) and Gemini 2.5 Flash (up to $2.00)
+            per attempt; other models and tools remain blocked.
             The application ledger is conservative, not a provider invoice or external billing cap.</p>
           <p role="status">{researchBudget.enforcedForPaidSearch
             ? "Approved web research is enabled within your saved application budget."
