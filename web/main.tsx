@@ -171,6 +171,7 @@ function App() {
   // User-confirmed inspection is required before reusing the manual review
   // endpoint; an AI citation alone is not a verified source or contact.
   const [reviewedResearchSources, setReviewedResearchSources] = useState<string[]>([]);
+  const [reviewedResearchUrls, setReviewedResearchUrls] = useState<Record<string, string>>({});
   const [savingResearchCandidate, setSavingResearchCandidate] = useState<string | null>(null);
   const [savedResearchCandidates, setSavedResearchCandidates] = useState<string[]>([]);
   const [partnerName, setPartnerName] = useState("");
@@ -413,6 +414,7 @@ function App() {
     setResearchResult(null);
     setResearchError("");
     setReviewedResearchSources([]);
+    setReviewedResearchUrls({});
     setSavedResearchCandidates([]);
     try {
       const result = await api<ResearchPreview>("/discovery/ai-research?workspaceId=" +
@@ -436,7 +438,14 @@ function App() {
     workspaceId: string, candidate: ResearchPreview["candidates"][number],
   ) {
     const key = candidate.name + "|" + candidate.sourceUrl;
-    if (activeWorkspaceId !== workspaceId || savingResearchCandidate ||
+    const sourceUrl = reviewedResearchUrls[key] ?? (
+      candidate.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
+        ? "" : candidate.sourceUrl);
+    // Google's grounding redirect is a citation transport, not a durable
+    // expert website URL. Human reviewers must save the actual public page.
+    if (!sourceUrl.startsWith("https://") ||
+        sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/") ||
+        activeWorkspaceId !== workspaceId || savingResearchCandidate ||
         !researchResult || !reviewedResearchSources.includes(key) ||
         savedResearchCandidates.includes(key)) return;
     const generation = workspaceRequest.current;
@@ -451,7 +460,7 @@ function App() {
             manualSeed: true,
             name: candidate.name,
             category: candidate.category,
-            sourceUrl: candidate.sourceUrl,
+            sourceUrl: sourceUrl.trim(),
           }),
         });
       if (workspaceRequest.current !== generation) return;
@@ -1046,6 +1055,24 @@ function App() {
                         <p>{item.rationale}</p>
                         <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">
                           Provider-cited source (open to review)</a>
+                        <label className="muted">Reviewed public profile URL (HTTPS)
+                          <input type="url" required maxLength={2048}
+                            placeholder="https://actual-expert-website.example/profile"
+                            value={reviewedResearchUrls[reviewKey] ?? (
+                              item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
+                                ? "" : item.sourceUrl)}
+                            disabled={saved || savingResearchCandidate === reviewKey}
+                            onChange={e => {
+                              setReviewedResearchUrls(prev => ({
+                                ...prev, [reviewKey]: e.target.value,
+                              }));
+                              setReviewedResearchSources(prev =>
+                                prev.filter(key => key !== reviewKey));
+                            }}/>
+                          {item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
+                            ? "Gemini provided a redirect citation. Open it and copy the final website URL here."
+                            : "Confirm this is the page you independently reviewed."}
+                        </label>
                         <label className="muted">
                           <input type="checkbox" checked={reviewed}
                             disabled={saved || savingResearchCandidate === reviewKey}
@@ -1056,7 +1083,10 @@ function App() {
                           identity and contact information are not yet verified.
                         </label>
                         <button type="button" className="secondary"
-                          disabled={!reviewed || saved || savingResearchCandidate !== null}
+                          disabled={!reviewed || saved || savingResearchCandidate !== null ||
+                            !(reviewedResearchUrls[reviewKey] ?? (
+                              item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
+                                ? "" : item.sourceUrl)).startsWith("https://")}
                           onClick={() => void saveReviewedResearchCandidate(p.id, item)}>
                           {saved ? "Saved to candidates" :
                             savingResearchCandidate === reviewKey ? "Saving…" :
