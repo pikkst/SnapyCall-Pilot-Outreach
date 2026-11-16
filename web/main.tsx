@@ -1221,13 +1221,14 @@ function App() {
                       const reviewKey = reviewedCandidateKey(item);
                       const reviewed = reviewedResearchSources.includes(reviewKey);
                       const saved = savedResearchCandidates.includes(reviewKey);
+                      const sourceReady = Boolean(resolvedReviewedSource(item, reviewedResearchUrls));
                       return <li key={reviewKey}>
                         <strong>{item.name}</strong> — {item.category}
                         <p>{item.rationale}</p>
                         <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">
                           Provider-cited source (open to review)</a>
-                        <label className="muted">Reviewed public profile URL (HTTPS)
-                          <input type="url" required maxLength={2048}
+                        <label className="muted" htmlFor={"review-source-" + reviewKey}>Reviewed public profile URL (HTTPS)
+                          <input id={"review-source-" + reviewKey} type="url" required maxLength={2048}
                             placeholder="https://actual-expert-website.example/profile"
                             value={reviewedResearchUrls[reviewKey] ?? (
                               item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
@@ -1241,21 +1242,23 @@ function App() {
                                 prev.filter(key => key !== reviewKey));
                             }}/>
                           {item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
-                            ? "Gemini provided a redirect citation. Open it and copy the final website URL here."
-                            : "Confirm this is the page you independently reviewed."}
+                            ? "Gemini returned a temporary citation link. Open the source above, then paste the final public HTTPS address here. The citation link itself cannot be saved."
+                            : "Check that this is the actual public profile you reviewed."}
                         </label>
-                        <label className="muted">
+                        {!sourceReady && !saved && <p className="review-source-warning" role="status">
+                          A valid public HTTPS profile URL is required before you can confirm or save this candidate.
+                        </p>}
+                        <label className="checkbox-review">
                           <input type="checkbox" checked={reviewed}
-                            disabled={saved || savingResearchCandidate === reviewKey}
+                            disabled={saved || savingResearchCandidate !== null || !sourceReady}
                             onChange={e => setReviewedResearchSources(prev =>
                               e.target.checked ? [...prev, reviewKey] :
                                 prev.filter(key => key !== reviewKey))}/>
-                          I independently reviewed this public source. The person's
-                          identity and contact information are not yet verified.
+                          <span>I independently reviewed this public source. The person's
+                          identity and contact information are not yet verified.</span>
                         </label>
                         <button type="button" className="secondary"
-                          disabled={!reviewed || saved || savingResearchCandidate !== null ||
-                            !resolvedReviewedSource(item, reviewedResearchUrls)}
+                          disabled={!reviewed || saved || savingResearchCandidate !== null || !sourceReady}
                           onClick={() => void saveReviewedResearchCandidates(p.id, reviewKey)}>
                           {saved ? "Saved to candidates" :
                             savingResearchCandidate === reviewKey ? "Saving…" :
