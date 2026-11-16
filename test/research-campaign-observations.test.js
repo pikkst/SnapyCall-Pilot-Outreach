@@ -176,3 +176,25 @@ test("progress snapshot exposes recovery metadata but does not imply verified em
   assert.equal(view.contactVerification, "NOT_PERFORMED");
   assert.equal(view.sendingEnabled, false);
 });
+
+test("future retry window cannot be presented as immediately executable", () => {
+  const view = deriveCampaignOperationalState({
+    ...baseProgress, tasks: [{ status: "QUEUED", observedCount: 0,
+      resultLimit: 10, nextAttemptAt: new Date(progressNow.getTime() + 60000) }],
+  }, progressNow);
+  assert.equal(view.operationalState, "WAITING_RETRY");
+  assert.equal(view.action, "WAIT_FOR_NEXT_ELIGIBLE_TASK");
+  const ready = deriveCampaignOperationalState({
+    ...baseProgress, tasks: [{ status: "QUEUED", observedCount: 0,
+      resultLimit: 10, nextAttemptAt: new Date(progressNow.getTime() - 1) }],
+  }, progressNow);
+  assert.equal(ready.operationalState, "READY");
+});
+
+test("persisted PAUSED campaign cannot be offered as READY", () => {
+  const view = deriveCampaignOperationalState({
+    ...baseProgress, status: "PAUSED",
+  }, progressNow);
+  assert.equal(view.operationalState, "PAUSED_REVIEW");
+  assert.equal(view.needsReconciliation, true);
+});
