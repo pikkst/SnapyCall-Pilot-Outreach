@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { researchCandidates, researchInput, ResearchProviderHttpError, publicResearchProviderFailure } from "../server/ai-research.js";
+import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "../server/ai-research.js";
 
 const args = {
   query: "Find English-speaking professional AI automation consultants in the UK",
@@ -101,4 +101,14 @@ test("provider failures map to safe and actionable public error codes", () => {
     assert.ok(value.error.length > 15);
     assert.doesNotMatch(JSON.stringify(value), /secret|bearer|sk-test/i);
   }
+});
+
+test("upstream transport and invalid responses become sanitized execution errors", async () => {
+  await assert.rejects(() => researchCandidates(args, {
+    post: async () => { throw new Error("secret raw external transport error"); },
+  }), error => error instanceof ResearchProviderExecutionError &&
+    !String(error.message).includes("secret"));
+  await assert.rejects(() => researchCandidates(args, {
+    post: async () => ({ stop_reason: "max_tokens", content: [] }),
+  }), ResearchProviderExecutionError);
 });
