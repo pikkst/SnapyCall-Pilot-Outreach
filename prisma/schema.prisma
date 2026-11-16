@@ -328,6 +328,7 @@ model CandidateDirectEmailObservation {
   workspace Partner @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   candidateId String @unique
   candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  personName String
   emailNormalized String
   profileUrl String
   evidenceDigest String
