@@ -28,6 +28,21 @@ type Candidate = {
   score: { score: number | null; eligible: boolean; stage: string };
   qualification: { stage: string; qualified: boolean; score: null; blockers: string[] };
   outreach: { stage: string; canDraft: boolean; canSend: false; blockers: string[] };
+  contactVerification?: {
+    personEmail: "REVIEWED" | "REVIEW_REQUIRED" | "UNVERIFIED";
+    mailbox: "VALID" | "INVALID" | "RISKY" | "UNKNOWN";
+    usableAsContact: boolean; draftEligible: boolean;
+    onboardingEligible: false; sendingEnabled: false;
+  };
+};
+type DirectEmailEvidenceResponse = {
+  candidateId: string; personEmailLinked: boolean;
+  usableAsContact: false; onboardingEligible: false; sendingEnabled: false;
+  observation: null | {
+    sourceUrl: string; observedEmail: string; evidenceDigest: string;
+    status: "REVIEW_REQUIRED" | "PERSON_EMAIL_REVIEWED";
+    reviewRequired: boolean; personEmailLinked: boolean; inspectedAt: string;
+  };
 };
 type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
 type ResearchPreview = {
@@ -102,7 +117,10 @@ const reasonNames: Record<string, string> = {
   english_online_requirement_unconfirmed: "Confirm English online consultations",
   expert_profile_review_pending: "Review a separate expert profile",
   email_missing: "Add a verified contact channel", legal_basis_missing: "Review legal basis",
-  contact_review_pending: "Review contact details", suppressed: "Contact is suppressed",
+  contact_review_pending: "Review contact details",
+  person_email_link_unverified: "Verify the exact person-to-email link",
+  mailbox_deliverability_unconfirmed: "Validate this specific mailbox",
+  suppressed: "Contact is suppressed",
   candidate_rejected: "Candidate was rejected",
 };
 const regions = [
@@ -160,6 +178,12 @@ function App() {
   const workspaceRequest = useRef(0);
   const partnerEvidenceRequest = useRef(0);
   const partnerReviewRequest = useRef(0);
+  const personEmailRequest = useRef(0);
+  const [personEmailCandidateId, setPersonEmailCandidateId] = useState<string | null>(null);
+  const [personEmailEvidence, setPersonEmailEvidence] =
+    useState<DirectEmailEvidenceResponse | null>(null);
+  const [personEmailBusy, setPersonEmailBusy] = useState(false);
+  const [personEmailConfirmed, setPersonEmailConfirmed] = useState(false);
   const [partnerReviewSaving, setPartnerReviewSaving] = useState(false);
   const [partnerEvidenceId, setPartnerEvidenceId] = useState<string | null>(null);
   const [partnerEvidenceRows, setPartnerEvidenceRows] = useState<Evidence[]>([]);
@@ -364,6 +388,11 @@ function App() {
     const generation = ++workspaceRequest.current;
     ++partnerEvidenceRequest.current;
     ++partnerReviewRequest.current;
+    ++personEmailRequest.current;
+    setPersonEmailCandidateId(null);
+    setPersonEmailEvidence(null);
+    setPersonEmailBusy(false);
+    setPersonEmailConfirmed(false);
     setPartnerReviewSaving(false);
     setReviewId(null);
     setPartnerEvidenceId(null);
@@ -419,6 +448,70 @@ function App() {
       void viewWorkspace(onlyWorkspaceId);
     }
   }, [partnerSession?.userId, onlyWorkspaceId]);
+
+  async function inspectCandidatePersonEmail(workspaceId: string, candidateId: string) {
+    if (activeWorkspaceId !== workspaceId || personEmailBusy) return;
+    const generation = workspaceRequest.current;
+    const request = ++personEmailRequest.current;
+    const url = "/candidates/" + encodeURIComponent(candidateId) +
+      "/direct-email-evidence?workspaceId=" + encodeURIComponent(workspaceId);
+    setPersonEmailCandidateId(candidateId);
+    setPersonEmailEvidence(null);
+    setPersonEmailConfirmed(false);
+    setPersonEmailBusy(true);
+    setError("");
+    try {
+      // Only the server chooses the candidate's profile and independently
+      // inspects it. No client-supplied email or source URL is trusted.
+      await api(url, { method: "POST", body: "{}" });
+      const result = await api<DirectEmailEvidenceResponse>(url);
+      if (workspaceRequest.current !== generation ||
+          personEmailRequest.current !== request) return;
+      setPersonEmailEvidence(result);
+      setNotice("Public person-email evidence found for review. No contact was approved.");
+    } catch (err) {
+      if (workspaceRequest.current !== generation ||
+          personEmailRequest.current !== request) return;
+      setError(err instanceof Error ? err.message : "Profile email inspection unavailable");
+    } finally {
+      if (workspaceRequest.current === generation &&
+          personEmailRequest.current === request) setPersonEmailBusy(false);
+    }
+  }
+
+  async function approveCandidatePersonEmail(workspaceId: string) {
+    const candidateId = personEmailCandidateId;
+    const observation = personEmailEvidence?.observation;
+    if (!candidateId || !observation || !observation.reviewRequired ||
+        !personEmailConfirmed || personEmailBusy ||
+        activeWorkspaceId !== workspaceId) return;
+    const generation = workspaceRequest.current;
+    const request = personEmailRequest.current;
+    setPersonEmailBusy(true);
+    setError("");
+    try {
+      await api("/candidates/" + encodeURIComponent(candidateId) +
+        "/direct-email-evidence/review?workspaceId=" +
+        encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify({
+            expectedDigest: observation.evidenceDigest,
+            confirmsExactPersonEmailPair: true,
+          }),
+        });
+      if (workspaceRequest.current !== generation ||
+          personEmailRequest.current !== request) return;
+      await viewWorkspace(workspaceId);
+      setNotice("Exact person-email association reviewed. Mailbox, legal basis and suppression checks are still required before outreach.");
+    } catch (err) {
+      if (workspaceRequest.current !== generation ||
+          personEmailRequest.current !== request) return;
+      setError(err instanceof Error ? err.message : "Person-email review failed");
+    } finally {
+      if (workspaceRequest.current === generation &&
+          personEmailRequest.current === request) setPersonEmailBusy(false);
+    }
+  }
 
   async function openPartnerEvidence(workspaceId: string, candidateId: string) {
     if (workspaceId !== activeWorkspaceId) return;
