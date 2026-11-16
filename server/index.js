@@ -17,6 +17,7 @@ import { sessionIdentityState, canUseAdminSession } from "./session-isolation.js
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "./ai-research.js";
 import { planResearchCampaign } from "./research-campaign-planner.js";
+import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
 import { normalizeDiscoveryLeadSeed } from "./discovery-lead-seed.js";
@@ -1223,6 +1224,59 @@ app.get("/api/research-campaigns", candidateReadScope, safe(async (req, res) => 
     providerCallsAuthorized: false,
   })));
 }));
+
+// Reporting reads only committed provider-cited observations, never draft
+// contacts or automatically approved recipients.
+app.get("/api/research-campaigns/:id/progress", candidateReadScope,
+  safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const campaign = await prisma.researchCampaign.findFirst({
+      where: { id: req.params.id, workspaceId: req.candidateScope,
+        ownerId: identity.id },
+      select: { id: true, status: true, targetCount: true,
+        _count: { select: { observations: true } },
+        tasks: { select: { status: true, observedCount: true, resultLimit: true } } },
+    });
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    res.set("Cache-Control", "no-store");
+    return res.json(summarizeCampaignProgress(campaign));
+  }));
+
+app.get("/api/research-campaigns/:id/observations", candidateReadScope,
+  safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const cursor = z.object({
+      after: z.string().regex(/^c[a-z0-9]{10,40}$/).optional(),
+    }).strict().parse(req.query).after;
+    const campaign = await prisma.researchCampaign.findFirst({
+      where: { id: req.params.id, workspaceId: req.candidateScope,
+        ownerId: identity.id },
+      select: { id: true },
+    });
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    const rows = await prisma.researchCampaignObservation.findMany({
+      where: { campaignId: campaign.id, ...(cursor ? { id: { gt: cursor } } : {}) },
+      select: { id: true, name: true, category: true, citationUrl: true,
+        rationale: true, status: true, observedAt: true },
+      orderBy: { id: "asc" }, take: 101,
+    });
+    const page = rows.slice(0, 100);
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      observations: page,
+      nextCursor: rows.length > 100 ? page[page.length - 1].id : null,
+      verifiedContacts: 0,
+      sendingEnabled: false,
+    });
+  }));
 
 app.post("/api/research-campaigns/:id/cancel", candidateReadScope,
   requireOrigin, safe(async (req, res) => {
