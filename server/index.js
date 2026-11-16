@@ -22,6 +22,7 @@ import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-cam
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { inspectAndStoreDirectEmailObservation } from "./candidate-direct-email-evidence.js";
 import { reviewCandidateDirectEmailEvidence, directEmailReviewSnapshot } from "./candidate-direct-email-review.js";
+import { projectCandidateContactReadiness } from "./candidate-contact-readiness.js";
 import { inspectEmailDomain, onboardingEmailEligibility } from "./email-deliverability.js";
 import { inspectAndPersistCandidateDns, visibleCandidateDnsSnapshot } from "./candidate-email-dns.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
@@ -1501,13 +1502,23 @@ app.get("/api/candidates", candidateReadScope, safe(async (req, res) => {
   const items = await prisma.candidate.findMany({
     where: { workspaceId: req.candidateScope },
     orderBy: { createdAt: "desc" }, take: 500,
+    include: { directEmailObservation: true, mailboxVerification: true },
   });
-  res.json(items.map((item) => ({ ...item,
-    name: item.discoveryKey ? normalizeFeedAuthor(item.name) : item.name,
-    score: scoreCandidate(item),
-    qualification: qualificationDecision(item),
-    outreach: outreachDecision(item),
-  })));
+  const now = new Date();
+  res.set("Cache-Control", "no-store");
+  res.json(items.map(({ directEmailObservation, mailboxVerification, ...candidate }) => {
+    const projection = projectCandidateContactReadiness(candidate, {
+      directEmailObservation, mailboxVerification,
+    }, now);
+    return {
+      ...candidate,
+      name: candidate.discoveryKey ? normalizeFeedAuthor(candidate.name) : candidate.name,
+      score: scoreCandidate(candidate, projection.evidence),
+      qualification: projection.qualification,
+      outreach: projection.outreach,
+      contactVerification: projection.contactVerification,
+    };
+  }));
 }));
 app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, res) => {
   // Ownership comes exclusively from verified session + query membership.

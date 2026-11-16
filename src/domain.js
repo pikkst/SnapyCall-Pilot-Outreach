@@ -136,8 +136,8 @@ export function qualificationDecision(candidate, contactEvidence = {}) {
 
 // Compatibility: consumers may still call scoreCandidate(), but a numeric score
 // is unavailable by design; never substitute campaign allocation percentages.
-export function scoreCandidate(candidate) {
-  const q = qualificationDecision(candidate);
+export function scoreCandidate(candidate, contactEvidence = {}) {
+  const q = qualificationDecision(candidate, contactEvidence);
   return Object.freeze({ eligible: q.qualified, score: q.score, reasons: q.blockers, stage: q.stage });
 }
 
