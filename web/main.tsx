@@ -6,7 +6,7 @@ import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch, select
 import { researchReadiness } from "../src/research-readiness.js";
 import { singleAuthorizedWorkspaceId } from "../src/partner-workspace-navigation.js";
 
-type CampaignSummary = { id: string; query: string; targetCount: number; status: string; plannedTasks: number; createdAt: string; providerCallsAuthorized: false };
+type CampaignSummary = { id: string; query: string; targetCount: number; status: string; plannedTasks: number; uniqueSourcedCandidates: number; createdAt: string; providerCallsAuthorized: false };
 type PartnerTab = "dashboard" | "candidates" | "discovery" | "drafts" | "profile" | "settings";
 type PartnerSession = { authenticated: boolean; conflict?: boolean; userId?: string; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
@@ -1174,7 +1174,7 @@ function App() {
                     {campaignListStatus === "ready" && (workspaceCampaigns.length
                       ? <ul>{workspaceCampaigns.map(item => <li key={item.id}>
                           <strong>{item.query}</strong> — {item.status.toLowerCase()}
-                          <small>Target {item.targetCount} · {item.plannedTasks} planned tasks · No automatic execution</small>
+                          <small>{item.uniqueSourcedCandidates} unique cited candidates / target {item.targetCount} · {item.plannedTasks} planned tasks · No automatic execution</small>
                         </li>)}</ul>
                       : <p className="muted">No research campaigns planned in this workspace.</p>)}
                   </div>
