@@ -3,6 +3,18 @@
 import { normalizeResearchEvidence } from "./research-evidence.js";
 import { discoverySearchGuidance } from "./research-discovery-guidance.js";
 
+// Sanitized trusted-adapter classification. A provider can successfully
+// return/bill a response while omitting source metadata. That is NOT a
+// transport failure and never authorizes promoting model-generated URLs.
+export class ResearchEvidenceUnavailableError extends Error {
+  constructor() {
+    super("Provider response did not include verifiable source citations");
+    this.name = "ResearchEvidenceUnavailableError";
+    this.code = "NO_VERIFIABLE_GROUNDING";
+    this.phase = "EVIDENCE_VALIDATION";
+  }
+}
+
 const models = {
   openai: /^gpt-[a-zA-Z0-9][a-zA-Z0-9._-]{1,75}$/,
   gemini: /^gemini-(?:2\.5|3\.)[a-zA-Z0-9._-]{1,70}$/,
@@ -104,7 +116,7 @@ export async function searchWithGemini({ query, limit, model, apiKey }, post, si
       metadata.webSearchQueries.length < 1 || metadata.webSearchQueries.length > 100 ||
       !Array.isArray(metadata.groundingChunks) ||
       metadata.groundingChunks.length > 200) {
-    throw new Error("Gemini Google Search grounding unavailable or unbounded");
+    throw new ResearchEvidenceUnavailableError();
   }
   const textParts = candidate.content?.parts;
   if (!Array.isArray(textParts) || !textParts.length ||
