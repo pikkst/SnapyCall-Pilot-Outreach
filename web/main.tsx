@@ -12,6 +12,7 @@ type CampaignProgress = {
   targetCount: number; uniqueSourcedCandidates: number;
   rawCandidateObservations: number; duplicateObservations: number;
   plannedTasks: number; expiredLeases: number; needsReconciliation: boolean;
+  pausedTaskReview: Array<{taskIndex: number;lastErrorCode: "BILLING_UNCERTAIN"}>;
   tasks: { queued: number; running: number; completed: number;
     paused: number; failed: number; cancelled: number };
   contactVerification: "NOT_PERFORMED"; sendingEnabled: false;
@@ -213,6 +214,7 @@ function App() {
   const [campaignTestBusy, setCampaignTestBusy] = useState(false);
   const [campaignTestNotice, setCampaignTestNotice] = useState("");
   const [campaignPaidConfirmed, setCampaignPaidConfirmed] = useState(false);
+  const [skipChargeConfirmed, setSkipChargeConfirmed] = useState(false);
   const campaignCreateIdempotency = useRef<string | null>(null);
   const [campaignProgressId, setCampaignProgressId] = useState<string | null>(null);
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress | null>(null);
@@ -409,6 +411,7 @@ function App() {
     ++campaignProgressRequest.current;
     setCampaignTestBusy(false);
     setCampaignPaidConfirmed(false);
+    setSkipChargeConfirmed(false);
     setCampaignTestNotice("");
     campaignCreateIdempotency.current = null;
     setCampaignProgressId(null);
@@ -556,6 +559,42 @@ function App() {
         } catch {
           if (generation === workspaceRequest.current) setBudgetStatus("error");
         }
+      }
+    }
+  }
+
+  async function skipUncertainCampaignTask(workspaceId: string,
+    campaignId: string, taskIndex: number) {
+    if (!skipChargeConfirmed || campaignTestBusy ||
+        activeWorkspaceId !== workspaceId || !Number.isInteger(taskIndex)) return;
+    const generation = workspaceRequest.current;
+    setCampaignTestBusy(true);
+    setSkipChargeConfirmed(false);
+    setCampaignTestNotice("");
+    try {
+      // Explicit operator decision, never a provider call or refund.
+      const outcome = await api<{ code: string; conservativeChargeCents?: number }>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/skip-uncertain-task?workspaceId=" + encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify({ taskIndex, confirmNoRetry: true,
+            acceptConservativeCharge: true }),
+        });
+      if (generation !== workspaceRequest.current) return;
+      setCampaignTestNotice(outcome.code === "ALREADY_SKIPPED" ?
+        "This task was already skipped. Review the remaining work." :
+        "Paused task skipped without provider retry. Conservatively settled costs remain charged. Check provider invoices separately.");
+    } catch (error) {
+      if (generation === workspaceRequest.current) setCampaignTestNotice(
+        "Skip refused: " + (error instanceof Error ? error.message :
+          "Reconciliation required") +
+        ". The campaign remains paused; do not retry the paid task.");
+    } finally {
+      if (generation === workspaceRequest.current) {
+        setCampaignTestBusy(false);
+        await openCampaignProgress(workspaceId, campaignId);
+        try { await refreshCampaignList(workspaceId, generation); }
+        catch { setCampaignListStatus("error"); }
       }
     }
   }
@@ -1471,6 +1510,32 @@ function App() {
                           Do not restart paid research until the spend ledger is checked.</p>}
                         <p className="muted">Next step: {campaignProgress.action}.
                           No email checks or messages were sent by this view.</p>
+                        {campaignProgress.pausedTaskReview?.length === 1 &&
+                          campaignProgress.tasks.running === 0 && <>
+                            <p role="alert">Task #{campaignProgress.pausedTaskReview[0].taskIndex + 1}
+                              {" "}was paused after a potentially billable provider call.
+                              Its previous results are not source-verified. This
+                              action permanently skips ONLY that task; the full
+                              conservative app-side charge remains and may differ
+                              from the provider invoice. No AI call is replayed.</p>
+                            <label className="checkbox-review">
+                              <input type="checkbox" checked={skipChargeConfirmed}
+                                disabled={campaignTestBusy}
+                                onChange={event =>
+                                  setSkipChargeConfirmed(event.target.checked)}/>
+                              I reviewed the provider billing uncertainty,
+                              accept the existing conservative charge without
+                              a refund, and explicitly authorize skipping this
+                              task without a retry.
+                            </label>
+                            <button type="button" disabled={campaignTestBusy ||
+                              !skipChargeConfirmed}
+                              onClick={() => void skipUncertainCampaignTask(p.id,
+                                campaignProgress.id,
+                                campaignProgress.pausedTaskReview[0].taskIndex)}>
+                              Skip uncertain task without replay
+                            </button>
+                          </>}
                         {campaignProgress.operationalState === "READY" && <>
                           <p>Personal AI key: {personalAi.keyConfigured ? "configured" : "missing"} ·
                             Paid search budget: {researchBudget.enforcedForPaidSearch &&
