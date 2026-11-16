@@ -61,3 +61,13 @@ test("shared normalization is deterministic across provider-specific citation so
   assert.deepEqual(claude.candidates, openai.candidates);
   assert.deepEqual(openai.candidates, gemini.candidates);
 });
+
+
+test("uncited model URLs are discarded and the operator sees the exclusion count", () => {
+  const extra = { ...candidate, name: "Unverified Person",
+    sourceUrl: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/model-only" };
+  const result = evidence([candidate, extra]);
+  assert.deepEqual(result.candidates.map(c => c.name), ["Independent Expert"]);
+  assert.match(result.warnings.join(" "), /1 AI suggestions were not accepted/);
+  assert.equal(result.candidates[0].email, null);
+});
