@@ -49,7 +49,7 @@ export async function reviewCandidateDirectEmailEvidence(db, {
       return { status: 409, code: "EVIDENCE_REINSPECTION_REQUIRED" };
     }
     // Reuse the exact same display guard for canonical candidate identity.
-    if (!visibleDirectEmailObservation(candidate, evidence)) {
+    if (!visibleDirectEmailObservation(candidate, evidence, clock)) {
       return { status: 409, code: "CANDIDATE_EVIDENCE_MISMATCH" };
     }
 
@@ -81,7 +81,7 @@ export async function reviewCandidateDirectEmailEvidence(db, {
 // The frontend can request a review only for this exact inspected snapshot.
 // Never surface mailbox addresses through the review record API.
 export function directEmailReviewSnapshot(candidate, evidence, now = new Date()) {
-  const item = visibleDirectEmailObservation(candidate, evidence);
+  const item = visibleDirectEmailObservation(candidate, evidence, now);
   if (!item || !evidence || !(now instanceof Date) ||
       !Number.isFinite(now.getTime()) ||
       evidence.inspectedAt > now ||
