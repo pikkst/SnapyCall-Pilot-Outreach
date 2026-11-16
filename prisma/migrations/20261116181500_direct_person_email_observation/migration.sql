@@ -10,6 +10,8 @@ CREATE TABLE "CandidateDirectEmailObservation" (
   "evidenceDigest" TEXT NOT NULL,
   "status" TEXT NOT NULL DEFAULT 'REVIEW_REQUIRED',
   "inspectedAt" TIMESTAMP(3) NOT NULL,
+  "reviewedAt" TIMESTAMP(3),
+  "reviewedBy" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
   CONSTRAINT "CandidateDirectEmailObservation_pkey" PRIMARY KEY ("id"),
