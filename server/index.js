@@ -113,6 +113,7 @@ app.post("/api/session", requireOrigin, loginLimiter, safe(async (req, res) => {
   return res.json({ authenticated: true });
 }));
 app.get("/api/session", (req, res) => {
+  res.set("Cache-Control", "no-store");
   const state = sessionIdentityState(req.cookies, env.SESSION_SIGNING_KEY);
   return res.json({ authenticated: state.admin && !state.conflict, conflict: state.conflict });
 });
@@ -351,6 +352,7 @@ app.delete("/api/partner/google/gmail", requireOrigin, safe(async (req, res) => 
 }));
 
 app.get("/api/partner/session", safe(async (req, res) => {
+  res.set("Cache-Control", "no-store");
   if (sessionIdentityState(req.cookies, env.SESSION_SIGNING_KEY).conflict) {
     return res.json({ authenticated: false, conflict: true });
   }
