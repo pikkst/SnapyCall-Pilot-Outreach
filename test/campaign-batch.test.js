@@ -144,3 +144,18 @@ test("invalid limits, types and missing callbacks do not execute provider calls"
     assert.equal(calls, 0);
   }
 });
+
+test("last task finalizes PARTIAL and UI receives durable terminal state", async () => {
+  let calls = 0;
+  const clock = fastClock();
+  const outcome = await runApprovedCampaignBatch({
+    maxTasks: 2, now: clock.now, wait: clock.wait,
+    readState: async () => calls >= 2
+      ? { ...ready(), operationalState: "PARTIAL" } : ready(),
+    execute: async () => { calls++; },
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(outcome, {
+    status: "NOT_READY", completed: 2, operationalState: "PARTIAL",
+  });
+});
