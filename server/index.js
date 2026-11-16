@@ -1157,10 +1157,11 @@ app.get("/api/candidates/:id/direct-email-evidence", candidateReadScope,
       where: { candidateId: row.id },
     });
     res.set("Cache-Control", "no-store");
+    const snapshot = directEmailReviewSnapshot(row, stored);
     return res.json({
       candidateId: row.id,
-      observation: directEmailReviewSnapshot(row, stored),
-      personEmailLinked: false,
+      observation: snapshot,
+      personEmailLinked: snapshot?.personEmailLinked === true,
       usableAsContact: false,
       onboardingEligible: false,
       sendingEnabled: false,
