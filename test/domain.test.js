@@ -36,7 +36,10 @@ test("region and category do not determine suitability or numeric merit", () => 
       const q = scoreCandidate({ ...candidate, category, region });
       assert.equal(q.eligible, true);
       assert.equal(q.score, null);
-      assert.deepEqual(q.reasons, ["legal_basis_missing", "contact_review_pending"]);
+      assert.deepEqual(q.reasons, [
+      "legal_basis_missing", "contact_review_pending",
+      "person_email_link_unverified", "mailbox_deliverability_unconfirmed",
+    ]);
     }
   }
 });
@@ -84,10 +87,19 @@ test("contact in review is distinct from approved draft", () => {
   assert.equal(qualificationDecision(candidate).stage, QUALIFICATION_STAGES.CONTACT_REVIEW);
   assert.equal(outreachDecision(candidate).canDraft, false);
   const ready = { ...candidate, contactReviewed: true, legalBasis: "reviewed_business_contact" };
-  assert.equal(qualificationDecision(ready).stage, QUALIFICATION_STAGES.DRAFT_READY);
-  assert.equal(outreachDecision(ready).canDraft, true);
+  assert.equal(qualificationDecision(ready).stage, QUALIFICATION_STAGES.CONTACT_REVIEW);
+  assert.equal(outreachDecision(ready).canDraft, false);
   assert.equal(outreachDecision(ready).canSend, false);
-  assert.deepEqual(outreachDecision(ready).blockers, []);
+  assert.deepEqual(outreachDecision(ready).blockers, [
+    "person_email_link_unverified", "mailbox_deliverability_unconfirmed",
+  ]);
+  // A positive technical verdict is NOT proof of this person's email.
+  assert.equal(outreachDecision(ready, { mailboxVerificationStatus: "VALID" }).canDraft, false);
+  assert.equal(outreachDecision(ready, { personEmailLinked: true }).canDraft, false);
+  // Both independent pieces of evidence are required in addition to legal review.
+  const verified = { personEmailLinked: true, mailboxVerificationStatus: "VALID" };
+  assert.equal(outreachDecision(ready, verified).canDraft, true);
+  assert.equal(outreachDecision(ready, verified).canSend, false);
 });
 
 test("suppression and rejection override all review flags", () => {
@@ -120,4 +132,16 @@ test("a review flag without a valid professional profile cannot qualify RSS lead
   assert.throws(() => normalizeCandidate({
     ...imported, expertProfileUrl: "http://localhost/private",
   }));
+});
+
+test("client candidate fields never substitute for independent contact evidence", () => {
+  const spoof = {
+    ...candidate, contactReviewed: true, legalBasis: "reviewed_business_contact",
+    personEmailLinked: true, mailboxVerificationStatus: "VALID",
+  };
+  assert.equal(outreachDecision(spoof).canDraft, false);
+  assert.equal(outreachDecision(spoof).canSend, false);
+  assert.deepEqual(outreachDecision(spoof).blockers, [
+    "person_email_link_unverified", "mailbox_deliverability_unconfirmed",
+  ]);
 });
