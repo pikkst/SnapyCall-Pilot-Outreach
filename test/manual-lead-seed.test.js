@@ -36,3 +36,30 @@ test("manual seed is limited to existing expert categories", () => {
   assert.throws(() => normalizeManualLeadSeed({ ...input, category: "UNVERIFIED" }));
   assert.throws(() => normalizeManualLeadSeed({ ...input, name: "" }));
 });
+
+
+test("a human-reviewed AI suggestion uses existing manual intake without privileged fields", () => {
+  const geminiPreview = {
+    name: "Independent Expert",
+    category: "AI_AUTOMATION",
+    sourceUrl: "https://profiles.example.org/consultant",
+    rationale: "AI-suggested description is not independently verified.",
+    email: null,
+    contactReviewed: false,
+    status: "REVIEW_PENDING",
+  };
+  const reviewedInput = {
+    manualSeed: true,
+    name: geminiPreview.name,
+    category: geminiPreview.category,
+    sourceUrl: geminiPreview.sourceUrl,
+  };
+  assert.deepEqual(normalizeManualLeadSeed(reviewedInput), {
+    name: "Independent Expert",
+    category: "AI_AUTOMATION",
+    sourceUrl: "https://profiles.example.org/consultant",
+  });
+  assert.throws(() => normalizeManualLeadSeed({
+    ...reviewedInput, rationale: geminiPreview.rationale,
+  }), "Unreviewed AI description must not be imported as a trusted field");
+});

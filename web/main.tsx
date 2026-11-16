@@ -168,6 +168,12 @@ function App() {
   const [researchResult, setResearchResult] = useState<ResearchPreview | null>(null);
   const [researchStatus, setResearchStatus] = useState<"idle" | "loading" | "error">("idle");
   const [researchError, setResearchError] = useState("");
+  // User-confirmed inspection is required before reusing the manual review
+  // endpoint; an AI citation alone is not a verified source or contact.
+  const [reviewedResearchSources, setReviewedResearchSources] = useState<string[]>([]);
+  const [reviewedResearchUrls, setReviewedResearchUrls] = useState<Record<string, string>>({});
+  const [savingResearchCandidate, setSavingResearchCandidate] = useState<string | null>(null);
+  const [savedResearchCandidates, setSavedResearchCandidates] = useState<string[]>([]);
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
@@ -407,6 +413,9 @@ function App() {
     setResearchStatus("loading");
     setResearchResult(null);
     setResearchError("");
+    setReviewedResearchSources([]);
+    setReviewedResearchUrls({});
+    setSavedResearchCandidates([]);
     try {
       const result = await api<ResearchPreview>("/discovery/ai-research?workspaceId=" +
         encodeURIComponent(workspaceId), {
@@ -422,6 +431,61 @@ function App() {
     } finally {
       // Provider calls can be billed even when an upstream error occurs.
       if (workspaceRequest.current === generation) void loadResearchBudget();
+    }
+  }
+
+  async function saveReviewedResearchCandidate(
+    workspaceId: string, candidate: ResearchPreview["candidates"][number],
+  ) {
+    const key = candidate.name + "|" + candidate.sourceUrl;
+    const sourceUrl = reviewedResearchUrls[key] ?? (
+      candidate.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
+        ? "" : candidate.sourceUrl);
+    // Google's grounding redirect is a citation transport, not a durable
+    // expert website URL. Human reviewers must save the actual public page.
+    if (!sourceUrl.startsWith("https://") ||
+        sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/") ||
+        activeWorkspaceId !== workspaceId || savingResearchCandidate ||
+        !researchResult || !reviewedResearchSources.includes(key) ||
+        savedResearchCandidates.includes(key)) return;
+    const generation = workspaceRequest.current;
+    setSavingResearchCandidate(key);
+    setError("");
+    try {
+      // Reuse the existing audited/idempotent manual review intake. The human
+      // expressly confirms they opened and reviewed the cited source.
+      const receipt = await api<{ id: string; created: boolean }>(
+        "/candidates?workspaceId=" + encodeURIComponent(workspaceId), {
+          method: "POST", body: JSON.stringify({
+            manualSeed: true,
+            name: candidate.name,
+            category: candidate.category,
+            sourceUrl: sourceUrl.trim(),
+          }),
+        });
+      if (workspaceRequest.current !== generation) return;
+      setSavedResearchCandidates(prev => [...prev, key]);
+      setNotice(receipt.created
+        ? "Candidate saved to workspace review queue. Contact and outreach are not approved."
+        : "Candidate already exists in this workspace; no duplicate created.");
+      // Refresh only candidate data: viewWorkspace() would clear this paid
+      // research preview. A failed refresh cannot undo the successful save.
+      try {
+        const updated = await api<Candidate[]>(
+          "/candidates?workspaceId=" + encodeURIComponent(workspaceId));
+        if (workspaceRequest.current === generation) {
+          setWorkspaceCandidates(updated);
+          setWorkspaceDataStatus("ready");
+        }
+      } catch {
+        if (workspaceRequest.current === generation) setWorkspaceDataStatus("error");
+      }
+    } catch (error) {
+      if (workspaceRequest.current !== generation) return;
+      setError(error instanceof Error ? error.message :
+        "Candidate could not be saved for review.");
+    } finally {
+      setSavingResearchCandidate(null);
     }
   }
 
@@ -826,9 +890,10 @@ function App() {
         {error && <div className="error" role="alert">{error}</div>}
         {notice && <div className="success" role="status">{notice}</div>}
         {partnerTab !== "settings" && <section className="panel">
-          <p className="muted">Candidate and draft data are workspace-scoped. Manual lead
-            entry is review-only; automated importing, AI drafting and sending remain disabled
-            until their separate authorization gates are released.</p>
+          <p className="muted">Candidate and draft data are workspace-scoped.
+            You may manually save inspected AI-research candidates for further review.
+            Contact verification, automated importing, AI drafting and sending
+            remain disabled until their separate authorization gates are released.</p>
         <h2>My workspaces</h2>
         {connectionStatus === "unavailable" && <div role="alert">
           <p>Google connection status is unavailable. No connection changes have been assumed.</p>
@@ -885,6 +950,9 @@ function App() {
                     grounded prompt, not by query count. Every call reserves a conservative
                     amount from your owner-wide application USD budget. Review-only:
                     no candidates are imported or contacted. Failed requests may still be charged.</p>
+                  <p className="muted">Safety rate limit: at most 2 research requests
+                    per 60 seconds, regardless of the saved daily attempt limit.
+                    Wait at least one minute before another test to avoid HTTP 429.</p>
                   <form onSubmit={event => void runResearch(p.id, event)}>
                     <label>Research criteria
                       <input value={researchQuery} maxLength={350} minLength={12} required
@@ -911,12 +979,12 @@ function App() {
                       before retrying.</p>
                   </>}
                   {researchResult && <>
-                    <p className="muted">{researchResult.candidates.length} candidates for manual review
+                    <p className="muted">{researchResult.candidates.length} evidence-linked candidates for manual review
                       from {researchResult.provider} ({researchResult.model}).
                       Web requests: {researchResult.usage.searchRequests ?? "unknown"}.
                       Remaining requests today: {researchResult.quota.remaining.userWorkspace}
                       personal / {researchResult.quota.remaining.workspace} workspace.
-                      No candidates were imported.</p>
+                      Saving candidates requires explicit source review and does not authorize outreach.</p>
                     {researchResult.warnings.map(message => <p key={message} className="muted">{message}</p>)}
                     {researchResult.publicBusinessContacts && <>
                       <p className="muted">Public business inbox observations:
@@ -978,13 +1046,54 @@ function App() {
                           }
                         </li>)}</ol>
                     </> : null}
-                    <ul>{researchResult.candidates.map(item =>
-                      <li key={item.sourceUrl + item.name}>
+                    <ul>{researchResult.candidates.map(item => {
+                      const reviewKey = item.name + "|" + item.sourceUrl;
+                      const reviewed = reviewedResearchSources.includes(reviewKey);
+                      const saved = savedResearchCandidates.includes(reviewKey);
+                      return <li key={reviewKey}>
                         <strong>{item.name}</strong> — {item.category}
                         <p>{item.rationale}</p>
                         <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">
-                          Provider-cited source</a>
-                      </li>)}</ul>
+                          Provider-cited source (open to review)</a>
+                        <label className="muted">Reviewed public profile URL (HTTPS)
+                          <input type="url" required maxLength={2048}
+                            placeholder="https://actual-expert-website.example/profile"
+                            value={reviewedResearchUrls[reviewKey] ?? (
+                              item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
+                                ? "" : item.sourceUrl)}
+                            disabled={saved || savingResearchCandidate === reviewKey}
+                            onChange={e => {
+                              setReviewedResearchUrls(prev => ({
+                                ...prev, [reviewKey]: e.target.value,
+                              }));
+                              setReviewedResearchSources(prev =>
+                                prev.filter(key => key !== reviewKey));
+                            }}/>
+                          {item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
+                            ? "Gemini provided a redirect citation. Open it and copy the final website URL here."
+                            : "Confirm this is the page you independently reviewed."}
+                        </label>
+                        <label className="muted">
+                          <input type="checkbox" checked={reviewed}
+                            disabled={saved || savingResearchCandidate === reviewKey}
+                            onChange={e => setReviewedResearchSources(prev =>
+                              e.target.checked ? [...prev, reviewKey] :
+                                prev.filter(key => key !== reviewKey))}/>
+                          I independently reviewed this public source. The person's
+                          identity and contact information are not yet verified.
+                        </label>
+                        <button type="button" className="secondary"
+                          disabled={!reviewed || saved || savingResearchCandidate !== null ||
+                            !(reviewedResearchUrls[reviewKey] ?? (
+                              item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
+                                ? "" : item.sourceUrl)).startsWith("https://")}
+                          onClick={() => void saveReviewedResearchCandidate(p.id, item)}>
+                          {saved ? "Saved to candidates" :
+                            savingResearchCandidate === reviewKey ? "Saving…" :
+                            "Save to workspace for review"}
+                        </button>
+                      </li>;
+                    })}</ul>
                   </>}
                 </section></>}
                 {partnerTab !== "discovery" && <>

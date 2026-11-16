@@ -69,6 +69,12 @@ export function normalizeResearchEvidence({ text, citations, limit }) {
   return {
     candidates,
     sources: [...cited].map(([url, title]) => ({ url, title })).slice(0, 60),
-    warnings: candidates.length ? [] : ["No evidence-linked candidates matched the requested criteria"],
+    warnings: [
+      ...(candidates.length ? [] :
+        ["No evidence-linked candidates matched the requested criteria"]),
+      ...(parsed.candidates.length > candidates.length ?
+        [String(parsed.candidates.length - candidates.length) +
+          " AI suggestions were not accepted because their exact source URL was not provider-cited, their fields failed validation, or the result limit was reached."] : []),
+    ],
   };
 }
