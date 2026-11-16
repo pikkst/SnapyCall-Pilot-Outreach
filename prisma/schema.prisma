@@ -21,7 +21,7 @@ model Candidate {
   category String
   region String?
   onlineEnglish Boolean @default(false)
-  sourceUrl String
+  sourceUrl String?
   sourceCollectedAt DateTime @default(now())
   legalBasis String?
   contactReviewed Boolean @default(false)
