@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 import { manualIndependentResearch } from "../src/manual-research.js";
+import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch } from "../src/research-review-batch.js";
 
 type PartnerSession = { authenticated: boolean; conflict?: boolean; userId?: string; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
@@ -181,6 +182,7 @@ function App() {
   const [reviewedResearchSources, setReviewedResearchSources] = useState<string[]>([]);
   const [reviewedResearchUrls, setReviewedResearchUrls] = useState<Record<string, string>>({});
   const [savingResearchCandidate, setSavingResearchCandidate] = useState<string | null>(null);
+  const researchSaveInFlight = useRef(false);
   const [savedResearchCandidates, setSavedResearchCandidates] = useState<string[]>([]);
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
@@ -526,62 +528,70 @@ function App() {
     }
   }
 
-  async function saveReviewedResearchCandidate(
-    workspaceId: string, candidate: ResearchPreview["candidates"][number],
+  async function saveReviewedResearchCandidates(
+    workspaceId: string, onlyKey?: string,
   ) {
-    const key = candidate.name + "|" + candidate.sourceUrl;
-    const sourceUrl = reviewedResearchUrls[key] ?? (
-      candidate.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
-        ? "" : candidate.sourceUrl);
-    // Google's grounding redirect is a citation transport, not a durable
-    // expert website URL. Human reviewers must save the actual public page.
-    if (!sourceUrl.startsWith("https://") ||
-        sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/") ||
-        activeWorkspaceId !== workspaceId || savingResearchCandidate ||
-        !researchResult || !reviewedResearchSources.includes(key) ||
-        savedResearchCandidates.includes(key)) return;
+    // One explicit confirmation can save multiple previously reviewed sources.
+    // Reuse the existing transactional, idempotent manualSeed endpoint rather
+    // than introducing a second candidate ownership or persistence contract.
+    if (!researchResult || activeWorkspaceId !== workspaceId ||
+        researchSaveInFlight.current) return;
+    const batch = reviewedSeedBatch(researchResult.candidates,
+      reviewedResearchSources, reviewedResearchUrls, savedResearchCandidates)
+      .filter(seed => !onlyKey || seed.key === onlyKey);
+    if (!batch.length) return;
     const generation = workspaceRequest.current;
-    setSavingResearchCandidate(key);
+    researchSaveInFlight.current = true;
+    setSavingResearchCandidate(onlyKey ?? "__batch__");
     setError("");
+    let completed = 0;
+    let created = 0;
+    let failure = "";
     try {
-      // Reuse the existing audited/idempotent manual review intake. The human
-      // expressly confirms they opened and reviewed the cited source.
-      const receipt = await api<{ id: string; created: boolean }>(
-        "/candidates?workspaceId=" + encodeURIComponent(workspaceId), {
-          method: "POST", body: JSON.stringify({
-            manualSeed: true,
-            name: candidate.name,
-            category: candidate.category,
-            sourceUrl: sourceUrl.trim(),
-          }),
-        });
-      if (workspaceRequest.current !== generation) return;
-      setSavedResearchCandidates(prev => [...prev, key]);
-      setNotice(receipt.created
-        ? "Candidate saved to workspace review queue. Contact and outreach are not approved."
-        : "Candidate already exists in this workspace; no duplicate created.");
-      // Refresh only candidate data: viewWorkspace() would clear this paid
-      // research preview. A failed refresh cannot undo the successful save.
-      try {
-        const updated = await api<Candidate[]>(
-          "/candidates?workspaceId=" + encodeURIComponent(workspaceId));
-        if (workspaceRequest.current === generation) {
-          setWorkspaceCandidates(updated);
-          setWorkspaceDataStatus("ready");
+      // Sequential requests preserve server-side workspace serialization and
+      // allow deterministic partial progress and safe retries.
+      for (const seed of batch) {
+        if (workspaceRequest.current !== generation) break;
+        try {
+          const { key, ...body } = seed;
+          const receipt = await api<{ id: string; created: boolean }>(
+            "/candidates?workspaceId=" + encodeURIComponent(workspaceId), {
+              method: "POST", body: JSON.stringify(body),
+            });
+          if (workspaceRequest.current !== generation) break;
+          completed++;
+          if (receipt.created) created++;
+          setSavedResearchCandidates(prev => prev.includes(key) ? prev : [...prev, key]);
+        } catch (error) {
+          failure = error instanceof Error ? error.message : "Candidate save failed";
+          break;
         }
-      } catch {
-        if (workspaceRequest.current === generation) setWorkspaceDataStatus("error");
       }
-    } catch (error) {
       if (workspaceRequest.current !== generation) return;
-      setError(error instanceof Error ? error.message :
-        "Candidate could not be saved for review.");
+      if (completed) setNotice(
+        completed + " reviewed candidates processed (" + created +
+        " new). All remain REVIEW_PENDING; no contacts approved or emails sent.");
+      if (failure) setError(failure + ". Previously saved candidates remain saved. Retry only unsaved reviewed entries.");
+      if (completed) {
+        // A list refresh failure must not invalidate successful writes.
+        try {
+          const updated = await api<Candidate[]>(
+            "/candidates?workspaceId=" + encodeURIComponent(workspaceId));
+          if (workspaceRequest.current === generation) {
+            setWorkspaceCandidates(updated);
+            setWorkspaceDataStatus("ready");
+          }
+        } catch {
+          if (workspaceRequest.current === generation) setWorkspaceDataStatus("error");
+        }
+      }
     } finally {
-      setSavingResearchCandidate(null);
+      researchSaveInFlight.current = false;
+      if (workspaceRequest.current === generation) setSavingResearchCandidate(null);
     }
   }
 
-  async function loadResearchBudget() {
+    async function loadResearchBudget() {
     setBudgetStatus("loading");
     try {
       const budget = await api<ResearchBudget>("/research-budget");
@@ -1192,8 +1202,23 @@ function App() {
                           }
                         </li>)}</ol>
                     </> : null}
+                    <div className="review-batch-actions">
+                      <button type="button"
+                        disabled={savingResearchCandidate !== null ||
+                          reviewedSeedBatch(researchResult.candidates, reviewedResearchSources,
+                            reviewedResearchUrls, savedResearchCandidates).length === 0}
+                        onClick={() => void saveReviewedResearchCandidates(p.id)}>
+                        {savingResearchCandidate === "__batch__" ? "Saving reviewed candidates…" :
+                          "Save all reviewed (" + reviewedSeedBatch(researchResult.candidates,
+                            reviewedResearchSources, reviewedResearchUrls,
+                            savedResearchCandidates).length + ")"}
+                      </button>
+                      <p className="muted">Only entries whose public source you explicitly
+                        reviewed are saved. All remain pending further contact review;
+                        this does not approve a campaign or send messages.</p>
+                    </div>
                     <ul>{researchResult.candidates.map(item => {
-                      const reviewKey = item.name + "|" + item.sourceUrl;
+                      const reviewKey = reviewedCandidateKey(item);
                       const reviewed = reviewedResearchSources.includes(reviewKey);
                       const saved = savedResearchCandidates.includes(reviewKey);
                       return <li key={reviewKey}>
@@ -1230,10 +1255,8 @@ function App() {
                         </label>
                         <button type="button" className="secondary"
                           disabled={!reviewed || saved || savingResearchCandidate !== null ||
-                            !(reviewedResearchUrls[reviewKey] ?? (
-                              item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
-                                ? "" : item.sourceUrl)).startsWith("https://")}
-                          onClick={() => void saveReviewedResearchCandidate(p.id, item)}>
+                            !resolvedReviewedSource(item, reviewedResearchUrls)}
+                          onClick={() => void saveReviewedResearchCandidates(p.id, reviewKey)}>
                           {saved ? "Saved to candidates" :
                             savingResearchCandidate === reviewKey ? "Saving…" :
                             "Save to workspace for review"}
