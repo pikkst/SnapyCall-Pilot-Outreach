@@ -1,18 +1,32 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runApprovedCampaignBatch } from "../src/campaign-batch.js";
+import {
+  runApprovedCampaignBatch, MAX_APPROVED_CAMPAIGN_BATCH_TASKS,
+  MIN_START_INTERVAL_MS,
+} from "../src/campaign-batch.js";
 
 const ready = () => ({
   operationalState: "READY", needsReconciliation: false, budgetReady: true,
 });
+const fastClock = () => {
+  let time = 1000;
+  const delays = [];
+  return {
+    now: () => time,
+    wait: async ms => { delays.push(ms); time += ms; },
+    delays,
+  };
+};
 
-test("one explicit approval runs at most five sequential paid calls, not a hidden schedule", async () => {
+test("one approval executes all 24 planned tasks sequentially and under rate limit", async () => {
   let active = 0;
   let maxActive = 0;
   let calls = 0;
+  let latest = 0;
   const progress = [];
+  const clock = fastClock();
   const result = await runApprovedCampaignBatch({
-    maxTasks: 5,
+    maxTasks: 24, now: clock.now, wait: clock.wait,
     readState: async () => ready(),
     execute: async () => {
       active++;
@@ -21,62 +35,107 @@ test("one explicit approval runs at most five sequential paid calls, not a hidde
       await Promise.resolve();
       active--;
     },
-    onProgress: completed => progress.push(completed),
+    onProgress: completed => {
+      latest = completed;
+      progress.push(completed);
+    },
   });
-  assert.equal(result.status, "BATCH_COMPLETED");
-  assert.equal(result.completed, 5);
-  assert.equal(calls, 5);
+  assert.deepEqual(result, { status: "RUN_LIMIT_REACHED", completed: 24 });
+  assert.equal(calls, 24);
   assert.equal(maxActive, 1);
-  assert.deepEqual(progress, [1, 2, 3, 4, 5]);
+  assert.equal(latest, 24);
+  assert.equal(clock.delays.length, 23);
+  assert.ok(clock.delays.every(ms => ms === MIN_START_INTERVAL_MS));
+  assert.deepEqual(progress, Array.from({ length: 24 }, (_, i) => i + 1));
+  assert.equal(MAX_APPROVED_CAMPAIGN_BATCH_TASKS, 24);
 });
 
-test("missing permission, budget or paused campaign always stops before next paid call", async () => {
+test("read-only final status stops at target or PARTIAL, not after five tasks", async () => {
+  for (const terminal of ["COMPLETED", "PARTIAL"]) {
+    let calls = 0;
+    const clock = fastClock();
+    const out = await runApprovedCampaignBatch({
+      maxTasks: 24, now: clock.now, wait: clock.wait,
+      readState: async () =>
+        calls >= 8 ? { ...ready(), operationalState: terminal } : ready(),
+      execute: async () => { calls++; },
+    });
+    assert.equal(calls, 8);
+    assert.deepEqual(out, {
+      status: "NOT_READY", completed: 8, operationalState: terminal,
+    });
+  }
+});
+
+test("paused, billing review and depleted quota stop before another provider call", async () => {
   for (const state of [
     { ...ready(), operationalState: "PAUSED_REVIEW" },
     { ...ready(), needsReconciliation: true },
     { ...ready(), budgetReady: false },
-    { ...ready(), operationalState: "COMPLETED" },
+    { ...ready(), operationalState: "WAITING_RETRY" },
   ]) {
     let calls = 0;
+    const clock = fastClock();
     const out = await runApprovedCampaignBatch({
-      maxTasks: 5,
+      maxTasks: 24, now: clock.now, wait: clock.wait,
       readState: async () => calls > 0 ? state : ready(),
       execute: async () => { calls++; },
     });
     assert.equal(calls, 1);
-    assert.deepEqual(out, { status: "NOT_READY", completed: 1 });
+    assert.deepEqual(out, { status: "NOT_READY", completed: 1,
+      operationalState: state.operationalState });
   }
 });
 
-test("API rejection, timeout or unknown charge outcome is NEVER replayed", async () => {
+test("after a pacing interval recheck campaign state before next charge", async () => {
+  const clock = fastClock();
+  let reads = 0;
   let calls = 0;
-  const out = runApprovedCampaignBatch({
-    maxTasks: 5,
+  const out = await runApprovedCampaignBatch({
+    maxTasks: 3, now: clock.now, wait: clock.wait,
+    readState: async () => {
+      reads++;
+      return reads === 3 ? { ...ready(), budgetReady: false } : ready();
+    },
+    execute: async () => { calls++; },
+  });
+  assert.equal(calls, 1);
+  assert.equal(reads, 3);
+  assert.equal(out.status, "NOT_READY");
+  assert.equal(out.completed, 1);
+});
+
+test("unknown provider/network outcome is never retried automatically", async () => {
+  let calls = 0;
+  const clock = fastClock();
+  await assert.rejects(() => runApprovedCampaignBatch({
+    maxTasks: 24, now: clock.now, wait: clock.wait,
     readState: async () => ready(),
     execute: async () => {
       calls++;
-      if (calls === 2) throw new Error("Uncertain billing");
+      if (calls === 2) throw new Error("Unknown charge state");
     },
-  });
-  await assert.rejects(out, /Uncertain billing/);
+  }), /Unknown charge state/);
   assert.equal(calls, 2);
 });
 
-test("stop button waits for ongoing call but never starts the following one", async () => {
+test("stop can prevent further provider calls even while waiting", async () => {
+  const clock = fastClock();
   let calls = 0;
   let stop = false;
   const out = await runApprovedCampaignBatch({
-    maxTasks: 5,
+    maxTasks: 24, now: clock.now,
+    wait: async ms => { stop = true; await clock.wait(ms); },
     readState: async () => ready(),
-    execute: async () => { calls++; stop = true; },
+    execute: async () => { calls++; },
     shouldStop: () => stop,
   });
   assert.deepEqual(out, { status: "STOPPED", completed: 1 });
   assert.equal(calls, 1);
 });
 
-test("rejects invalid batch quantities and client callbacks before any cost", async () => {
-  for (const maxTasks of [0, 6, -1, 2.5, "5", null]) {
+test("invalid limits, types and missing callbacks do not execute provider calls", async () => {
+  for (const maxTasks of [0, 25, -1, 2.5, "24", null]) {
     let calls = 0;
     await assert.rejects(() => runApprovedCampaignBatch({
       maxTasks, readState: async () => ready(),
