@@ -3,6 +3,7 @@
 import { lockActiveWorkspaceMembership } from "./workspace-access.js";
 import { publicCitationUrl } from "./research-evidence.js";
 import { visibleDirectEmailObservation } from "./candidate-direct-email-evidence.js";
+import { normalizeVerificationAddress } from "./email-deliverability.js";
 
 const CUID = /^c[a-z0-9]{10,40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -63,6 +64,17 @@ export async function reviewCandidateDirectEmailEvidence(db, {
         onboardingEligible: false, sendingEnabled: false };
     }
 
+    // A new candidate often has no email. Bind ONLY the independently
+    // inspected, human-confirmed address; never accept a browser-supplied
+    // email as part of this approval action.
+    if (candidate.email == null) {
+      const canonical = normalizeVerificationAddress(evidence.emailNormalized);
+      if (!canonical) return { status: 409, code: "EVIDENCE_MAILBOX_INVALID" };
+      await tx.candidate.update({
+        where: { id: candidateId },
+        data: { email: canonical.email, emailNormalized: canonical.email },
+      });
+    }
     const updated = await tx.candidateDirectEmailObservation.updateMany({
       where: { candidateId, workspaceId, evidenceDigest: expectedDigest,
         status: "REVIEW_REQUIRED" },
@@ -79,11 +91,18 @@ export async function reviewCandidateDirectEmailEvidence(db, {
     return { status: 200, code: "PERSON_EMAIL_REVIEWED",
       personEmailLinked: true, usableAsContact: false,
       onboardingEligible: false, sendingEnabled: false };
+  }).catch(error => {
+    // Scoped database uniqueness is the final race fence when another
+    // candidate already owns this exact workspace email.
+    if (error?.code === "P2002") {
+      return { status: 409, code: "EMAIL_ALREADY_ASSIGNED_IN_WORKSPACE" };
+    }
+    throw error;
   });
 }
 
-// The frontend can request a review only for this exact inspected snapshot.
-// Never surface mailbox addresses through the review record API.
+// Authenticated workspace reviewers can inspect the exact publicly observed
+// address before attesting; raw provider payloads are never exposed.
 export function directEmailReviewSnapshot(candidate, evidence, now = new Date()) {
   const item = visibleDirectEmailObservation(candidate, evidence, now);
   if (!item || !evidence || !(now instanceof Date) ||
@@ -91,6 +110,7 @@ export function directEmailReviewSnapshot(candidate, evidence, now = new Date())
       evidence.inspectedAt > now ||
       now.getTime() - evidence.inspectedAt.getTime() > REVIEW_TTL_MS) return null;
   return Object.freeze({ ...item,
+    observedEmail: evidence.emailNormalized,
     evidenceDigest: evidence.evidenceDigest,
     reviewRequired: !item.personEmailLinked,
   });
