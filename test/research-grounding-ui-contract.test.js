@@ -31,3 +31,12 @@ test("grounding UX cannot authorize contact creation or outreach", () => {
   assert.doesNotMatch(panel, /sendOutreach|createCandidate|acceptReviewedCampaignContact/);
   assert.match(panel, /Source resolution is paused/);
 });
+
+test("grounding approval uses server source snapshot, not target-progress estimate", () => {
+  assert.match(code, /maxSources: campaignGrounding\?\.sourceCount \?\? 0/);
+  assert.match(code, /!campaignGrounding\?\.canApprove/);
+  assert.match(code, /campaignGrounding\.canApprove\s*&&\s*campaignGrounding\.enabled/);
+  assert.match(code, /each of \{campaignGrounding\.sourceCount\} saved/);
+  assert.match(code, /Source resolution unavailable:/);
+  assert.doesNotMatch(code, /maxSources: campaignProgress\?\.uniqueSourcedCandidates/);
+});
