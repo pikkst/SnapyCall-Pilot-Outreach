@@ -89,6 +89,15 @@ export async function approveEmailTriage(db, {
       return { status: 409, code: "EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED",
         availableObservations: count, inspectableObservations: inspectable };
     }
+    // One public page reused for multiple people is not independent
+    // person evidence. Block the whole immutable batch before authorizing
+    // a fetch that would otherwise fail only after consuming its claim.
+    const effectiveSources = sources.map(observationInspectionSource);
+    if (new Set(effectiveSources).size !== count) {
+      return { status: 409, code: "EMAIL_TRIAGE_SHARED_SOURCE_REVIEW_REQUIRED",
+        availableObservations: count,
+        uniqueSources: new Set(effectiveSources).size };
+    }
     // Reject reauthorization if any previously claimed page exists.
     const previouslyChecked = await tx.researchCampaignObservation.count({
       where: { campaignId, emailTriageStatus: { not: "UNCHECKED" } },
