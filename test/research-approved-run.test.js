@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { approveCampaignRun, reserveApprovedRunCall, finishApprovedRunTask,
-  validateCampaignRunApproval, ApprovedRunBlocked }
+  validateCampaignRunApproval, stopApprovedCampaignRun, ApprovedRunBlocked }
   from "../server/research-campaign-run-approval.js";
 import { tickApprovedCampaignRun } from "../server/research-approved-runner.js";
 
@@ -218,4 +218,53 @@ test("completed campaign finalizes approval, no provider work on idle", async ()
   }, { encryptionKey: "test-only-encryption-secret",
     runTask: async () => { throw new Error("Should not start"); } });
   assert.equal(idle.status, "IDLE");
+});
+
+test("owner stop is idempotent, survives restarts, never touches in-flight spend", async () => {
+  const events = [];
+  const existing = { ...fakeRun, status: "RUNNING", startedTasks: 2,
+    committedWorstCaseCents: 400 };
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async parts => parts.join(" ").includes("PartnerMembership")
+      ? [{ revokedAt: null }] : [{ id: campaignId }],
+    researchCampaignRun: {
+      findUnique: async () => existing,
+      update: async ({ data }) => {
+        events.push("status-" + data.status);
+        assert.equal(data.lastCode, "USER_STOPPED");
+        return { ...existing, ...data };
+      },
+    },
+    auditEvent: { create: async ({ data }) => {
+      events.push(data.action);
+      assert.equal(data.metadata.inFlightMayStillBeBilled, true);
+      assert.equal(data.metadata.automaticRetryAllowed, false);
+    } },
+  }) };
+  const result = await stopApprovedCampaignRun(db, {
+    campaignId, workspaceId, ownerId,
+  });
+  assert.equal(result.code, "RUN_STOPPED");
+  assert.equal(result.run.status, "PAUSED");
+  assert.equal(result.run.committedWorstCaseCents, 400);
+  assert.deepEqual(events, [
+    "status-PAUSED", "research.campaign.run.stopped",
+  ]);
+});
+
+test("stopped or foreign run cannot be mutated", async () => {
+  let updated = false;
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async parts => parts.join(" ").includes("PartnerMembership")
+      ? [{ revokedAt: null }] : [{ id: campaignId }],
+    researchCampaignRun: {
+      findUnique: async () => ({ ...fakeRun, status: "PAUSED" }),
+      update: async () => { updated = true; },
+    },
+  }) };
+  const existing = await stopApprovedCampaignRun(db, {
+    campaignId, workspaceId, ownerId,
+  });
+  assert.equal(existing.code, "RUN_ALREADY_TERMINAL");
+  assert.equal(updated, false);
 });
