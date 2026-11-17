@@ -113,8 +113,15 @@ export async function commitCampaignResearchResult(db, claim, preview,
       // Reuse persisted outcomes instead of a second counter. This query
       // executes under the existing campaign row lock, after the fenced
       // task completion, so another paid claim cannot race the STOP.
+      const currentTask = await tx.researchCampaignTask.findUnique({
+        where: { id: claim.taskId }, select: { taskIndex: true },
+      });
+      if (!currentTask || !Number.isInteger(currentTask.taskIndex)) {
+        throw new CampaignLeaseConflict();
+      }
       const recentTasks = await tx.researchCampaignTask.findMany({
-        where: { campaignId: claim.campaignId },
+        where: { campaignId: claim.campaignId,
+          taskIndex: { lte: currentTask.taskIndex } },
         select: { taskIndex: true, status: true, observedCount: true },
         orderBy: { taskIndex: "desc" },
         take: 3,
