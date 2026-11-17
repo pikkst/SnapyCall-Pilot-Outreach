@@ -274,6 +274,7 @@ model ResearchCampaign {
   updatedAt DateTime @updatedAt
   tasks ResearchCampaignTask[]
   observations ResearchCampaignObservation[]
+  manualSources ResearchCampaignSource[]
   @@unique([workspaceId, ownerId, idempotencyKey])
   @@index([workspaceId, createdAt])
   @@index([status, createdAt])
@@ -386,4 +387,17 @@ model CandidateDirectEmailObservation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([workspaceId, inspectedAt])
+}
+
+model ResearchCampaignSource {
+  id String @id @default(cuid())
+  campaignId String
+  campaign ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  // A user-provided URL is a research input, never person/email evidence.
+  normalizedUrl String @db.VarChar(2048)
+  sourceKind String @default("USER_URL")
+  status String @default("PENDING_ENRICHMENT")
+  createdAt DateTime @default(now())
+  @@unique([campaignId, normalizedUrl])
+  @@index([campaignId, status, createdAt])
 }
