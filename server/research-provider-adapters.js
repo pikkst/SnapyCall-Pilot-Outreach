@@ -130,9 +130,28 @@ export async function searchWithGemini({ query, limit, model, apiKey }, post, si
   const extracted = normalizeResearchEvidence({
     text: textParts.map(part => part.text).join("\n"), citations, limit,
   });
+  const usageMetadata = result.usageMetadata;
+  const inputTokens = usage(usageMetadata?.promptTokenCount);
+  const outputTokens = usage(usageMetadata?.candidatesTokenCount);
+  const thinkingTokens = usage(usageMetadata?.thoughtsTokenCount ?? 0);
+  const totalTokens = usage(usageMetadata?.totalTokenCount);
+  const cachedTokens = usage(usageMetadata?.cachedContentTokenCount ?? 0);
+  // Gemini 2.5 bills one grounded PROMPT, regardless of the number of
+  // webSearchQueries. Only a complete text-only token accounting can certify
+  // a lower-than-reserved settlement. Unexpected token classes fail closed.
+  const billingComplete = inputTokens !== null && outputTokens !== null &&
+    thinkingTokens === 0 && cachedTokens === 0 && totalTokens !== null &&
+    totalTokens === inputTokens + outputTokens && inputTokens > 0;
   return envelope(extracted, "gemini", model, {
-    inputTokens: usage(result.usageMetadata?.promptTokenCount),
-    outputTokens: usage(result.usageMetadata?.candidatesTokenCount),
+    inputTokens, outputTokens,
     searchRequests: metadata.webSearchQueries.length,
+    ...(billingComplete ? {
+      groundedPrompts: 1,
+      billingEvidence: {
+        source: "provider", complete: true, provider: "gemini",
+        contractVersion: "gemini-2.5-google-search-grounded-prompt-v1",
+        billingUnit: "grounded_prompts",
+      },
+    } : {}),
   });
 }

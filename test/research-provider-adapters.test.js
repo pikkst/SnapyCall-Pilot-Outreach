@@ -190,3 +190,40 @@ test("third live Gemini shape with STOP and seven candidates but no groundingChu
     error?.phase === "EVIDENCE_VALIDATION");
   assert.equal(calls, 1, "Never retry an already potentially billable search");
 });
+
+test("Gemini certifies one priced grounded prompt only with complete provider token totals", async () => {
+  const args = { provider: "gemini", model: "gemini-2.5-flash",
+    apiKey: "gemini-test-user-key", query };
+  const result = {
+    candidates: [{
+      finishReason: "STOP", content: { parts: [{ text: raw }] },
+      groundingMetadata: {
+        webSearchQueries: ["a", "b", "c", "d", "e"],
+        groundingChunks: [{ web: { uri: source, title: "Expert" } }],
+      },
+    }],
+    usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 155,
+      totalTokenCount: 355, thoughtsTokenCount: 0 },
+  };
+  const verified = await researchCandidates(args, { post: async () => result });
+  assert.equal(verified.usage.searchRequests, 5);
+  assert.equal(verified.usage.groundedPrompts, 1);
+  assert.deepEqual(verified.usage.billingEvidence, {
+    source: "provider", complete: true, provider: "gemini",
+    contractVersion: "gemini-2.5-google-search-grounded-prompt-v1",
+    billingUnit: "grounded_prompts",
+  });
+  for (const usageMetadata of [
+    { ...result.usageMetadata, totalTokenCount: 354 },
+    { ...result.usageMetadata, totalTokenCount: undefined },
+    { ...result.usageMetadata, thoughtsTokenCount: 2 },
+    { ...result.usageMetadata, cachedContentTokenCount: 10 },
+    { ...result.usageMetadata, promptTokenCount: -1 },
+  ]) {
+    const unverified = await researchCandidates(args, {
+      post: async () => ({ ...result, usageMetadata }),
+    });
+    assert.equal(unverified.usage.billingEvidence, undefined);
+    assert.equal(unverified.usage.groundedPrompts, undefined);
+  }
+});

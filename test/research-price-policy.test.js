@@ -161,3 +161,21 @@ test("worst-case quote covers all bounded input, output and search tool units", 
   ]) assert.equal(calculateBoundedWorstCaseCents(reviewedFixture.pricing,
     limits), null);
 });
+
+test("certified Gemini grounded-prompt usage settles per prompt, not per query", () => {
+  const policy = requireResearchPriceEnvelope({ provider: "gemini", model: "gemini-2.5-flash" });
+  const usage = {
+    inputTokens: 1000, outputTokens: 300, groundedPrompts: 1,
+    searchRequests: 19,
+    billingEvidence: {
+      source: "provider", complete: true, provider: "gemini",
+      contractVersion: policy.billingContractVersion, billingUnit: "grounded_prompts",
+    },
+  };
+  assert.equal(calculateVerifiedSpendCents(policy, usage), 4);
+  assert.equal(calculateVerifiedSpendCents(policy, { ...usage, groundedPrompts: 2 }), null);
+  assert.equal(calculateVerifiedSpendCents(policy, { ...usage, groundedPrompts: undefined }), null);
+  assert.equal(calculateVerifiedSpendCents(policy, {
+    ...usage, billingEvidence: { ...usage.billingEvidence, complete: false },
+  }), null);
+});

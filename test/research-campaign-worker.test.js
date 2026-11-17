@@ -11,7 +11,7 @@ const input = { campaignId, workspaceId, ownerId, encryptionKey: "test-only-encr
 
 function fakeDatabase({ queued = true, member = true,
   memberAtCommit = true, providerResult = "ok", failedCAS = false,
-  settlementUnavailable = false } = {}) {
+  settlementUnavailable = false, certifiedUsage = null } = {}) {
   const events = [];
   let reservation;
   let membershipLocks = 0;
@@ -119,7 +119,7 @@ function fakeDatabase({ queued = true, member = true,
       candidates: [{ name: "Ada Expert", category: "AI_AUTOMATION",
         sourceUrl: url, rationale: "Publicly documented AI workflow specialist." }],
       sources: [{ url, title: "Ada Expert" }],
-      usage: {},
+      usage: certifiedUsage ?? {},
     };
   };
   return { db, events, search, getReservation: () => reservation };
@@ -247,4 +247,27 @@ test("paid but uncited Gemini response pauses, audits reason and never repeats",
   assert.equal(events.filter(x => x === "diagnostic-audited").length, 1);
   assert.ok(events.includes("task-paused"));
   assert.ok(!events.includes("evidence-saved"));
+});
+
+test("worker settles certified Gemini grounded-prompt price once, not full reserve", async () => {
+  const certifiedUsage = {
+    inputTokens: 1000, outputTokens: 300, groundedPrompts: 1,
+    searchRequests: 12,
+    billingEvidence: {
+      source: "provider", complete: true, provider: "gemini",
+      contractVersion: "gemini-2.5-google-search-grounded-prompt-v1",
+      billingUnit: "grounded_prompts",
+    },
+  };
+  const { db, events, search, getReservation } = fakeDatabase({ certifiedUsage });
+  const output = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(output.status, "COMPLETED");
+  assert.equal(getReservation().reservedCents, 200);
+  assert.equal(getReservation().chargedCents, 4);
+  assert.equal(getReservation().status, "SETTLED");
+  assert.equal(events.filter(x => x === "provider-called").length, 1);
+  assert.equal(events.filter(x => x === "money-settled").length, 1);
+  assert.ok(events.indexOf("money-settled") < events.indexOf("evidence-saved"));
 });
