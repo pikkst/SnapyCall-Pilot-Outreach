@@ -95,6 +95,69 @@ test("shared URL or provider grounding redirect cannot be bound to a single expe
   assert.equal(fetches, 0);
 });
 
+test("resolved Gemini source hint is independently inspected but never auto-imported", async () => {
+  const hint = { ...entry,
+    citationUrl: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/ABCDEFGH12345",
+    groundingStatus: "SOURCE_HINT", groundingResolvedUrl: profile,
+    groundingProvenance: "GOOGLE_GROUNDING_LOCATION_HEADER",
+  };
+  const db = fakeDb({ observation: hint });
+  let reads = 0;
+  const finding = await inspectCampaignObservationEmail(db, scope, {
+    retrieve: async url => {
+      assert.equal(url, profile);
+      reads++;
+      return page;
+    },
+  });
+  assert.equal(reads, 1);
+  assert.equal(finding.code, "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED");
+  assert.equal(finding.sourceUrl, profile);
+  assert.equal(finding.contactCreated, false);
+  assert.equal(finding.sendingEnabled, false);
+});
+
+test("forged hint provenance, shared destination and stale source are rejected", async () => {
+  const base = { ...entry,
+    citationUrl: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/ABCDEFGH12345",
+    groundingStatus: "SOURCE_HINT", groundingResolvedUrl: profile,
+    groundingProvenance: "GOOGLE_GROUNDING_LOCATION_HEADER",
+  };
+  for (const observation of [
+    { ...base, groundingStatus: "UNCHECKED" },
+    { ...base, groundingProvenance: "MODEL_GENERATED_URL" },
+    { ...base, groundingResolvedUrl: "https://127.0.0.1/" },
+  ]) {
+    let reads = 0;
+    const result = await inspectCampaignObservationEmail(
+      fakeDb({ observation }), scope, {
+        retrieve: async () => { reads++; return page; },
+      });
+    assert.equal(result.code, "DIRECT_PROFILE_SOURCE_REQUIRED");
+    assert.equal(reads, 0);
+  }
+  let reads = 0;
+  const shared = await inspectCampaignObservationEmail(
+    fakeDb({ observation: base, shared: 1 }), scope, {
+      retrieve: async () => { reads++; return page; },
+    });
+  assert.equal(shared.code, "SHARED_SOURCE_REQUIRES_REVIEW");
+  assert.equal(reads, 0);
+
+  const db = fakeDb({ observation: base });
+  let readsAgain = 0;
+  db.researchCampaignObservation.findFirst = async () => {
+    readsAgain++;
+    return readsAgain === 1 ? base
+      : { ...base, groundingResolvedUrl: "https://other.example.org" };
+  };
+  const changed = await inspectCampaignObservationEmail(db, scope, {
+    retrieve: async () => page,
+  });
+  assert.equal(changed.code, "PROFILE_SOURCE_CHANGED");
+  assert.equal(changed.observedEmail, undefined);
+});
+
 test("missing or ambiguous email remains research only", async () => {
   const result = await inspectCampaignObservationEmail(fakeDb(), scope, {
     retrieve: async () => ({ url: profile, text: "Name: Ada Expert. Contact page." }),
