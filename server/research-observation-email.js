@@ -3,6 +3,7 @@
 import { retrieveCitedPublicPage } from "./research-public-pages.js";
 import { classifyExplicitPersonEmailPage } from "./candidate-direct-email-evidence.js";
 import { publicCitationUrl } from "./research-evidence.js";
+import { requireWorkspaceMembership } from "./workspace-access.js";
 
 const ID = /^c[a-z0-9]{10,40}$/;
 const redirectHost = "vertexaisearch.cloud.google.com";
@@ -65,8 +66,12 @@ export async function inspectCampaignObservationEmail(db, {
     return { status: 200, code: evidence.reason,
       contactCreated: false, emailChecked: true, sendingEnabled: false };
   }
-  // Revalidate ownership after the external read to avoid revealing public
-  // evidence to a user whose membership was revoked while the fetch ran.
+  // External fetch can outlast a membership revocation. Check active auth
+  // again before returning any person-associated address.
+  const membership = await requireWorkspaceMembership(db, {
+    workspaceId, userId: ownerId,
+  });
+  if (!membership) return { status: 403, code: "WORKSPACE_ACCESS_REVOKED" };
   const stillOwned = await db.researchCampaign.findFirst({
     where: { id: campaignId, workspaceId, ownerId },
     select: { id: true },
