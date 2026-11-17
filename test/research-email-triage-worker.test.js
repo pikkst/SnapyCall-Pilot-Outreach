@@ -15,7 +15,8 @@ const digest = "a".repeat(64);
 
 function fixture({ status = "RUNNING", discovery = "COMPLETED",
   observed = 5, checking = 0, inspected = 0, expired = false,
-  revoked = false, stale = false, prior = false } = {}) {
+  revoked = false, stale = false, prior = false,
+  sourceUrl = "https://experts.example.org/ada" } = {}) {
   const events = [];
   const tx = {
     $queryRaw: async (parts) => {
@@ -39,6 +40,8 @@ function fixture({ status = "RUNNING", discovery = "COMPLETED",
         return data; },
     },
     researchCampaignObservation: {
+      findMany: async () => Array.from({ length: observed },
+        () => ({ citationUrl: sourceUrl })),
       count: async ({ where }) => {
         if (where.emailTriageStatus === "CHECKING" &&
             where.emailTriageLeaseUntil) return stale ? 1 : 0;
@@ -96,6 +99,22 @@ test("no auth, nonterminal campaign and repeated approval are rejected", async (
   await assert.rejects(() => approveEmailTriage(db, {
     ...scope, maxPages: 251, confirmPublicInspection: true,
   }), TypeError);
+});
+
+test("all-opaque Gemini citations cannot authorize a misleading email triage batch", async () => {
+  const { db, events } = fixture({
+    status: "IDLE", observed: 233,
+    sourceUrl: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/opaque",
+  });
+  const result = await approveEmailTriage(db, {
+    ...scope, maxPages: 233, confirmPublicInspection: true,
+  }, { now: () => now });
+  assert.equal(result.status, 409);
+  assert.equal(result.code, "EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED");
+  assert.equal(result.inspectableObservations, 0);
+  assert.equal(result.availableObservations, 233);
+  assert.equal(events.includes("campaign-RUNNING"), false);
+  assert.equal(events.includes("research.campaign.email-triage.approved"), false);
 });
 
 test("claim persists a lease and never makes a billable call", async () => {
