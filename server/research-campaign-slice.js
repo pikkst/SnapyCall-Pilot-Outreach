@@ -1,5 +1,7 @@
 // Explicit, bounded multi-task slice built from the existing one-task worker.
 // No background schedule and no optimistic retry after an uncertain paid call.
+import { ResearchPacingRequired } from "./research-quota.js";
+
 const MAX_TASKS_PER_SLICE = 3;
 
 export function validateResearchSliceInput(value) {
@@ -29,7 +31,18 @@ export async function runBoundedCampaignSlice(input, { runTask } = {}) {
     let result;
     try {
       result = await runTask();
-    } catch {
+    } catch (error) {
+      if (error instanceof ResearchPacingRequired) {
+        return Object.freeze({
+          status: "WAITING",
+          attemptedTasks: results.length,
+          completedTasks: results.length,
+          taskResults: Object.freeze(results),
+          code: error.code,
+          retryAfterSeconds: error.retryAfterSeconds,
+          attempted: false, sendingEnabled: false,
+        });
+      }
       // A later call can fail preflight after earlier tasks committed. Never
       // lose that partial progress, retry the call or leak provider errors.
       return Object.freeze({
