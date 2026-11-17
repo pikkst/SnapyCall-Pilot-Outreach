@@ -2280,8 +2280,15 @@ function App() {
                           <p>Approval expires:
                             {" "}{new Date(campaignRunApproval.run.expiresAt).toLocaleString()}.
                             Later calls are forbidden after this time.</p>
+                          {campaignRunApproval.run.lastCode === "WAITING_RETRY" &&
+                            <p role="status" className="muted">
+                              Waiting for the next eligible task. The existing
+                              approval remains active; no paid request is repeated
+                              during this wait. Progress updates automatically.
+                            </p>}
                           {campaignRunApproval.run.lastCode &&
-                            <p role="status">Attention: {campaignRunApproval.run.lastCode.replaceAll("_", " ")}</p>}
+                            campaignRunApproval.run.lastCode !== "WAITING_RETRY" &&
+                            <p role="alert">Attention: {campaignRunApproval.run.lastCode.replaceAll("_", " ")}</p>}
                           {["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
                             <button type="button" className="secondary"
                               disabled={campaignRunApprovalBusy}
