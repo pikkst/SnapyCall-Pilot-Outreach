@@ -43,6 +43,11 @@ function fakeDatabase({ queued = true, member = true,
       // Claim sees no uncertain tasks; after commit one queued task remains.
       count: async ({ where }) => where.status === "QUEUED" ? 1 : 0,
       update: async () => { events.push("task-claimed"); },
+      findUnique: async () => ({ taskIndex: 0 }),
+      findMany: async () => [
+        { taskIndex: 0, status: "COMPLETED", observedCount:
+          providerResult === "ok" ? 1 : 0 },
+      ],
       updateMany: async ({ data }) => {
         events.push("task-" + data.status.toLowerCase());
         return { count: (failedCAS && data.status === "PAUSED") ||
