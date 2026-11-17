@@ -15,6 +15,18 @@ export class ResearchEvidenceUnavailableError extends Error {
   }
 }
 
+// A trusted STOP-terminal Gemini response can be billable but contain
+// malformed candidate JSON. No model-generated URLs or identities are
+// accepted from it; only a fenced zero-observation completion is permitted.
+export class ResearchStructuredOutputUnavailableError extends Error {
+  constructor() {
+    super("Gemini completed without usable structured candidates");
+    this.name = "ResearchStructuredOutputUnavailableError";
+    this.code = "NO_USABLE_STRUCTURED_OUTPUT";
+    this.phase = "EVIDENCE_VALIDATION";
+  }
+}
+
 const models = {
   openai: /^gpt-[a-zA-Z0-9][a-zA-Z0-9._-]{1,75}$/,
   gemini: /^gemini-(?:2\.5|3\.)[a-zA-Z0-9._-]{1,70}$/,
@@ -127,9 +139,21 @@ export async function searchWithGemini({ query, limit, model, apiKey }, post, si
   const citations = metadata.groundingChunks
     .filter(item => typeof item?.web?.uri === "string")
     .map(item => ({ url: item.web.uri, title: item.web.title }));
-  const extracted = normalizeResearchEvidence({
-    text: textParts.map(part => part.text).join("\n"), citations, limit,
-  });
+  let extracted;
+  try {
+    extracted = normalizeResearchEvidence({
+      text: textParts.map(part => part.text).join("\n"), citations, limit,
+    });
+  } catch (error) {
+    // Only exact, known structured-output failures from a STOP-terminal
+    // response become no-evidence completions. Do not mask programming,
+    // validation-envelope or provider transport errors.
+    if (error?.message === "AI research did not return structured results" ||
+        error?.message === "AI research returned an invalid candidate list") {
+      throw new ResearchStructuredOutputUnavailableError();
+    }
+    throw error;
+  }
   const usageMetadata = result.usageMetadata;
   const inputTokens = usage(usageMetadata?.promptTokenCount);
   const outputTokens = usage(usageMetadata?.candidatesTokenCount);
