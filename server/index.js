@@ -1990,7 +1990,7 @@ app.get("/api/ai-settings", aiOwnerAuthenticated, safe(async (req, res) => {
   res.json(setting ? {
     provider: setting.provider, model: setting.model,
     keyConfigured: true, fingerprint: setting.keyFingerprint,
-  } : { provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
+  } : { provider: "gemini", model: "gemini-3-flash-preview", keyConfigured: false });
 }));
 app.put("/api/ai-settings", ...aiWrite, safe(async (req, res) => {
   const input = aiConfigSchema.parse(req.body);
