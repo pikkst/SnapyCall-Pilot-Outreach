@@ -4,6 +4,7 @@ import { approveGroundingResolution, claimGroundingObservation,
   stopGroundingResolution } from "./research-grounding-run.js";
 import { resolveGoogleGroundingLocation } from "./research-grounding-location.js";
 import { persistGroundingSourceHint } from "./research-grounding-evidence.js";
+import { isGoogleGroundingCitation } from "./research-grounding-location.js";
 
 export { approveGroundingResolution, stopGroundingResolution };
 
@@ -73,10 +74,10 @@ export function startGroundingResolutionWorker(db, {
 
 export async function groundingResolutionSummary(db, {
   campaignId, workspaceId, ownerId,
-}) {
+}, { enabled = false } = {}) {
   const campaign = await db.researchCampaign.findFirst({
     where: { id: campaignId, workspaceId, ownerId },
-    select: { id: true, groundingRunStatus: true,
+    select: { id: true, status: true, groundingRunStatus: true,
       groundingRunMaxSources: true, groundingRunExpiresAt: true },
   });
   if (!campaign) return null;
@@ -90,8 +91,35 @@ export async function groundingResolutionSummary(db, {
   const inFlight = await db.researchCampaignObservation.count({
     where: { campaignId, groundingLeaseToken: { not: null } },
   });
+  const sourceCount = grouped.reduce((sum, row) => sum + row._count.id, 0);
+  let approvalBlockReason = null;
+  if (!enabled) approvalBlockReason = "SERVER_DISABLED";
+  else if (campaign.groundingRunStatus !== "IDLE")
+    approvalBlockReason = "APPROVAL_ALREADY_USED";
+  else if (!["COMPLETED", "PARTIAL"].includes(campaign.status))
+    approvalBlockReason = "DISCOVERY_NOT_TERMINAL";
+  else if (sourceCount < 1 || sourceCount > 250)
+    approvalBlockReason = "SOURCE_COUNT_OUT_OF_RANGE";
+  else if (sourceCount !== (counts.UNCHECKED ?? 0) || inFlight)
+    approvalBlockReason = "SOURCE_ALREADY_ATTEMPTED";
+  else {
+    // Mirror approval's exact input-validation boundary; the server still
+    // locks and rechecks all observations when the user confirms.
+    const citations = await db.researchCampaignObservation.findMany({
+      where: { campaignId },
+      select: { citationUrl: true },
+      take: 251,
+      orderBy: { id: "asc" },
+    });
+    if (citations.length !== sourceCount ||
+        citations.some(item => !isGoogleGroundingCitation(item.citationUrl))) {
+      approvalBlockReason = "CITATION_REVIEW_REQUIRED";
+    }
+  }
   return Object.freeze({
     status: campaign.groundingRunStatus,
+    sourceCount, canApprove: approvalBlockReason === null,
+    approvalBlockReason,
     maxSources: campaign.groundingRunMaxSources,
     expiresAt: campaign.groundingRunExpiresAt,
     remaining: counts.UNCHECKED ?? 0,
