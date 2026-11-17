@@ -52,7 +52,7 @@ function fixture({ revoked = false, failedWrite = false,
         groundingLeaseUntil: data.groundingLeaseUntil,
       } : null,
       updateMany: async ({ data: update }) => {
-        if (failedWrite) return { count: 0 };
+        if (failedWrite && "groundingStatus" in update) return { count: 0 };
         Object.assign(data, update);
         events.push("observation-updated");
         return { count: 1 };
