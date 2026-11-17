@@ -95,7 +95,7 @@ export async function claimGroundingObservation(db, scope,
       workspaceId: scope.workspaceId, userId: scope.ownerId,
     })) return { status: "ACCESS_REVOKED" };
     const campaigns = await tx.$queryRaw`
-      SELECT "id","groundingRunStatus","groundingRunMaxSources",
+      SELECT "id","status","groundingRunStatus","groundingRunMaxSources",
         "groundingRunExpiresAt"
       FROM "ResearchCampaign"
       WHERE "id" = ${scope.campaignId} AND "workspaceId" = ${scope.workspaceId}
@@ -104,6 +104,12 @@ export async function claimGroundingObservation(db, scope,
       return { status: "NOT_RUNNING" };
     }
     const campaign = campaigns[0];
+    if (campaign.status === "CANCELLED") {
+      await tx.researchCampaign.update({
+        where: { id: scope.campaignId }, data: { groundingRunStatus: "PAUSED" },
+      });
+      return { status: "DISCOVERY_CANCELLED" };
+    }
     if (!(campaign.groundingRunExpiresAt instanceof Date) ||
         campaign.groundingRunExpiresAt <= clock) {
       await tx.researchCampaign.update({
