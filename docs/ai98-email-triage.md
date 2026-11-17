@@ -52,7 +52,10 @@ for resolving provider-cited Google grounding redirect headers. The new
 `POST /api/research-campaigns/:id/grounding/start` endpoint requires
 `{maxSources,confirmPublicRequests:true}`, existing workspace session,
 origin protection and limiter. A matching owner stop and read-only summary
-GET endpoint are available. No UI control exists yet and the feature must
+GET endpoint are available. The workspace UI shows a read-only
+source-resolution progress panel and a separate 24-hour consent checkbox
+only when the server gate is enabled and discovery is terminal. Rendering,
+polling and navigation never initiate external requests. The feature must
 remain OFF until explicit rollout and authenticated staging smoke.
 
 Approval is immutable and applies only to an exact 1–250 observation
