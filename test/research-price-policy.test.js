@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
-  calculateBoundedWorstCaseCents } from "../server/research-price-policy.js";
+  researchPriceReadiness, calculateBoundedWorstCaseCents } from "../server/research-price-policy.js";
 
 test("only Claude Sonnet 4.6 has a dated server-authorized bounded pricing envelope", () => {
   const policy = requireResearchPriceEnvelope({
@@ -179,4 +179,44 @@ test("certified Gemini grounded-prompt usage settles per prompt, not per query",
   assert.equal(calculateVerifiedSpendCents(policy, {
     ...usage, billingEvidence: { ...usage.billingEvidence, complete: false },
   }), null);
+});
+
+test("Gemini 3 pricing remains blocked before API dispatch regardless of available money", () => {
+  const config = { provider: "gemini", model: "gemini-3-flash-preview" };
+  for (const remainingCents of [100, 100_000, Number.MAX_SAFE_INTEGER]) {
+    const state = researchPriceReadiness({
+      setting: config, enabled: true, remainingCents,
+    });
+    assert.deepEqual(state, {
+      provider: "gemini", model: "gemini-3-flash-preview",
+      pricingStatus: "MODEL_PRICING_UNAVAILABLE",
+      worstCaseCents: null, enforcedForPaidSearch: false,
+    });
+  }
+  const historical = researchPriceReadiness({
+    setting: { provider: "gemini", model: "gemini-2.5-flash" },
+    enabled: true, remainingCents: 500,
+  });
+  assert.equal(historical.enforcedForPaidSearch, true);
+  assert.equal(historical.worstCaseCents, 200);
+});
+
+test("server pricing readiness never authorizes absent keys, disabled research or insufficient budget", () => {
+  assert.equal(researchPriceReadiness({
+    setting: null, enabled: true, remainingCents: 1000,
+  }).pricingStatus, "AI_SETTINGS_REQUIRED");
+  assert.equal(researchPriceReadiness({
+    setting: { provider: "gemini", model: "gemini-2.5-flash" },
+    enabled: false, remainingCents: 1000,
+  }).pricingStatus, "RESEARCH_DISABLED");
+  assert.equal(researchPriceReadiness({
+    setting: { provider: "gemini", model: "gemini-2.5-flash" },
+    enabled: true, remainingCents: 199,
+  }).pricingStatus, "INSUFFICIENT_APP_BUDGET");
+  for (const remainingCents of [null, -1, NaN, "500"]) {
+    assert.equal(researchPriceReadiness({
+      setting: { provider: "gemini", model: "gemini-2.5-flash" },
+      enabled: true, remainingCents,
+    }).enforcedForPaidSearch, false);
+  }
 });
