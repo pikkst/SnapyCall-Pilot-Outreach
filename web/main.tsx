@@ -1807,13 +1807,13 @@ function App() {
                               disabled={manualSourceBusy ||
                                 !manualSourceDraft.trim()}
                               onClick={() => void queueManualCampaignSources(
-                                p.id, campaignProgress.id)}>
+                                p.id, campaignProgressId)}>
                               {manualSourceBusy ? "Saving sources…" : "Add to research queue"}
                             </button>
                             <button type="button" className="secondary"
                               disabled={manualSourceBusy || manualSourceStatus === "loading"}
                               onClick={() => void loadManualCampaignSources(
-                                p.id, campaignProgress.id)}>
+                                p.id, campaignProgressId)}>
                               {manualSourceStatus === "loading"
                                 ? "Loading sources…" : "View queued sources"}
                             </button>
