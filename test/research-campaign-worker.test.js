@@ -262,6 +262,7 @@ test("terminal uncited Gemini response completes as zero evidence, charges conse
   assert.ok(!events.includes("task-paused"));
   assert.ok(!events.includes("evidence-saved"));
   assert.ok(events.indexOf("money-settled") < events.indexOf("task-completed"));
+  assert.equal(events.filter(x => x === "money-settled").length, 1);
 });
 
 test("uncited terminal response with failed evidence transaction remains PAUSED, not a false success", async () => {
