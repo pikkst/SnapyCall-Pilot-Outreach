@@ -26,6 +26,14 @@ type CampaignObservation = {
   emailTriageStatus?: string; emailTriageCode?: string | null;
   emailTriageEmail?: string | null; emailTriageAt?: string | null;
 };
+type CampaignGroundingState = {
+  status: "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED";
+  maxSources: number; expiresAt: string | null;
+  remaining: number; checking: number; sourceHints: number;
+  unresolved: number; rejected: number;
+  verifiedEmails: 0; contactsCreated: 0;
+  providerCalls: 0; sendingEnabled: false; enabled: boolean;
+};
 type CampaignEmailTriageState = {
   status: "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED";
   maxPages: number; expiresAt: string | null;
@@ -266,6 +274,11 @@ function App() {
   const campaignCreateIdempotency = useRef<string | null>(null);
   const [campaignProgressId, setCampaignProgressId] = useState<string | null>(null);
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress | null>(null);
+  const [campaignGrounding, setCampaignGrounding] =
+    useState<CampaignGroundingState | null>(null);
+  const [campaignGroundingBusy, setCampaignGroundingBusy] = useState(false);
+  const [campaignGroundingConfirmed, setCampaignGroundingConfirmed] = useState(false);
+  const [campaignGroundingNotice, setCampaignGroundingNotice] = useState("");
   const [campaignEmailTriage, setCampaignEmailTriage] =
     useState<CampaignEmailTriageState | null>(null);
   const [campaignTriageBusy, setCampaignTriageBusy] = useState(false);
@@ -483,6 +496,7 @@ function App() {
           setCampaignProgressLastSeen(Date.now());
           setCampaignProgressLiveWarning(false);
           void loadCampaignRunApproval(activeWorkspaceId, campaignProgressId);
+          void loadCampaignGrounding(activeWorkspaceId, campaignProgressId);
           void loadCampaignEmailTriage(activeWorkspaceId, campaignProgressId);
         }
       } catch {
@@ -878,6 +892,62 @@ function App() {
     }
   }
 
+  async function loadCampaignGrounding(workspaceId: string, campaignId: string) {
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    try {
+      const state = await api<CampaignGroundingState>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/grounding?workspaceId=" + encodeURIComponent(workspaceId));
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setCampaignGrounding(state);
+      }
+    } catch {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) setCampaignGrounding(null);
+    }
+  }
+
+  async function changeCampaignGrounding(workspaceId: string,
+    campaignId: string, action: "start" | "stop") {
+    if (campaignGroundingBusy || workspaceId !== activeWorkspaceId ||
+        campaignId !== campaignProgressId) return;
+    if (action === "start" && (!campaignGroundingConfirmed ||
+        !campaignGrounding?.enabled ||
+        !["COMPLETED", "PARTIAL"].includes(campaignProgress?.status ?? ""))) return;
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    setCampaignGroundingBusy(true);
+    setCampaignGroundingNotice("");
+    try {
+      await api("/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/grounding/" + action + "?workspaceId=" +
+        encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify(action === "start" ? {
+            maxSources: campaignProgress?.uniqueSourcedCandidates ?? 0,
+            confirmPublicRequests: true,
+          } : { confirmStop: true }),
+        });
+      if (generation !== workspaceRequest.current ||
+          request !== campaignProgressRequest.current) return;
+      setCampaignGroundingConfirmed(false);
+      setCampaignGroundingNotice(action === "start"
+        ? "Source resolution approved. Only one bounded Google redirect HEAD per saved citation is permitted. No website, email or contact is verified."
+        : "Future source checks stopped. An in-flight request will not be replayed.");
+      await loadCampaignGrounding(workspaceId, campaignId);
+    } catch (error) {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setCampaignGroundingNotice(error instanceof Error
+          ? error.message : "Could not change source-resolution state.");
+      }
+    } finally {
+      if (generation === workspaceRequest.current) setCampaignGroundingBusy(false);
+    }
+  }
+
   async function loadCampaignEmailTriage(workspaceId: string, campaignId: string) {
     const generation = workspaceRequest.current;
     const request = campaignProgressRequest.current;
@@ -963,6 +1033,10 @@ function App() {
     setCampaignRunApprovalBusy(false);
     setCampaignNoReplayConfirmed(false);
     setCampaignMaxTasks(10);
+    setCampaignGrounding(null);
+    setCampaignGroundingBusy(false);
+    setCampaignGroundingConfirmed(false);
+    setCampaignGroundingNotice("");
     setCampaignEmailTriage(null);
     setCampaignTriageBusy(false);
     setCampaignTriageConfirmed(false);
@@ -982,6 +1056,7 @@ function App() {
       setCampaignProgressLiveWarning(false);
       setCampaignProgressStatus("ready");
       void loadCampaignRunApproval(workspaceId, campaignId);
+      void loadCampaignGrounding(workspaceId, campaignId);
       void loadCampaignEmailTriage(workspaceId, campaignId);
     } catch {
       if (workspaceRequest.current !== workspaceGeneration ||
@@ -2032,6 +2107,78 @@ function App() {
                           value={Math.min(campaignProgress.uniqueSourcedCandidates,
                             campaignProgress.targetCount)}/>
                         <p>Operational status: <strong>{campaignProgress.operationalState}</strong></p>
+                        {campaignGrounding && <section
+                          className="campaign-email-triage"
+                          data-state={campaignGrounding.status}
+                          aria-label="Google source resolution agent">
+                          <div className="campaign-stage-header">
+                            <strong>Source resolution agent</strong>
+                            <span className="campaign-stage-state">
+                              {campaignGrounding.status.replaceAll("_", " ")}
+                            </span>
+                          </div>
+                          <p className="muted">Checks only the Google grounding
+                            redirect header, not the destination website.
+                            A resolved link is an unverified source hint, not
+                            a confirmed profile or email contact.</p>
+                          <p role="status">
+                            <strong>{campaignGrounding.sourceHints}</strong> source hints ·
+                            {" "}{campaignGrounding.unresolved} unresolved ·
+                            {" "}{campaignGrounding.rejected} rejected ·
+                            {" "}{campaignGrounding.checking} in flight ·
+                            {" "}{campaignGrounding.remaining} remaining
+                          </p>
+                          {campaignGrounding.status !== "IDLE" &&
+                            <progress
+                              aria-label="Grounding source resolution progress"
+                              max={Math.max(1, campaignGrounding.maxSources)}
+                              value={Math.min(campaignGrounding.maxSources,
+                                campaignGrounding.sourceHints +
+                                campaignGrounding.unresolved +
+                                campaignGrounding.rejected)}/>}
+                          {campaignGrounding.status === "RUNNING" &&
+                            <button type="button" className="secondary"
+                              disabled={campaignGroundingBusy}
+                              onClick={() => void changeCampaignGrounding(
+                                p.id, campaignProgress.id, "stop")}>
+                              Stop future source checks
+                            </button>}
+                          {campaignGrounding.status === "IDLE" &&
+                            campaignGrounding.enabled &&
+                            ["COMPLETED", "PARTIAL"].includes(campaignProgress.status) &&
+                            campaignProgress.uniqueSourcedCandidates > 0 &&
+                            campaignProgress.uniqueSourcedCandidates <= 250 && <>
+                              <label className="campaign-contact-confirm">
+                                <input type="checkbox"
+                                  checked={campaignGroundingConfirmed}
+                                  onChange={event => setCampaignGroundingConfirmed(
+                                    event.target.checked)}/>
+                                I authorize one Google redirect-header check for
+                                each of {campaignProgress.uniqueSourcedCandidates} saved
+                                citations. This approval lasts 24 hours. A
+                                potentially dispatched request is not retried
+                                automatically after an uncertain outcome.
+                              </label>
+                              <button type="button"
+                                disabled={!campaignGroundingConfirmed ||
+                                  campaignGroundingBusy}
+                                onClick={() => void changeCampaignGrounding(
+                                  p.id, campaignProgress.id, "start")}>
+                                {campaignGroundingBusy
+                                  ? "Approving…" : "Resolve saved source links"}
+                              </button>
+                            </>}
+                          {campaignGrounding.status === "IDLE" &&
+                            !campaignGrounding.enabled &&
+                            <p className="muted">Source-resolution agent is
+                              disabled on this server.</p>}
+                          {campaignGrounding.status === "PAUSED" &&
+                            <p role="status">Source resolution is paused.
+                              Previously dispatched requests will not be
+                              replayed automatically.</p>}
+                          {campaignGroundingNotice &&
+                            <p role="status">{campaignGroundingNotice}</p>}
+                        </section>}
                         {campaignEmailTriage && <section
                           className="campaign-email-triage"
                           data-state={campaignEmailTriage.status}
@@ -2468,6 +2615,10 @@ function App() {
                           setCampaignRunApprovalNotice("");
                           setCampaignRunApprovalBusy(false);
                           setCampaignNoReplayConfirmed(false);
+                          setCampaignGrounding(null);
+                          setCampaignGroundingConfirmed(false);
+                          setCampaignGroundingNotice("");
+                          setCampaignGroundingBusy(false);
                           setCampaignEmailTriage(null);
                           setCampaignTriageConfirmed(false);
                           setCampaignTriageNotice("");
