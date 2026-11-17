@@ -50,6 +50,7 @@ function fakeDatabase({ queued = true, member = true,
       findFirst: async () => ({ targetCount: 100 }),
       updateMany: async () => ({ count: 1 }),
     },
+    researchCampaignRun: { findUnique: async () => null },
     researchOwnerBudget: {},
     researchSpendReservation: {
       findUnique: async () => reservation ?? null,
