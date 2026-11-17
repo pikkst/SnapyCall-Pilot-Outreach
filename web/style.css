@@ -129,3 +129,8 @@ td button+button{margin-left:6px}
 .campaign-email-check button{white-space:normal}
 .campaign-email-check p{margin:8px 0 0;overflow-wrap:anywhere;line-height:1.5}
 @media(max-width:600px){.campaign-email-check button{width:100%}}
+
+/* User attestation is separate from publicly observed email and from send approval. */
+.campaign-contact-confirm{display:flex;gap:9px;align-items:flex-start;margin:12px 0;line-height:1.5;font-size:13px}
+.campaign-contact-confirm input{flex:none;margin-top:3px}
+.campaign-email-check > button{margin:4px 0 8px}
