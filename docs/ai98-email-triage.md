@@ -60,6 +60,26 @@ the token. A user stop prevents a late in-flight result from being committed.
 No endpoints, server timer, live HTTP dispatch, automatic 233-row backfill,
 outreach, contacts or email inspection are enabled by this change.
 
+The source resolver is now integrated into a **separately gated**
+`AI_GROUNDING_RESOLUTION_ENABLED=true` backend stage. The feature is OFF
+by default and must stay disabled until authenticated staging tests and
+explicit external-fetch approval. The existing server exposes owner-scoped
+`POST /api/research-campaigns/:id/grounding/start` with
+`{maxSources,confirmPublicRequests:true}`, owner stop and read-only
+`GET /api/research-campaigns/:id/grounding`. The start API uses existing
+origin protection, workspace session, limiter and exact source-snapshot
+approval. The timer invokes the existing one-hop Google Location resolver
+only *after* a durable, one-shot claim; it never reads the resulting target
+page, contacts an AI model, checks a mailbox or sends outreach.
+
+The resolver's outcome remains an unverified `SOURCE_HINT`. A persisted
+failure is `UNRESOLVED` or `REJECTED`, never a verified person/email.
+Crash after dispatch leaves an in-flight claim; the next tick pauses on
+expiry for manual reconciliation rather than repeating the request.
+The Render Free instance can sleep, so this is not an always-on execution
+SLA. A separately provisioned always-on scheduler and authenticated
+owner-approved E2E smoke are required before production activation.
+
 The next integration must connect **only** the trusted backend worker to
 the existing resolver and save function, enforce a bounded HTTP dispatch
 and explicit owner confirmation in UI, and expose read-only progress.
