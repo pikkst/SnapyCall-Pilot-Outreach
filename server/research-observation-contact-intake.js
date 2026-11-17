@@ -1,7 +1,8 @@
 // Explicit, review-gated promotion: source-backed NAME + CATEGORY + EMAIL only.
 // The provider-agnostic inspection runs before DB writes and never sends mail.
 import { lockActiveWorkspaceMembership } from "./workspace-access.js";
-import { inspectCampaignObservationEmail } from "./research-observation-email.js";
+import { inspectCampaignObservationEmail, observationInspectionSource }
+  from "./research-observation-email.js";
 import { normalizeVerificationAddress } from "./email-deliverability.js";
 import { canonicalEvidenceUrl } from "../src/evidence.js";
 
@@ -57,7 +58,8 @@ export async function acceptReviewedCampaignContact(db, {
       return { status: 404, code: "CAMPAIGN_NOT_FOUND", contactCreated: false };
     }
     const matches = await tx.$queryRaw`
-      SELECT "id", "name", "category", "citationUrl", "candidateId"
+      SELECT "id", "name", "category", "citationUrl", "candidateId",
+        "groundingStatus", "groundingResolvedUrl", "groundingProvenance"
       FROM "ResearchCampaignObservation"
       WHERE "id" = ${observationId} AND "campaignId" = ${campaignId}
       FOR UPDATE`;
@@ -65,8 +67,19 @@ export async function acceptReviewedCampaignContact(db, {
     if (!observation || matches.length !== 1 ||
         observation.name !== finding.name ||
         observation.category !== finding.category ||
-        observation.citationUrl !== finding.sourceUrl) {
+        observationInspectionSource(observation) !== finding.sourceUrl) {
       return { status: 409, code: "OBSERVATION_CHANGED", contactCreated: false };
+    }
+    // Source collisions are checked while the campaign row is locked.
+    // A provider redirect can resolve to a directory shared by other experts.
+    const sharedSources = await tx.researchCampaignObservation.count({
+      where: { campaignId, id: { not: observationId },
+        OR: [{ citationUrl: finding.sourceUrl },
+          { groundingResolvedUrl: finding.sourceUrl }] },
+    });
+    if (sharedSources) {
+      return { status: 409, code: "SHARED_SOURCE_REQUIRES_REVIEW",
+        contactCreated: false };
     }
     // Serialize all contact-intake operations in this workspace so the
     // email unique index and source binding remain deterministic.
@@ -108,7 +121,7 @@ export async function acceptReviewedCampaignContact(db, {
       category: finding.category, email: normalized.email,
       emailNormalized: normalized.email,
       expertProfileUrl: finding.sourceUrl,
-      sourceUrl: finding.sourceUrl, researchCitationUrl: finding.sourceUrl,
+      sourceUrl: finding.sourceUrl, researchCitationUrl: observation.citationUrl,
       status: "REVIEW_PENDING",
       profileReviewed: false, contactReviewed: false,
       onlineEnglish: false, suppressed: false,

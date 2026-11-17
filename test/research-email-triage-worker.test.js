@@ -16,7 +16,8 @@ const digest = "a".repeat(64);
 function fixture({ status = "RUNNING", discovery = "COMPLETED",
   observed = 5, checking = 0, inspected = 0, expired = false,
   revoked = false, stale = false, prior = false,
-  sourceUrl = "https://experts.example.org/ada", sourceUrls = null } = {}) {
+  sourceUrl = "https://experts.example.org/ada", sourceUrls = null,
+  sourceEntries = null } = {}) {
   const events = [];
   const tx = {
     $queryRaw: async (parts) => {
@@ -40,8 +41,9 @@ function fixture({ status = "RUNNING", discovery = "COMPLETED",
         return data; },
     },
     researchCampaignObservation: {
-      findMany: async () => (sourceUrls ?? Array.from({ length: observed },
-        () => sourceUrl)).map(citationUrl => ({ citationUrl })),
+      findMany: async () => sourceEntries ?? (sourceUrls ??
+        Array.from({ length: observed }, (_, i) => sourceUrl + "/" + i))
+        .map(citationUrl => ({ citationUrl })),
       count: async ({ where }) => {
         if (where.emailTriageStatus === "CHECKING" &&
             where.emailTriageLeaseUntil) return stale ? 1 : 0;
@@ -132,6 +134,61 @@ test("mixed direct and opaque citations cannot consume one-shot triage approval"
   assert.equal(result.inspectableObservations, 2);
   assert.equal(events.includes("campaign-RUNNING"), false);
   assert.equal(events.includes("research.campaign.email-triage.approved"), false);
+});
+
+test("all provenance-bound resolved profiles may authorize separate triage", async () => {
+  const { db, events } = fixture({ status: "IDLE", observed: 2,
+    sourceEntries: [0, 1].map(i => ({
+      citationUrl: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/ABCDEFGH" + i,
+      groundingStatus: "SOURCE_HINT",
+      groundingProvenance: "GOOGLE_GROUNDING_LOCATION_HEADER",
+      groundingResolvedUrl: "https://experts.example.org/" + i,
+    })),
+  });
+  const result = await approveEmailTriage(db, {
+    ...scope, maxPages: 2, confirmPublicInspection: true,
+  }, { now: () => now });
+  assert.equal(result.code, "EMAIL_TRIAGE_APPROVED");
+  assert.ok(events.includes("research.campaign.email-triage.approved"));
+});
+
+test("one unresolved or untrusted source never consumes triage approval", async () => {
+  const valid = {
+    citationUrl: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/ABCDEFGH1",
+    groundingStatus: "SOURCE_HINT",
+    groundingProvenance: "GOOGLE_GROUNDING_LOCATION_HEADER",
+    groundingResolvedUrl: "https://experts.example.org/ada",
+  };
+  for (const invalid of [{ ...valid, groundingStatus: "UNRESOLVED" },
+    { ...valid, groundingProvenance: "MODEL_GENERATED_URL" }]) {
+    const { db, events } = fixture({
+      status: "IDLE", observed: 2, sourceEntries: [valid, invalid],
+    });
+    const res = await approveEmailTriage(db, {
+      ...scope, maxPages: 2, confirmPublicInspection: true,
+    }, { now: () => now });
+    assert.equal(res.code, "EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED");
+    assert.equal(res.inspectableObservations, 1);
+    assert.equal(events.includes("campaign-RUNNING"), false);
+  }
+});
+
+test("shared resolved destination blocks one-shot public-email approval", async () => {
+  const common = "https://experts.example.org/team";
+  const entries = [0, 1].map(i => ({
+    citationUrl: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/ABCDEFGH" + i,
+    groundingStatus: "SOURCE_HINT",
+    groundingProvenance: "GOOGLE_GROUNDING_LOCATION_HEADER",
+    groundingResolvedUrl: common,
+  }));
+  const { db, events } = fixture({ status: "IDLE", observed: 2,
+    sourceEntries: entries });
+  const result = await approveEmailTriage(db, {
+    ...scope, maxPages: 2, confirmPublicInspection: true,
+  }, { now: () => now });
+  assert.equal(result.code, "EMAIL_TRIAGE_SHARED_SOURCE_REVIEW_REQUIRED");
+  assert.equal(result.uniqueSources, 1);
+  assert.equal(events.includes("campaign-RUNNING"), false);
 });
 
 test("claim persists a lease and never makes a billable call", async () => {

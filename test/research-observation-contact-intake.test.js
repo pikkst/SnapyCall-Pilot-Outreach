@@ -20,7 +20,8 @@ const observed = {
 };
 
 function fakeDb({ revoked = false, existing = null, changed = false,
-  alreadyLinked = null, uniqueRace = false } = {}) {
+  alreadyLinked = null, uniqueRace = false, grounding = false,
+  shared = 0, sourceChanged = false } = {}) {
   const events = [];
   const created = { id: "cmcontactabcdefghijklmno" };
   const db = {
@@ -40,7 +41,16 @@ function fakeDb({ revoked = false, existing = null, changed = false,
           events.push("observation-lock");
           return [{ id: scope.observationId,
             name: changed ? "Not Ada" : observed.name,
-            category: observed.category, citationUrl: observed.sourceUrl,
+            category: observed.category,
+            citationUrl: grounding
+              ? "https://vertexaisearch.cloud.google.com/grounding-api-redirect/ABCDEFGH12345"
+              : observed.sourceUrl,
+            groundingStatus: grounding ? "SOURCE_HINT" : "UNCHECKED",
+            groundingResolvedUrl: grounding
+              ? (sourceChanged ? "https://other.example.org" : observed.sourceUrl)
+              : null,
+            groundingProvenance: grounding
+              ? "GOOGLE_GROUNDING_LOCATION_HEADER" : null,
             candidateId: alreadyLinked }];
         }
         if (sql.includes('FROM "Partner"')) {
@@ -59,6 +69,9 @@ function fakeDb({ revoked = false, existing = null, changed = false,
           assert.equal(data.contactReviewed, false);
           assert.equal(data.profileReviewed, false);
           assert.equal(data.status, "REVIEW_PENDING");
+          assert.equal(data.researchCitationUrl, grounding
+            ? "https://vertexaisearch.cloud.google.com/grounding-api-redirect/ABCDEFGH12345"
+            : observed.sourceUrl);
           if (uniqueRace) throw Object.assign(new Error("Duplicate"), { code: "P2002" });
           return created;
         },
@@ -73,7 +86,9 @@ function fakeDb({ revoked = false, existing = null, changed = false,
         events.push("profile-evidence");
         assert.equal(data.kind, "PROFILE");
       } },
-      researchCampaignObservation: { updateMany: async ({ data }) => {
+      researchCampaignObservation: {
+        count: async () => shared,
+        updateMany: async ({ data }) => {
         events.push("observation-link");
         assert.equal(data.candidateId, created.id);
         return { count: 1 };
@@ -102,6 +117,28 @@ test("explicit person-email review creates one review-only workspace contact and
   assert.deepEqual(events, ["membership-lock", "campaign-lock", "observation-lock",
     "workspace-lock", "contact-create", "email-evidence", "profile-evidence",
     "observation-link", "audit"]);
+});
+
+test("resolved public source yields a contact with original Gemini citation preserved", async () => {
+  const { db, events } = fakeDb({ grounding: true });
+  const result = await acceptReviewedCampaignContact(db, scope, {
+    inspect: async () => observed,
+  });
+  assert.equal(result.code, "CONTACT_CREATED_REVIEW_PENDING");
+  assert.equal(result.sendingEnabled, false);
+  assert.ok(events.includes("contact-create"));
+});
+
+test("changed resolved URL and shared destination block contact creation", async () => {
+  for (const opts of [{ grounding: true, sourceChanged: true },
+    { grounding: true, shared: 1 }]) {
+    const { db, events } = fakeDb(opts);
+    const outcome = await acceptReviewedCampaignContact(db, scope, {
+      inspect: async () => observed,
+    });
+    assert.equal(outcome.status, 409);
+    assert.equal(events.includes("contact-create"), false);
+  }
 });
 
 test("no email or mismatched digest cannot create a contact", async () => {
