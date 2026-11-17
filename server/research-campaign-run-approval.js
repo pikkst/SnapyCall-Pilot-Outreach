@@ -175,14 +175,36 @@ export async function finishApprovedRunTask(db, {
       return { code: "RUN_NOT_ACTIVE" };
     }
     const terminal = ["COMPLETED", "PARTIAL", "CANCELLED"].includes(campaigns[0].status);
+    // A queued task waiting for an already scheduled, bounded retry is not
+    // a failed campaign. Never require a fresh user approval merely because
+    // the tick found no task eligible at this exact instant.
+    let retryWaiting = false;
+    if (result?.status === "NO_READY_TASK" && !terminal &&
+        run.expiresAt instanceof Date && run.expiresAt.getTime() > Date.now() &&
+        run.startedTasks < run.maxTasks &&
+        run.committedWorstCaseCents + run.worstCasePerCallCents <=
+          run.maxWorstCaseCents) {
+      const unresolved = await tx.researchCampaignTask.count({
+        where: { campaignId, status: { in: ["PAUSED", "FAILED", "RUNNING"] } },
+      });
+      if (unresolved === 0) {
+        const next = await tx.researchCampaignTask.findFirst({
+          where: { campaignId, status: "QUEUED", attempts: { lt: 3 },
+            nextAttemptAt: { gt: new Date() } },
+          select: { id: true },
+        });
+        retryWaiting = next !== null;
+      }
+    }
     const status = ["COMPLETED", "NO_READY_TASK"].includes(result?.status) &&
       terminal ? "COMPLETED" :
-      result?.status === "COMPLETED" && run.startedTasks < run.maxTasks &&
+      (result?.status === "COMPLETED" || retryWaiting) &&
+      run.startedTasks < run.maxTasks &&
       run.expiresAt instanceof Date && run.expiresAt.getTime() > Date.now() &&
       run.committedWorstCaseCents + run.worstCasePerCallCents <=
         run.maxWorstCaseCents ? "RUNNING" : "PAUSED";
     const code = status === "COMPLETED" ? "CAMPAIGN_FINISHED" :
-      status === "RUNNING" ? null :
+      status === "RUNNING" ? (retryWaiting ? "WAITING_RETRY" : null) :
       result?.status === "COMPLETED" ? "RUN_LIMIT_REACHED" :
       result?.code ?? result?.status ?? "RUN_OUTCOME_UNCERTAIN";
     await tx.researchCampaignRun.update({
