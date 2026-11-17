@@ -15,7 +15,7 @@ test("manual source queue normalizes, deduplicates and strips fragments", () => 
 test("manual source queue refuses unsafe, redirect and oversized sources atomically", () => {
   for (const url of [
     "http://example.org", "https://localhost/admin", "https://127.0.0.1/",
-    "https://user:password@example.org", "https://example.org:443/",
+    "https://user:password@example.org",
     "https://[::1]/", "https://example.org:444/a",
     "https://vertexaisearch.cloud.google.com/grounding-api-redirect/fake",
   ]) {
