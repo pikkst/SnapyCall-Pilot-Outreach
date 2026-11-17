@@ -3214,32 +3214,6 @@ function App() {
         {partnerTab === "settings" && <section className="panel">
           <h2>Partner settings</h2>
           <p className="muted">Google Forms and Sheets consent is read-only. Synchronization is not active.</p>
-        <section aria-label="Personal Gmail sending authorization">
-          <h2>My Gmail sender</h2>
-          <p className="muted">Gmail consent is optional and separate from Google login and Forms/Sheets.
-            Connecting does not send any email. Sending remains disabled pending campaign approval and safety checks.</p>
-          {gmailStatusError && <div role="alert">
-            Gmail connection status is unavailable.
-            <button type="button" className="secondary" onClick={() => void loadGmailStatus()}>
-              Retry status
-            </button>
-          </div>}
-          {!gmailStatusError && !gmailStatus && <p className="muted">Checking Gmail authorization…</p>}
-          {gmailStatus?.connected && <>
-            <p className="muted">Authorized Gmail account: {gmailStatus.email} · Sending disabled.</p>
-            <button type="button" className="secondary" disabled={busy} onClick={() => void disconnectGmail()}>
-              Disconnect Gmail
-            </button>
-          </>}
-          {gmailStatus && !gmailStatus.connected && !gmailStatus.available &&
-            <p className="muted">Gmail authorization is not enabled for this environment.</p>}
-          {gmailStatus && !gmailStatus.connected && gmailStatus.available &&
-            (partnerSession.partners?.length ?? 0) > 0 &&
-            <a className="secondary" href={"/api/partner/google/gmail/start?workspaceId=" +
-              encodeURIComponent(partnerSession.partners![0].id)}>
-              Authorize my Gmail sender
-            </a>}
-        </section>
         <section aria-label="Personal AI configuration">
           <h2>My AI provider</h2>
           <p className="muted">Use your own AI API key. Keys are encrypted, never shared
@@ -3361,6 +3335,32 @@ function App() {
               <button type="submit" disabled={busy || !personalAi.keyConfigured ||
                 researchBudget.monthlyLimitCents === null}>Save budget preference</button>
             </form>}
+        </section>
+        <section aria-label="Personal Gmail sending authorization">
+          <h2>My Gmail sender</h2>
+          <p className="muted">Gmail consent is optional and separate from Google login and Forms/Sheets.
+            Connecting does not send any email. Sending remains disabled pending campaign approval and safety checks.</p>
+          {gmailStatusError && <div role="alert">
+            Gmail connection status is unavailable.
+            <button type="button" className="secondary" onClick={() => void loadGmailStatus()}>
+              Retry status
+            </button>
+          </div>}
+          {!gmailStatusError && !gmailStatus && <p className="muted">Checking Gmail authorization…</p>}
+          {gmailStatus?.connected && <>
+            <p className="muted">Authorized Gmail account: {gmailStatus.email} · Sending disabled.</p>
+            <button type="button" className="secondary" disabled={busy} onClick={() => void disconnectGmail()}>
+              Disconnect Gmail
+            </button>
+          </>}
+          {gmailStatus && !gmailStatus.connected && !gmailStatus.available &&
+            <p className="muted">Gmail authorization is not enabled for this environment.</p>}
+          {gmailStatus && !gmailStatus.connected && gmailStatus.available &&
+            (partnerSession.partners?.length ?? 0) > 0 &&
+            <a className="secondary" href={"/api/partner/google/gmail/start?workspaceId=" +
+              encodeURIComponent(partnerSession.partners![0].id)}>
+              Authorize my Gmail sender
+            </a>}
         </section>
 
         </section>}
