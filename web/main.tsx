@@ -149,6 +149,17 @@ type ResearchReconciliationOverview = {
   action: "manual-review-only";
 };
 
+type Gemini3OneShotResult = {
+  status: string; code: string;
+  diagnostic: { model: string; finished: boolean; finishReason: string | null;
+    inputTokens: number | null; outputTokens: number | null;
+    thinkingTokens: number | null; searchQueries: number | null;
+    groundingChunks: number | null; estimateUsd: number | null;
+    providerInvoiceConfirmed: false; currency: "USD"; } | null;
+  sourcedCandidates?: number; appReservationCents: number;
+  appReservationIsNotProviderInvoice: true;
+  noContactsImported: true; noEmailSent: true;
+};
 type ResearchBudget = { monthlyLimitCents: number | null; currency: "USD";
   enforcedForPaidSearch: boolean;
   provider?: string | null; model?: string | null;
@@ -343,6 +354,12 @@ function App() {
   const [seedUrl, setSeedUrl] = useState("");
   const [seedSaving, setSeedSaving] = useState(false);
   const [researchResult, setResearchResult] = useState<ResearchPreview | null>(null);
+  const [gemini3TestBusy, setGemini3TestBusy] = useState(false);
+  const [gemini3TestConfirmed, setGemini3TestConfirmed] = useState(false);
+  const [gemini3TestResult, setGemini3TestResult] =
+    useState<Gemini3OneShotResult | null>(null);
+  const [gemini3TestError, setGemini3TestError] = useState("");
+  const gemini3TestAttempted = useRef(false);
   const [researchStatus, setResearchStatus] = useState<"idle" | "loading" | "error">("idle");
   const [researchError, setResearchError] = useState("");
   // User-confirmed inspection is required before reusing the manual review
@@ -1487,6 +1504,41 @@ function App() {
     }
   }
 
+  async function runGemini3OneShot(workspaceId: string) {
+    if (gemini3TestAttempted.current || gemini3TestBusy ||
+        !gemini3TestConfirmed || activeWorkspaceId !== workspaceId ||
+        researchQuery.trim().length < 12 || researchQuery.trim().length > 350 ||
+        personalAi.provider !== "gemini" ||
+        personalAi.model !== "gemini-3-flash-preview" ||
+        researchBudget.provider !== "gemini" ||
+        researchBudget.model !== "gemini-3-flash-preview") return;
+    // No automatic retry, even if the browser loses the response: one paid
+    // provider call may already have happened.
+    gemini3TestAttempted.current = true;
+    setGemini3TestBusy(true);
+    setGemini3TestResult(null);
+    setGemini3TestError("");
+    setGemini3TestConfirmed(false);
+    try {
+      const result = await api<Gemini3OneShotResult>(
+        "/discovery/gemini3-one-shot?workspaceId=" +
+        encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify({
+            query: researchQuery.trim(),
+            confirmation: "RUN_ONE_GEMINI3_PAID_TEST",
+          }),
+        });
+      setGemini3TestResult(result);
+    } catch (error) {
+      setGemini3TestError(error instanceof Error ? error.message :
+        "The experiment's outcome is unknown. Do not retry.");
+    } finally {
+      setGemini3TestBusy(false);
+      void loadResearchBudget();
+    }
+  }
+
   async function saveReviewedResearchCandidates(
     workspaceId: string, onlyKey?: string,
   ) {
@@ -2192,6 +2244,56 @@ function App() {
                           }
                         }}/>
                     </label>
+                    {personalAi.provider === "gemini" &&
+                      personalAi.model === "gemini-3-flash-preview" &&
+                      <section aria-label="One-time Gemini 3 test" className="research-readiness">
+                        <h4>Gemini 3 Flash — one paid search diagnostic</h4>
+                        <p className="muted">This is exactly one Google Search
+                          grounded API call using your saved personal Gemini key.
+                          No campaign, contact import, email lookup or sending.
+                          Google's internal number of billable search queries is
+                          not capped by this application. A $5.00 app-ledger
+                          reservation is an accounting estimate, NOT a hard
+                          provider charge limit or actual invoice. The test
+                          cannot be repeated, including after a lost response.
+                          Google AI Studio billing confirms final charges later.</p>
+                        <label><input type="checkbox"
+                          checked={gemini3TestConfirmed}
+                          onChange={e => setGemini3TestConfirmed(e.target.checked)}/>
+                          I authorize exactly one potentially billable Gemini 3
+                          Search request and understand the external charge
+                          cannot be strictly limited by this reservation.
+                        </label>
+                        <button type="button" disabled={!gemini3TestConfirmed ||
+                          gemini3TestAttempted.current || gemini3TestBusy ||
+                          researchBudget.provider !== "gemini" ||
+                          researchBudget.model !== "gemini-3-flash-preview" ||
+                          researchQuery.trim().length < 12 ||
+                          researchQuery.trim().length > 350}
+                          onClick={() => void runGemini3OneShot(p.id)}>
+                          {gemini3TestBusy ? "Running one provider call…" :
+                            "Run ONE Gemini 3 Search cost test"}
+                        </button>
+                        {gemini3TestError && <p role="alert">
+                          {gemini3TestError} The call may have been billed;
+                          check the Google AI Studio log before any new test.
+                        </p>}
+                        {gemini3TestResult && <div role="status">
+                          <p><strong>Result:</strong> {gemini3TestResult.code}</p>
+                          <p>Provider search queries: {gemini3TestResult.diagnostic?.searchQueries ?? "unknown"}
+                            {" "}· Grounding sources: {gemini3TestResult.diagnostic?.groundingChunks ?? "unknown"}</p>
+                          <p>Input tokens: {gemini3TestResult.diagnostic?.inputTokens ?? "unknown"}
+                            {" "}· Output tokens: {gemini3TestResult.diagnostic?.outputTokens ?? "unknown"}
+                            {" "}· Thinking tokens: {gemini3TestResult.diagnostic?.thinkingTokens ?? "unknown"}</p>
+                          <p>Published-rate estimate before free allowances:
+                            {" "}{gemini3TestResult.diagnostic?.estimateUsd === null
+                              ? "unknown" :
+                              "$" + gemini3TestResult.diagnostic.estimateUsd.toFixed(4)}
+                          </p>
+                          <p>Final provider invoice: not yet confirmed.
+                            This test cannot be replayed automatically.</p>
+                        </div>}
+                      </section>}
                     <button type="submit" disabled={researchStatus === "loading" ||
                       !readiness.ready}>
                       {researchStatus === "loading" ? "Researching…" : "Run one search"}
