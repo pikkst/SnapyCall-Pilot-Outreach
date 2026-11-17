@@ -109,3 +109,17 @@ td button+button{margin-left:6px}
 @media(max-width:1050px){
   .candidate-pipeline-table tbody{grid-template-columns:minmax(0,1fr)}
 }
+
+/* Persisted observations are review-only; never visually imply verified contact status. */
+.campaign-observations{margin:20px 0;padding:16px;border:1px solid #dce4f1;border-radius:12px;background:#fff}
+.campaign-observations-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.campaign-observations-heading h5{margin:0 0 8px;font-size:16px}
+.campaign-observations-heading p{max-width:700px;line-height:1.5}
+.campaign-observation-list{list-style:none;padding:0!important;margin:14px 0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.campaign-observation-list li{border:1px solid #e0e8f2;background:#f9fbff;border-radius:10px;padding:14px;min-width:0;margin:0}
+.campaign-observation-title{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.campaign-observation-list p{overflow-wrap:anywhere;line-height:1.5;font-size:13px}
+.campaign-observation-list a{font-size:13px;overflow-wrap:anywhere}
+.campaign-unverified{font-size:11px;font-weight:700;color:#80551b;background:#fff0d4;border-radius:20px;padding:4px 8px}
+@media(max-width:850px){.campaign-observation-list{grid-template-columns:1fr}.campaign-observations-heading{flex-direction:column}}
+@media(prefers-reduced-motion:no-preference){.campaign-observation-list li{animation:campaign-observation-enter .25s ease-out both}@keyframes campaign-observation-enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}}
