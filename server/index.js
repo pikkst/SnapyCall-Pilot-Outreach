@@ -19,6 +19,7 @@ import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchP
 import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
+import { normalizeManualResearchSources, enqueueManualResearchSources } from "./research-manual-sources.js";
 import { inspectCampaignObservationEmail } from "./research-observation-email.js";
 import { acceptReviewedCampaignContact } from "./research-observation-contact-intake.js";
 import { runBoundedCampaignSlice } from "./research-campaign-slice.js";
@@ -1391,6 +1392,58 @@ app.get("/api/research-campaigns/:id/progress", candidateReadScope,
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
     res.set("Cache-Control", "no-store");
     return res.json(summarizeCampaignProgress(campaign));
+  }));
+
+// Per-campaign manual sources reuse the owner-scoped campaign and membership
+// contracts. Persist inputs only: no model invocation, web fetch, contact or email.
+app.get("/api/research-campaigns/:id/sources", candidateReadScope,
+  safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const campaign = await prisma.researchCampaign.findFirst({
+      where: { id: req.params.id, workspaceId: req.candidateScope,
+        ownerId: identity.id }, select: { id: true },
+    });
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    const sources = await prisma.researchCampaignSource.findMany({
+      where: { campaignId: campaign.id },
+      select: { id: true, normalizedUrl: true, sourceKind: true,
+        status: true, createdAt: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 200,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.json({ sources, inspected: false, providerCallsAuthorized: false });
+  }));
+
+app.post("/api/research-campaigns/:id/sources", candidateReadScope,
+  requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const urls = normalizeManualResearchSources(req.body);
+    const result = await prisma.$transaction(async tx => {
+      if (!await lockActiveWorkspaceMembership(tx, {
+        workspaceId: req.candidateScope, userId: identity.id,
+      })) return null;
+      return enqueueManualResearchSources(tx, {
+        campaignId: req.params.id, workspaceId: req.candidateScope,
+        ownerId: identity.id, urls,
+      });
+    });
+    if (!result) return res.status(403).json({ error: "Workspace membership revoked" });
+    if (!result.found) return res.status(404).json({ error: "Campaign not found" });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.added ? 201 : 200).json({
+      added: result.added, submitted: result.submitted,
+      status: "PENDING_ENRICHMENT", providerCallsAuthorized: false,
+      inspected: false, contactsCreated: 0,
+    });
   }));
 
 app.get("/api/research-campaigns/:id/observations", candidateReadScope,
