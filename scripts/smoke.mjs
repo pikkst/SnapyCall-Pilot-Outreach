@@ -382,8 +382,17 @@ try {
       "A separate authorized workspace has its own daily budget");
     // Lease claims are serialized through a workspace row lock, even across
     // separate clients. Failed claims never consume a daily attempt.
-    const { reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded } =
+    const { reserveResearchLease, releaseResearchLease,
+      ResearchConcurrencyExceeded, ResearchPacingRequired,
+      RESEARCH_MIN_DISPATCH_INTERVAL_MS } =
       await import("../server/research-quota.js");
+    // Simulate DB clock advancement without slowing the smoke for 35 seconds.
+    // The production rate gate remains active and is asserted before reuse.
+    const elapsePacing = async workspaceId => partnerDb.researchRunLease.updateMany({
+      where: { workspaceId },
+      data: { createdAt: new Date(Date.now() -
+        RESEARCH_MIN_DISPATCH_INTERVAL_MS - 1_000) },
+    });
     const leaseCalls = await Promise.allSettled(Array.from({ length: 3 }, () =>
       partnerDb.$transaction(async tx => {
         const id = await reserveResearchLease(tx, {
@@ -409,29 +418,45 @@ try {
     assert.equal((await releaseResearchLease(partnerDb, leaseId, firstWorkspace, member.id)).count, 1);
     assert.equal((await releaseResearchLease(partnerDb, leaseId, firstWorkspace, member.id)).count, 0,
       "Release must be idempotent and owner-scoped");
+    await assert.rejects(() => partnerDb.$transaction(tx => reserveResearchLease(tx, {
+      workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
+    })), ResearchPacingRequired,
+    "A released lease still blocks immediate repeated provider dispatch");
+    assert.equal((await partnerDb.researchRunLease.count({
+      where: { workspaceId: firstWorkspace },
+    })), 1, "Pacing rejection must not insert another lease");
+    await elapsePacing(firstWorkspace);
     const reopenedLease = await partnerDb.$transaction(tx => reserveResearchLease(tx, {
       workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
     }));
     assert.equal((await releaseResearchLease(partnerDb, reopenedLease, firstWorkspace, member.id)).count, 1);
-    // Expired leases release after crashes based on DB time, not worker-local state.
+    // An expired provider lease must not allow another dispatch before pacing.
+    await elapsePacing(firstWorkspace);
     const expiredLease = await partnerDb.$transaction(tx => reserveResearchLease(tx, {
       workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
     }));
     await partnerDb.researchRunLease.update({
       where: { id: expiredLease }, data: { expiresAt: new Date("2000-01-01T00:00:00Z") },
     });
+    await assert.rejects(() => partnerDb.$transaction(tx => reserveResearchLease(tx, {
+      workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
+    })), ResearchPacingRequired, "Crash lease expiry must not reset provider pacing");
+    await elapsePacing(firstWorkspace);
     const afterCrash = await partnerDb.$transaction(tx => reserveResearchLease(tx, {
       workspaceId: firstWorkspace, userId: member.id, maxConcurrent: 1,
     }));
     assert.equal((await releaseResearchLease(partnerDb, afterCrash, firstWorkspace, member.id)).count, 1);
     const otherUserIds = Array.from({ length: 5 }, (_, i) => "c" + String(i + 1).repeat(24));
-    const workspaceClaims = await Promise.all(otherUserIds.map(userId =>
-      partnerDb.$transaction(tx => reserveResearchLease(tx, {
+    const workspaceClaims = [];
+    for (const userId of otherUserIds) {
+      await elapsePacing(secondWorkspace);
+      workspaceClaims.push(await partnerDb.$transaction(tx => reserveResearchLease(tx, {
         workspaceId: secondWorkspace, userId, maxConcurrent: 3,
-      }))));
+      })));
+    }
     await assert.rejects(() => partnerDb.$transaction(tx => reserveResearchLease(tx, {
       workspaceId: secondWorkspace, userId: member.id, maxConcurrent: 3,
-    })), ResearchConcurrencyExceeded, "Workspace aggregate limit blocks a sixth parallel search");
+    })), ResearchConcurrencyExceeded, "Workspace aggregate active limit blocks a sixth claim");
     await Promise.all(workspaceClaims.map((id, i) =>
       releaseResearchLease(partnerDb, id, secondWorkspace, otherUserIds[i])));
     const privateLeadA = await partnerDb.candidate.create({ data: {
