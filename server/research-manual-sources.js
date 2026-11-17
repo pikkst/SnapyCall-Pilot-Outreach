@@ -1,5 +1,6 @@
 // User-provided URL inputs are queued as research hints, never contacts.
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { publicCitationUrl } from "./research-evidence.js";
 
 const input = z.object({
@@ -36,7 +37,9 @@ export async function enqueueManualResearchSources(tx, {
     FOR UPDATE`;
   if (rows.length !== 1) return { found: false, added: 0 };
   const insert = await tx.researchCampaignSource.createMany({
-    data: normalized.map(normalizedUrl => ({ campaignId, normalizedUrl })),
+    data: normalized.map(normalizedUrl => ({ campaignId, normalizedUrl,
+      normalizedUrlHash: createHash("sha256").update(normalizedUrl).digest("hex"),
+    })),
     skipDuplicates: true,
   });
   if (insert.count > 0) {
