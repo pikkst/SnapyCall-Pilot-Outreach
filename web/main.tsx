@@ -27,6 +27,11 @@ type CampaignObservationsPage = {
   observations: CampaignObservation[]; nextCursor: string | null;
   verifiedContacts: number; sendingEnabled: false;
 };
+type CampaignEmailInspection = {
+  code: string; name?: string; category?: string; observedEmail?: string;
+  sourceUrl?: string; reviewRequired?: boolean;
+  contactCreated: false; emailChecked: boolean; sendingEnabled: false;
+};
 type PartnerTab = "dashboard" | "candidates" | "discovery" | "drafts" | "profile" | "settings";
 type PartnerSession = { authenticated: boolean; conflict?: boolean; userId?: string; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
@@ -237,6 +242,12 @@ function App() {
   const [campaignObservationsStatus, setCampaignObservationsStatus] =
     useState<"idle" | "loading" | "ready" | "error">("idle");
   const campaignObservationsRequest = useRef(0);
+  const [campaignEmailInspections, setCampaignEmailInspections] =
+    useState<Record<string, CampaignEmailInspection>>({});
+  const [campaignEmailInspectionBusy, setCampaignEmailInspectionBusy] =
+    useState<string | null>(null);
+  const [campaignEmailInspectionError, setCampaignEmailInspectionError] =
+    useState<Record<string, string>>({});
   const [campaignProgressStatus, setCampaignProgressStatus] =
     useState<"idle" | "loading" | "ready" | "error">("idle");
   const [workspaceDataStatus, setWorkspaceDataStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -697,6 +708,9 @@ function App() {
     setCampaignObservations([]);
     setCampaignObservationsCursor(null);
     setCampaignObservationsStatus("idle");
+    setCampaignEmailInspections({});
+    setCampaignEmailInspectionError({});
+    setCampaignEmailInspectionBusy(null);
     setCampaignProgressId(campaignId);
     setCampaignProgress(null);
     setCampaignProgressStatus("loading");
@@ -742,6 +756,43 @@ function App() {
       if (generation !== workspaceRequest.current ||
           request !== campaignObservationsRequest.current) return;
       setCampaignObservationsStatus("error");
+    }
+  }
+
+  async function inspectCampaignObservationEmail(workspaceId: string,
+    campaignId: string, observationId: string) {
+    if (activeWorkspaceId !== workspaceId || campaignProgressId !== campaignId ||
+        campaignEmailInspectionBusy !== null) return;
+    const generation = workspaceRequest.current;
+    const request = campaignObservationsRequest.current;
+    setCampaignEmailInspectionBusy(observationId);
+    setCampaignEmailInspectionError(current => {
+      const next = { ...current }; delete next[observationId]; return next;
+    });
+    try {
+      const finding = await api<CampaignEmailInspection>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/observations/" + encodeURIComponent(observationId) +
+        "/email-evidence?workspaceId=" + encodeURIComponent(workspaceId), {
+          method: "POST", body: "{}",
+        });
+      if (generation !== workspaceRequest.current ||
+          request !== campaignObservationsRequest.current ||
+          campaignProgressId !== campaignId) return;
+      setCampaignEmailInspections(current => ({
+        ...current, [observationId]: finding,
+      }));
+    } catch (error) {
+      if (generation === workspaceRequest.current &&
+          request === campaignObservationsRequest.current) {
+        setCampaignEmailInspectionError(current => ({
+          ...current, [observationId]: error instanceof Error
+            ? error.message : "Unable to inspect this public source.",
+        }));
+      }
+    } finally {
+      if (generation === workspaceRequest.current)
+        setCampaignEmailInspectionBusy(null);
     }
   }
 
@@ -1762,6 +1813,27 @@ function App() {
                               <p>{item.rationale}</p>
                               <a href={item.citationUrl} target="_blank"
                                 rel="noopener noreferrer">View provider-cited source</a>
+                              <div className="campaign-email-check">
+                                <button type="button" className="secondary"
+                                  disabled={campaignEmailInspectionBusy !== null}
+                                  onClick={() => void inspectCampaignObservationEmail(
+                                    p.id, campaignProgress.id, item.id)}>
+                                  {campaignEmailInspectionBusy === item.id
+                                    ? "Inspecting public profile…"
+                                    : "Check for published person-email"}
+                                </button>
+                                {campaignEmailInspections[item.id] && <p role="status">
+                                  {campaignEmailInspections[item.id].observedEmail
+                                    ? <>Email found (human review required):
+                                        <strong>{" "}{campaignEmailInspections[item.id].observedEmail}</strong>.
+                                        This is not a saved contact.</>
+                                    : <>No attributable person-email verified:
+                                        {" "}{campaignEmailInspections[item.id].code.replaceAll("_", " ")}.
+                                        No contact was created.</>}
+                                </p>}
+                                {campaignEmailInspectionError[item.id] &&
+                                  <p role="alert">{campaignEmailInspectionError[item.id]}</p>}
+                              </div>
                             </li>)}
                           </ul>}
                           {campaignObservationsCursor &&
@@ -1783,6 +1855,9 @@ function App() {
                           setCampaignObservations([]);
                           setCampaignObservationsCursor(null);
                           setCampaignObservationsStatus("idle");
+                          setCampaignEmailInspections({});
+                          setCampaignEmailInspectionError({});
+                          setCampaignEmailInspectionBusy(null);
                           setCampaignProgressId(null);
                           setCampaignProgress(null);
                           setCampaignProgressStatus("idle");
