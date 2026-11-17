@@ -20,6 +20,7 @@ import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
 import { inspectCampaignObservationEmail } from "./research-observation-email.js";
+import { acceptReviewedCampaignContact } from "./research-observation-contact-intake.js";
 import { runBoundedCampaignSlice } from "./research-campaign-slice.js";
 import { skipPausedResearchTask } from "./research-campaign-reconciliation.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
@@ -1411,7 +1412,7 @@ app.get("/api/research-campaigns/:id/observations", candidateReadScope,
     const rows = await prisma.researchCampaignObservation.findMany({
       where: { campaignId: campaign.id, ...(cursor ? { id: { gt: cursor } } : {}) },
       select: { id: true, name: true, category: true, citationUrl: true,
-        rationale: true, status: true, observedAt: true },
+        rationale: true, status: true, observedAt: true, candidateId: true },
       orderBy: { id: "asc" }, take: 101,
     });
     const page = rows.slice(0, 100);
@@ -1437,6 +1438,27 @@ app.post("/api/research-campaigns/:id/observations/:observationId/email-evidence
     const result = await inspectCampaignObservationEmail(prisma, {
       campaignId: req.params.id, observationId: req.params.observationId,
       workspaceId: req.candidateScope, ownerId: identity.id,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
+// A reviewer explicitly accepts one freshly re-inspected, attributable
+// person-email evidence snapshot. No email or mismatched digest => NO contact.
+app.post("/api/research-campaigns/:id/observations/:observationId/accept-contact",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const input = z.object({
+      expectedDigest: z.string().regex(/^[a-f0-9]{64}$/),
+      confirmsExactPersonEmailPair: z.literal(true),
+    }).strict().parse(req.body ?? {});
+    const result = await acceptReviewedCampaignContact(prisma, {
+      campaignId: req.params.id, observationId: req.params.observationId,
+      workspaceId: req.candidateScope, ownerId: identity.id, ...input,
     });
     res.set("Cache-Control", "no-store");
     return res.status(result.status).json(result);

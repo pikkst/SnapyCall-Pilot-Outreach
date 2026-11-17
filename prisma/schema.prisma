@@ -36,6 +36,7 @@ model Candidate {
   directEmailObservation CandidateDirectEmailObservation?
   emailVerification CandidateEmailVerification?
   mailboxVerification CandidateMailboxVerification?
+  researchObservations ResearchCampaignObservation[]
   @@unique([workspaceId, emailNormalized])
   @@unique([workspaceId, discoveryKey])
   @@index([workspaceId, createdAt])
@@ -320,10 +321,15 @@ model ResearchCampaignObservation {
   citationUrl String
   rationale String
   status String @default("UNVERIFIED")
+  // A research observation is linked to a workspace contact only after
+  // explicit source-backed, named-email review. Never by name alone.
+  candidateId String?
+  candidate Candidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
   observedAt DateTime @default(now())
   @@unique([campaignId, evidenceKey])
   @@index([campaignId, observedAt, id])
   @@index([taskId])
+  @@index([candidateId])
 }
 
 model CandidateEmailVerification {

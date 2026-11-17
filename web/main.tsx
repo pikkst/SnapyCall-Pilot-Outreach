@@ -21,7 +21,7 @@ type CampaignProgress = {
 };
 type CampaignObservation = {
   id: string; name: string; category: string; citationUrl: string;
-  rationale: string; status: string; observedAt: string;
+  rationale: string; status: string; observedAt: string; candidateId?: string | null;
 };
 type CampaignObservationsPage = {
   observations: CampaignObservation[]; nextCursor: string | null;
@@ -29,7 +29,7 @@ type CampaignObservationsPage = {
 };
 type CampaignEmailInspection = {
   code: string; name?: string; category?: string; observedEmail?: string;
-  sourceUrl?: string; reviewRequired?: boolean;
+  sourceUrl?: string; reviewRequired?: boolean; evidenceDigest?: string;
   contactCreated: false; emailChecked: boolean; sendingEnabled: false;
 };
 type PartnerTab = "dashboard" | "candidates" | "discovery" | "drafts" | "profile" | "settings";
@@ -247,6 +247,12 @@ function App() {
   const [campaignEmailInspectionBusy, setCampaignEmailInspectionBusy] =
     useState<string | null>(null);
   const [campaignEmailInspectionError, setCampaignEmailInspectionError] =
+    useState<Record<string, string>>({});
+  const [campaignContactConfirm, setCampaignContactConfirm] =
+    useState<Record<string, boolean>>({});
+  const [campaignContactSaveBusy, setCampaignContactSaveBusy] =
+    useState<string | null>(null);
+  const [campaignContactSaveNotice, setCampaignContactSaveNotice] =
     useState<Record<string, string>>({});
   const [campaignProgressStatus, setCampaignProgressStatus] =
     useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -711,6 +717,9 @@ function App() {
     setCampaignEmailInspections({});
     setCampaignEmailInspectionError({});
     setCampaignEmailInspectionBusy(null);
+    setCampaignContactConfirm({});
+    setCampaignContactSaveNotice({});
+    setCampaignContactSaveBusy(null);
     setCampaignProgressId(campaignId);
     setCampaignProgress(null);
     setCampaignProgressStatus("loading");
@@ -793,6 +802,53 @@ function App() {
     } finally {
       if (generation === workspaceRequest.current)
         setCampaignEmailInspectionBusy(null);
+    }
+  }
+
+  async function saveReviewedCampaignContact(workspaceId: string,
+    campaignId: string, observationId: string) {
+    const finding = campaignEmailInspections[observationId];
+    if (workspaceId !== activeWorkspaceId || campaignProgressId !== campaignId ||
+        campaignContactSaveBusy !== null || !campaignContactConfirm[observationId] ||
+        !finding?.observedEmail || !finding.reviewRequired ||
+        !finding.evidenceDigest) return;
+    const generation = workspaceRequest.current;
+    const request = campaignObservationsRequest.current;
+    setCampaignContactSaveBusy(observationId);
+    try {
+      const response = await api<{
+        candidateId: string; code: string; contactCreated: boolean;
+      }>("/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/observations/" + encodeURIComponent(observationId) +
+        "/accept-contact?workspaceId=" + encodeURIComponent(workspaceId), {
+          method: "POST", body: JSON.stringify({
+            expectedDigest: finding.evidenceDigest,
+            confirmsExactPersonEmailPair: true,
+          }),
+        });
+      if (generation !== workspaceRequest.current ||
+          request !== campaignObservationsRequest.current ||
+          campaignProgressId !== campaignId) return;
+      setCampaignObservations(current => current.map(item =>
+        item.id === observationId ? { ...item, candidateId: response.candidateId } : item));
+      setCampaignContactSaveNotice(current => ({
+        ...current, [observationId]: "Contact saved for further review. " +
+          "No email was sent or authorized.",
+      }));
+      setCampaignContactConfirm(current => ({
+        ...current, [observationId]: false,
+      }));
+    } catch (error) {
+      if (generation === workspaceRequest.current &&
+          request === campaignObservationsRequest.current) {
+        setCampaignContactSaveNotice(current => ({
+          ...current, [observationId]: error instanceof Error ? error.message :
+            "Could not accept the reviewed contact.",
+        }));
+      }
+    } finally {
+      if (generation === workspaceRequest.current)
+        setCampaignContactSaveBusy(null);
     }
   }
 
@@ -1833,6 +1889,32 @@ function App() {
                                 </p>}
                                 {campaignEmailInspectionError[item.id] &&
                                   <p role="alert">{campaignEmailInspectionError[item.id]}</p>}
+                                {item.candidateId && <p role="status">
+                                  Linked to the Contacts list for further review.
+                                  No outreach is authorized.</p>}
+                                {!item.candidateId &&
+                                  campaignEmailInspections[item.id]?.observedEmail &&
+                                  campaignEmailInspections[item.id]?.evidenceDigest && <>
+                                    <label className="campaign-contact-confirm">
+                                      <input type="checkbox" disabled={campaignContactSaveBusy !== null}
+                                        checked={campaignContactConfirm[item.id] === true}
+                                        onChange={event => setCampaignContactConfirm(current => ({
+                                          ...current, [item.id]: event.target.checked,
+                                        }))}/>
+                                      I reviewed this exact named profile and published
+                                      email. Save as a review-pending contact, without
+                                      authorizing email delivery.
+                                    </label>
+                                    <button type="button" disabled={campaignContactSaveBusy !== null ||
+                                      campaignContactConfirm[item.id] !== true}
+                                      onClick={() => void saveReviewedCampaignContact(
+                                        p.id, campaignProgress.id, item.id)}>
+                                      {campaignContactSaveBusy === item.id
+                                        ? "Saving reviewed contact…" : "Save contact for review"}
+                                    </button>
+                                  </>}
+                                {campaignContactSaveNotice[item.id] &&
+                                  <p role="status">{campaignContactSaveNotice[item.id]}</p>}
                               </div>
                             </li>)}
                           </ul>}
@@ -1858,6 +1940,9 @@ function App() {
                           setCampaignEmailInspections({});
                           setCampaignEmailInspectionError({});
                           setCampaignEmailInspectionBusy(null);
+                          setCampaignContactConfirm({});
+                          setCampaignContactSaveNotice({});
+                          setCampaignContactSaveBusy(null);
                           setCampaignProgressId(null);
                           setCampaignProgress(null);
                           setCampaignProgressStatus("idle");
