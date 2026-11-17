@@ -1766,6 +1766,12 @@ app.post("/api/research-campaigns/:id/execute-next",
       if ((input.maxTasks ?? 1) > 1) {
         const slice = await runBoundedCampaignSlice({ maxTasks: input.maxTasks },
           { runTask });
+        if (slice.status === "WAITING" && slice.code === "RESEARCH_PACING_WAIT") {
+          res.set("Retry-After", String(slice.retryAfterSeconds));
+          return res.status(429).json({
+            ...slice, error: "AI request pacing is active; completed tasks remain saved. No additional paid call was started.",
+          });
+        }
         if (slice.status !== "SLICE_COMPLETED") {
           return res.status(409).json({
             ...slice, error: "Campaign halted; inspect progress, lease and spend before retrying",
