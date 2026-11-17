@@ -137,7 +137,7 @@ export async function completeResearchTask(tx, claim, {
 }) {
   if (!Number.isInteger(observedCount) || observedCount < 0 ||
     observedCount > claim.limit ||
-    (completionCode !== null && (completionCode !== "NO_VERIFIABLE_GROUNDING" || observedCount !== 0)) ||
+    (completionCode !== null && (!["NO_VERIFIABLE_GROUNDING", "NO_USABLE_STRUCTURED_OUTPUT"].includes(completionCode) || observedCount !== 0)) ||
     !(now instanceof Date) ||
     !Number.isFinite(now.getTime())) {
     throw new TypeError("Invalid task result count");
