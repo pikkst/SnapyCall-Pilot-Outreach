@@ -2991,7 +2991,7 @@ function App() {
                           setCampaignProgressStatus("idle");
                         }}>Close</button>
                     </section>}
-                    <details className="research-campaign-history" open={!campaignProgressId}>
+                    <details className="research-campaign-history">
                       <summary>Campaign history ({workspaceCampaigns.length})</summary>
                     {campaignListStatus === "ready" && (workspaceCampaigns.length
                       ? <ul>{workspaceCampaigns.map(item => <li key={item.id}>
@@ -3000,7 +3000,7 @@ function App() {
                             Created {new Date(item.createdAt).toLocaleString()}</small>
                           <small>{item.uniqueSourcedCandidates} unique cited candidates /
                             target {item.targetCount} · {item.plannedTasks} planned tasks ·
-                            No automatic execution</small>
+                            Select to inspect live status and blockers</small>
                           <button type="button" className="secondary"
                             disabled={campaignProgressStatus === "loading"}
                             onClick={() => void openCampaignProgress(p.id, item.id)}>
