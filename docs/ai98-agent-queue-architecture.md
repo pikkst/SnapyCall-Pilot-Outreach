@@ -88,6 +88,36 @@ conservative and do not claim universal provider quota protection.
 - Enforce idempotent execution on all edges, including cancellation, stale
   workspace membership, two browser tabs, expired leases and restart.
 
+## Three-strike quality gate (PR #125)
+
+The existing task commit transaction calculates the current quality streak
+from persisted, indexed `ResearchCampaignTask` outcomes; no browser counter,
+independent autonomous AI agent, extra provider request, or schema migration.
+
+- A completed task with **zero** normalized, independently cited candidate
+  observations increments the consecutive failure count. Both known Gemini
+  STOP-terminal failures (`NO_VERIFIABLE_GROUNDING` and
+  `NO_USABLE_STRUCTURED_OUTPUT`) count as zero-evidence failures.
+- A completed task with one or more accepted provider-cited observations
+  resets the counter to zero (this is *source evidence*, not contact/email
+  verification).
+- After three **contiguous** completed zero-evidence outcomes (indexed task
+  order), and only when no unsettled paid task remains, the existing
+  membership/campaign lock and lease-fenced write transaction sets the
+  campaign status `QUALITY_STOP`. This blocks all further paid claims
+  without deleting queued tasks, citations, approvals, or spend history.
+  Autonomous run state becomes `PAUSED / QUALITY_STOP`; browser progress
+  shows a plain-language explanation and 0/3–3/3 validation failures.
+- A gap, paused billable task, stale lease or settlement uncertainty is
+  **not** treated as a normal quality retry. Unknown network/billing
+  outcomes continue to require immediate manual reconciliation.
+- Existing authorized subsequent tasks are independent budgeted AI calls,
+  never a replay of a previous billed request. No unbounded retries and no
+  automatic new campaign or expansion of approval.
+
+The third strike stops execution; no implicit reset of a stopped campaign.
+A new campaign or approval after investigation must be explicitly requested.
+
 ## Target-100 strategy
 
 Do not generate 100 nearly identical prompts at once. Start with a bounded
