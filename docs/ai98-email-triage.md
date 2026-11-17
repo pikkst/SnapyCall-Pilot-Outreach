@@ -84,6 +84,34 @@ establish alerting, and provision a reliable scheduler. Do not enable
 `AI_EMAIL_TRIAGE_ENABLED` or infer that a saved SOURCE_HINT is already a
 direct-profile citation usable by triage.
 
+### Grounding SOURCE_HINT → named email review bridge
+
+The existing `inspectCampaignObservationEmail` now chooses either an ordinary
+direct public citation or a previously persisted `SOURCE_HINT` only when
+its original citation is a genuine Google grounding redirect and its
+provenance is `GOOGLE_GROUNDING_LOCATION_HEADER`. The original citation is
+never replaced. The resolved URL remains unverified until the existing bounded
+public page reader and explicit named-person email classifier complete.
+
+The public page destination is checked for collisions across **both**
+ordinary citation URLs and other resolved hints within the same campaign.
+A second source-boundary check after external fetch prevents disclosing
+person-associated email from a stale observation. Triage approval uses the
+same source selection; a mixed unresolved/untrusted batch remains blocked
+without consuming its one-shot authorization.
+
+`acceptReviewedCampaignContact` reruns independent page/email inspection,
+requires a matching fresh digest and explicit person/email attestation, then
+checks the locked source binding and shared-source collisions before creating
+a review-pending Candidate. `Candidate.researchCitationUrl` retains the
+original provider citation; `Candidate.expertProfileUrl` is the independently
+inspected public page. Shared directories and generic mailboxes never qualify.
+
+None of this turns on the disabled grounding or email-triage workers, invokes
+paid Gemini calls, or authorizes outbound contact. Rollout still requires
+authenticated tenant and restart/no-replay E2E smoke and review of public
+page access policies before real inspection.
+
 ### Trigger and constraints
 
 - `POST /api/research-campaigns/:id/email-triage/start` with `{maxPages,confirmPublicInspection:true}` is authenticated as the campaign owner and active workspace member, uses Origin protection + rate limiter, requires terminal discovery status `COMPLETED` or `PARTIAL`, and cannot re-authorize an already attempted campaign.
