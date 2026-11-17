@@ -109,3 +109,14 @@ td button+button{margin-left:6px}
 @media(max-width:1050px){
   .candidate-pipeline-table tbody{grid-template-columns:minmax(0,1fr)}
 }
+
+/* Manual URLs are untrusted research hints, never verified contacts. */
+.campaign-manual-sources{margin:20px 0;padding:16px;border:1px solid #dce4f1;border-radius:12px;background:#fbfcff}
+.campaign-manual-sources h5{margin:0 0 8px;font-size:16px}
+.campaign-manual-sources p{line-height:1.5}
+.campaign-manual-sources textarea{display:block;width:100%;min-height:100px;resize:vertical;margin-top:8px;overflow-wrap:anywhere}
+.campaign-source-actions{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
+.campaign-source-list{list-style:none;padding:0;margin:12px 0;display:grid;gap:8px}
+.campaign-source-list li{border:1px solid #e1e8f2;border-radius:9px;padding:10px 12px;overflow-wrap:anywhere;background:white}
+.campaign-source-list small{display:block;color:#6d7c94;margin-top:4px}
+@media(max-width:600px){.campaign-source-actions{flex-direction:column}.campaign-source-actions button{width:100%}}
