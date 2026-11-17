@@ -2333,7 +2333,7 @@ function App() {
                               {item.emailTriageCode && !item.emailTriageEmail &&
                                 <p className="muted">Inspection:
                                   {" "}{item.emailTriageCode.replaceAll("_", " ")}.
-                                  No contact created.</p>
+                                  No contact created.</p>}
                               <p>{item.rationale}</p>
                               <a href={item.citationUrl} target="_blank"
                                 rel="noopener noreferrer">View provider-cited source</a>
