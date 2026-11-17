@@ -54,7 +54,7 @@ import { validateMonthlyBudgetCents, reserveOwnerSpend, settleOwnerSpend,
   readResearchReconciliationOverview } from "./research-budget.js";
 import { evaluateResearchReconciliationAlert } from "./research-reconciliation-alert.js";
 import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
-  calculateVerifiedSpendCents } from "./research-price-policy.js";
+  researchPriceReadiness, calculateVerifiedSpendCents } from "./research-price-policy.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
@@ -696,18 +696,13 @@ async function ownerResearchBudgetReadiness(ownerId) {
       where: { ownerId }, select: { provider: true, model: true },
     }),
   ]);
-  let worstCaseCents = null;
-  if (env.AI_WEB_RESEARCH_ENABLED === "true" && setting) {
-    try {
-      worstCaseCents = requireResearchPriceEnvelope(setting).worstCaseCents;
-    } catch (error) {
-      if (!(error instanceof ResearchPricingUnavailable)) throw error;
-    }
-  }
-  const remainingCents = snapshot.ledger.availableCents;
-  return { ...snapshot,
-    enforcedForPaidSearch: worstCaseCents !== null &&
-      Number.isSafeInteger(remainingCents) && remainingCents >= worstCaseCents };
+  // Project the exact saved provider/model through the same reviewed tariff
+  // gate as claimResearchTask. An app budget or an external Google spend cap
+  // cannot authorize a tariff-less Google Search call.
+  return { ...snapshot, ...researchPriceReadiness({
+    setting, enabled: env.AI_WEB_RESEARCH_ENABLED === "true",
+    remainingCents: snapshot.ledger.availableCents,
+  }) };
 }
 app.get("/api/research-budget", aiOwnerAuthenticated, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
