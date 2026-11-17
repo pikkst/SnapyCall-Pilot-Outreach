@@ -14,6 +14,7 @@ type CampaignProgress = {
   id: string; status: string; operationalState: string; action: string;
   targetCount: number; uniqueSourcedCandidates: number;
   rawCandidateObservations: number; duplicateObservations: number;
+  noGroundingTasks: number;
   plannedTasks: number; expiredLeases: number; needsReconciliation: boolean;
   pausedTaskReview: Array<{taskIndex: number;lastErrorCode: "BILLING_UNCERTAIN"}>;
   tasks: { queued: number; running: number; completed: number;
@@ -2346,6 +2347,15 @@ function App() {
                           Manual reconciliation required. Expired worker leases:
                           {" " + campaignProgress.expiredLeases}.
                           Do not restart paid research until the spend ledger is checked.</p>}
+                        {campaignProgress.noGroundingTasks > 0 &&
+                          <p role="status" className="muted">
+                            {campaignProgress.noGroundingTasks} research {
+                              campaignProgress.noGroundingTasks === 1 ? "task" : "tasks"
+                            } finished without verifiable source citations.
+                            These attempts are complete and will not be retried.
+                            No people or emails were accepted from them.
+                            Application spend remains conservative, not the provider invoice.
+                          </p>}
                         <p className="muted">Next step: {campaignProgress.action}.
                           No email checks or messages were sent by this view.</p>
                         {campaignProgress.pausedTaskReview?.length === 1 &&
