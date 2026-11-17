@@ -62,7 +62,7 @@ test("one-shot test route reuses locked ledger, consumes durable marker and neve
     "reserveOwnerSpend", "reserveResearchAttempt", "GEMINI3_TEST_ACTION",
     "GEMINI3_TEST_ALREADY_USED", "settleOwnerSpend", "releaseResearchLease",
     "requireWorkspaceMembership", "researchCandidates({",
-  ]) assert.match(section, new RegExp(requirement));
+  ]) assert.ok(section.includes(requirement), "Missing contract: " + requirement);
   assert.match(section, /if \(used !== 0\) \{/);
   assert.match(section, /throw Object\.assign\(new Error/);
   assert.doesNotMatch(section, /runOneCampaignTask\(|startApprovedCampaignWorker\(/);
