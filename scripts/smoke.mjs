@@ -1050,6 +1050,10 @@ try {
     const futureClock = new Date("2026-12-02T10:00:00Z");
     const futureDay = new Date("2026-12-02T00:00:00Z");
     const rejectedReservation = "05dcc5e1-9e62-4f8a-83a7-3ea8363b9271";
+    // This independent budget-rollback smoke starts after the prior
+    // workspace dispatch window. Keep its original assertion focused on
+    // rollback rather than a deliberately enforced pacing rejection.
+    await elapsePacing(firstWorkspace);
     const leasesBefore = await partnerDb.researchRunLease.count();
     await assert.rejects(() => partnerDb.$transaction(async tx => {
       const lease = await reserveResearchLease(tx, {
