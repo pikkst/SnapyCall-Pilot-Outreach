@@ -81,3 +81,18 @@ test("editing model ID cannot borrow previously approved model's research readin
   assert.equal(status.steps[2].state, "blocked");
   assert.match(status.steps[2].description, /Save this model selection/);
 });
+
+
+test("unapproved non-Gemini models retain generic billing guidance", () => {
+  const status = researchReadiness({
+    ...ready,
+    selectedProvider: "openai", selectedModel: "unsupported-model",
+    savedProvider: "openai", savedModel: "unsupported-model",
+    pricingStatus: "MODEL_PRICING_UNAVAILABLE",
+    enforcedForPaidSearch: false,
+  });
+  assert.equal(status.ready, false);
+  assert.equal(status.steps[2].state, "blocked");
+  assert.match(status.steps[2].description, /no approved app-enforced search billing ceiling/);
+  assert.doesNotMatch(status.steps[2].description, /Gemini 3/);
+});
