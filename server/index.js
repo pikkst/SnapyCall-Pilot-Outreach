@@ -25,6 +25,8 @@ import { approveCampaignRun, stopApprovedCampaignRun,
 import { startApprovedCampaignWorker } from "./research-approved-runner.js";
 import { normalizeManualResearchSources, enqueueManualResearchSources } from "./research-manual-sources.js";
 import { inspectCampaignObservationEmail } from "./research-observation-email.js";
+import { approveEmailTriage, stopEmailTriage, emailTriageSummary,
+  startEmailTriageWorker } from "./research-email-triage-worker.js";
 import { acceptReviewedCampaignContact } from "./research-observation-contact-intake.js";
 import { runBoundedCampaignSlice } from "./research-campaign-slice.js";
 import { skipPausedResearchTask } from "./research-campaign-reconciliation.js";
@@ -1469,7 +1471,9 @@ app.get("/api/research-campaigns/:id/observations", candidateReadScope,
     const rows = await prisma.researchCampaignObservation.findMany({
       where: { campaignId: campaign.id, ...(cursor ? { id: { gt: cursor } } : {}) },
       select: { id: true, name: true, category: true, citationUrl: true,
-        rationale: true, status: true, observedAt: true, candidateId: true },
+        rationale: true, status: true, observedAt: true, candidateId: true,
+        emailTriageStatus: true, emailTriageCode: true,
+        emailTriageEmail: true, emailTriageAt: true },
       orderBy: { id: "asc" }, take: 101,
     });
     const page = rows.slice(0, 100);
@@ -1479,6 +1483,71 @@ app.get("/api/research-campaigns/:id/observations", candidateReadScope,
       nextCursor: rows.length > 100 ? page[page.length - 1].id : null,
       verifiedContacts: 0,
       sendingEnabled: false,
+    });
+  }));
+
+// Public-profile inspection is a separate non-AI, non-contact workflow.
+// A completed discovery campaign can receive one immutable owner approval.
+app.post("/api/research-campaigns/:id/email-triage/start",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (env.AI_EMAIL_TRIAGE_ENABLED !== "true") {
+      return res.status(503).json({ code: "EMAIL_TRIAGE_DISABLED" });
+    }
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const input = z.object({
+      maxPages: z.number().int().min(1).max(250),
+      confirmPublicInspection: z.literal(true),
+    }).strict().parse(req.body ?? {});
+    const result = await approveEmailTriage(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id, ...input,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
+app.post("/api/research-campaigns/:id/email-triage/stop",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    z.object({ confirmStop: z.literal(true) }).strict().parse(req.body ?? {});
+    const result = await stopEmailTriage(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
+app.get("/api/research-campaigns/:id/email-triage",
+  candidateReadScope, safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const campaign = await prisma.researchCampaign.findFirst({
+      where: { id: req.params.id, workspaceId: req.candidateScope,
+        ownerId: identity.id },
+      select: { id: true, emailTriageStatus: true, emailTriageMaxPages: true,
+        emailTriageExpiresAt: true },
+    });
+    if (!campaign) return res.status(404).json({ code: "CAMPAIGN_NOT_FOUND" });
+    const counts = await prisma.researchCampaignObservation.groupBy({
+      by: ["emailTriageStatus"], where: { campaignId: campaign.id },
+      _count: { id: true },
+    });
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      ...emailTriageSummary(campaign, counts),
+      enabled: env.AI_EMAIL_TRIAGE_ENABLED === "true",
     });
   }));
 
@@ -1943,6 +2012,8 @@ async function start() {
   // No automatic spending without an explicitly enabled server feature and
   // a persisted per-campaign approval. The loop is not an always-on SLA on
   // Render free or while the service is sleeping.
+  const stopEmailTriageWorker = env.AI_EMAIL_TRIAGE_ENABLED === "true"
+    ? startEmailTriageWorker(prisma) : () => {};
   const stopApprovedWorker = env.AI_AGENT_AUTORUN_ENABLED === "true" &&
     env.AI_AGENT_RESEARCH_ENABLED === "true" &&
     env.AI_AGENT_EXECUTOR_ENABLED === "true"
@@ -1953,6 +2024,7 @@ async function start() {
     if (shuttingDown) return;
     shuttingDown = true;
     stopApprovedWorker();
+    stopEmailTriageWorker();
     server.close(async () => {
       await prisma.$disconnect();
       process.exit(0);
