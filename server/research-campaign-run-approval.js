@@ -4,6 +4,7 @@ import { lockActiveWorkspaceMembership } from "./workspace-access.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
 
 const CUID = /^c[a-z0-9]{10,40}$/;
+const APPROVAL_LIFETIME_MS = 24 * 60 * 60 * 1000;
 export class ApprovedRunBlocked extends Error {
   constructor(code) {
     super("Approved campaign execution halted");
@@ -86,6 +87,7 @@ export async function approveCampaignRun(db, {
       provider: setting.provider, model: setting.model,
       priceVersion: price.priceVersion, worstCasePerCallCents: price.worstCaseCents,
       maxTasks: limits.maxTasks, maxWorstCaseCents: limits.maxWorstCaseCents,
+      expiresAt: new Date(Date.now() + APPROVAL_LIFETIME_MS),
     } });
     await tx.auditEvent.create({ data: {
       actorId: ownerId, action: "research.campaign.run.approved",
@@ -107,7 +109,8 @@ export function publicRunStatus(run) {
     startedTasks: run.startedTasks,
     maxWorstCaseCents: run.maxWorstCaseCents,
     committedWorstCaseCents: run.committedWorstCaseCents,
-    lastCode: run.lastCode, sendingEnabled: false,
+    lastCode: run.lastCode, expiresAt: run.expiresAt,
+    sendingEnabled: false,
   });
 }
 
@@ -120,6 +123,10 @@ export async function reserveApprovedRunCall(tx, {
   if (!run || run.workspaceId !== workspaceId || run.ownerId !== ownerId ||
       !["APPROVED", "RUNNING"].includes(run.status)) {
     throw new ApprovedRunBlocked("RUN_NOT_APPROVED");
+  }
+  if (!(run.expiresAt instanceof Date) ||
+      run.expiresAt.getTime() <= Date.now()) {
+    throw new ApprovedRunBlocked("RUN_APPROVAL_EXPIRED");
   }
   if (run.provider !== provider || run.model !== model ||
       run.priceVersion !== price.priceVersion ||
@@ -138,6 +145,7 @@ export async function reserveApprovedRunCall(tx, {
   const updated = await tx.researchCampaignRun.updateMany({
     where: { id: run.id, campaignId, workspaceId, ownerId,
       status: { in: ["APPROVED", "RUNNING"] },
+      expiresAt: { gt: new Date() },
       startedTasks: { lt: run.maxTasks },
       committedWorstCaseCents: { lte:
         run.maxWorstCaseCents - price.worstCaseCents } },
