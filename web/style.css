@@ -170,3 +170,10 @@ td button+button{margin-left:6px}
 .campaign-approved-run input[type=number]{display:block;max-width:130px;margin-top:7px}
 .campaign-approved-run input[type=checkbox]{flex:none;margin-top:4px}
 .campaign-approved-run button{margin:8px 0}
+
+/* Triage activity reflects durable server states, never an imaginary agent. */
+.campaign-email-triage{margin:15px 0;padding:16px;border:1px solid #d9e5f1;border-radius:12px;background:#f9fbff}
+.campaign-email-triage p{font-size:13px;line-height:1.55;margin:9px 0}
+.campaign-email-triage button{margin:9px 0}
+.campaign-email-triage[data-state="RUNNING"]{border-color:#8ebfa7}
+@media(prefers-reduced-motion:no-preference){.campaign-email-triage[data-state="RUNNING"] .campaign-stage-state{animation:campaign-active-pulse 1.65s ease-in-out infinite;border-radius:8px;padding:4px}}

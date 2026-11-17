@@ -277,6 +277,12 @@ model ResearchCampaign {
   observations ResearchCampaignObservation[]
   manualSources ResearchCampaignSource[]
   approvedRun ResearchCampaignRun?
+  // This is a separate no-provider-call authorization for reading public profiles.
+  emailTriageStatus String @default("IDLE")
+  emailTriageAuthorizedAt DateTime?
+  emailTriageExpiresAt DateTime?
+  emailTriageMaxPages Int @default(0)
+
   @@unique([workspaceId, ownerId, idempotencyKey])
   @@index([workspaceId, createdAt])
   @@index([status, createdAt])
@@ -323,6 +329,14 @@ model ResearchCampaignObservation {
   citationUrl String
   rationale String
   status String @default("UNVERIFIED")
+  // Non-billable public-profile inspection is not contact promotion.
+  emailTriageStatus String @default("UNCHECKED")
+  emailTriageCode String?
+  emailTriageLeaseToken String?
+  emailTriageLeaseUntil DateTime?
+  emailTriageEmail String?
+  emailTriageDigest String?
+  emailTriageAt DateTime?
   // A research observation is linked to a workspace contact only after
   // explicit source-backed, named-email review. Never by name alone.
   candidateId String?
@@ -332,6 +346,7 @@ model ResearchCampaignObservation {
   @@index([campaignId, observedAt, id])
   @@index([taskId])
   @@index([candidateId])
+  @@index([campaignId, emailTriageStatus, id])
 }
 
 model CandidateEmailVerification {

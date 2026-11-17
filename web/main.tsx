@@ -23,6 +23,16 @@ type CampaignProgress = {
 type CampaignObservation = {
   id: string; name: string; category: string; citationUrl: string;
   rationale: string; status: string; observedAt: string; candidateId?: string | null;
+  emailTriageStatus?: string; emailTriageCode?: string | null;
+  emailTriageEmail?: string | null; emailTriageAt?: string | null;
+};
+type CampaignEmailTriageState = {
+  status: "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED";
+  maxPages: number; expiresAt: string | null;
+  remaining: number; checking: number; reviewRequired: number;
+  noEmail: number; blocked: number; uncertain: number;
+  contactsCreated: 0; providerCalls: 0; sendingEnabled: false;
+  enabled: boolean;
 };
 type CampaignObservationsPage = {
   observations: CampaignObservation[]; nextCursor: string | null;
@@ -256,6 +266,12 @@ function App() {
   const campaignCreateIdempotency = useRef<string | null>(null);
   const [campaignProgressId, setCampaignProgressId] = useState<string | null>(null);
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress | null>(null);
+  const [campaignEmailTriage, setCampaignEmailTriage] =
+    useState<CampaignEmailTriageState | null>(null);
+  const [campaignTriageBusy, setCampaignTriageBusy] = useState(false);
+  const [campaignTriageConfirmed, setCampaignTriageConfirmed] = useState(false);
+  const [campaignTriageNotice, setCampaignTriageNotice] = useState("");
+
   const [campaignRunApproval, setCampaignRunApproval] =
     useState<CampaignRunApprovalState | null>(null);
   const [campaignRunApprovalBusy, setCampaignRunApprovalBusy] = useState(false);
@@ -467,6 +483,7 @@ function App() {
           setCampaignProgressLastSeen(Date.now());
           setCampaignProgressLiveWarning(false);
           void loadCampaignRunApproval(activeWorkspaceId, campaignProgressId);
+          void loadCampaignEmailTriage(activeWorkspaceId, campaignProgressId);
         }
       } catch {
         if (!disposed && generation === workspaceRequest.current &&
@@ -861,6 +878,62 @@ function App() {
     }
   }
 
+  async function loadCampaignEmailTriage(workspaceId: string, campaignId: string) {
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    try {
+      const state = await api<CampaignEmailTriageState>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/email-triage?workspaceId=" + encodeURIComponent(workspaceId));
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setCampaignEmailTriage(state);
+      }
+    } catch {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) setCampaignEmailTriage(null);
+    }
+  }
+
+  async function changeCampaignEmailTriage(workspaceId: string,
+    campaignId: string, action: "start" | "stop") {
+    if (campaignTriageBusy || workspaceId !== activeWorkspaceId ||
+        campaignId !== campaignProgressId) return;
+    if (action === "start" && (!campaignTriageConfirmed ||
+        !campaignEmailTriage?.enabled)) return;
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    setCampaignTriageBusy(true);
+    setCampaignTriageNotice("");
+    try {
+      await api("/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/email-triage/" + action + "?workspaceId=" +
+        encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify(action === "start" ? {
+            maxPages: Math.min(campaignProgress?.uniqueSourcedCandidates ?? 0, 250),
+            confirmPublicInspection: true,
+          } : { confirmStop: true }),
+        });
+      if (generation !== workspaceRequest.current ||
+          request !== campaignProgressRequest.current) return;
+      setCampaignTriageConfirmed(false);
+      setCampaignTriageNotice(action === "start"
+        ? "Public-profile triage approved. Only cited profiles will be checked. " +
+          "Emails require separate review; no contacts or messages are created."
+        : "Future profile inspections stopped. An in-progress read may finish.");
+      await loadCampaignEmailTriage(workspaceId, campaignId);
+    } catch (error) {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setCampaignTriageNotice(error instanceof Error
+          ? error.message : "Could not change public-profile inspection state.");
+      }
+    } finally {
+      if (generation === workspaceRequest.current) setCampaignTriageBusy(false);
+    }
+  }
+
   async function openCampaignProgress(workspaceId: string, campaignId: string) {
     if (activeWorkspaceId !== workspaceId) return;
     // Acknowledgement is task/snapshot-specific, never sticky across
@@ -890,6 +963,10 @@ function App() {
     setCampaignRunApprovalBusy(false);
     setCampaignNoReplayConfirmed(false);
     setCampaignMaxTasks(10);
+    setCampaignEmailTriage(null);
+    setCampaignTriageBusy(false);
+    setCampaignTriageConfirmed(false);
+    setCampaignTriageNotice("");
     setCampaignProgressId(campaignId);
     setCampaignProgress(null);
     setCampaignProgressStatus("loading");
@@ -905,6 +982,7 @@ function App() {
       setCampaignProgressLiveWarning(false);
       setCampaignProgressStatus("ready");
       void loadCampaignRunApproval(workspaceId, campaignId);
+      void loadCampaignEmailTriage(workspaceId, campaignId);
     } catch {
       if (workspaceRequest.current !== workspaceGeneration ||
           campaignProgressRequest.current !== request) return;
@@ -1954,6 +2032,64 @@ function App() {
                           value={Math.min(campaignProgress.uniqueSourcedCandidates,
                             campaignProgress.targetCount)}/>
                         <p>Operational status: <strong>{campaignProgress.operationalState}</strong></p>
+                        {campaignEmailTriage && <section
+                          className="campaign-email-triage"
+                          data-state={campaignEmailTriage.status}
+                          aria-label="Stored public email inspection results">
+                          <div className="campaign-stage-header">
+                            <strong>Public email evidence agent</strong>
+                            <span className="campaign-stage-state">
+                              {campaignEmailTriage.status.replaceAll("_", " ")}
+                            </span>
+                          </div>
+                          <p className="muted">This is an independent, bounded, read-only
+                            profile inspection. It does not call Gemini, verify mailboxes,
+                            create workspace contacts or send outreach.</p>
+                          <p role="status">
+                            <strong>{campaignEmailTriage.reviewRequired}</strong> named email
+                            observations requiring review ·
+                            {" "}{campaignEmailTriage.noEmail} no attributable email ·
+                            {" "}{campaignEmailTriage.blocked} blocked/ambiguous ·
+                            {" "}{campaignEmailTriage.checking} inspecting ·
+                            {" "}{campaignEmailTriage.remaining} remaining
+                          </p>
+                          {campaignEmailTriage.status === "RUNNING" &&
+                            <button type="button" className="secondary"
+                              disabled={campaignTriageBusy}
+                              onClick={() => void changeCampaignEmailTriage(
+                                p.id, campaignProgress.id, "stop")}>
+                              Stop future inspections
+                            </button>}
+                          {campaignEmailTriage.status === "IDLE" &&
+                            campaignEmailTriage.enabled &&
+                            ["COMPLETED", "PARTIAL"].includes(campaignProgress.status) &&
+                            campaignProgress.uniqueSourcedCandidates > 0 &&
+                            campaignProgress.uniqueSourcedCandidates <= 250 && <>
+                              <label className="campaign-contact-confirm">
+                                <input type="checkbox"
+                                  checked={campaignTriageConfirmed}
+                                  onChange={event => setCampaignTriageConfirmed(event.target.checked)}/>
+                                I authorize a single bounded inspection of up to
+                                {" "}{campaignProgress.uniqueSourcedCandidates} saved public
+                                profile URLs (24-hour approval, no paid AI calls,
+                                no automatic retry after an uncertain inspection).
+                              </label>
+                              <button type="button"
+                                disabled={!campaignTriageConfirmed || campaignTriageBusy}
+                                onClick={() => void changeCampaignEmailTriage(
+                                  p.id, campaignProgress.id, "start")}>
+                                {campaignTriageBusy ? "Approving…" : "Inspect saved public profiles"}
+                              </button>
+                            </>}
+                          {campaignEmailTriage.status === "IDLE" &&
+                            !campaignEmailTriage.enabled &&
+                            <p className="muted">Automated profile inspection is
+                              not enabled on this server.</p>}
+                          {campaignEmailTriage.status === "PAUSED" &&
+                            <p role="status">Inspection is paused. A previously
+                              attempted source will not be retried automatically.</p>}
+                          {campaignTriageNotice && <p role="status">{campaignTriageNotice}</p>}
+                        </section>}
                         <section className="campaign-stage-timeline"
                           aria-label="Live campaign stages">
                           <div className="campaign-stage-header">
@@ -2151,10 +2287,10 @@ function App() {
                           <div className="campaign-observations-heading">
                             <div>
                               <h5>Saved research findings</h5>
-                              <p className="muted">These are unverified source-linked
-                                observations, not imported workspace contacts. Email
-                                addresses have not been checked. Review the source
-                                before promoting any person to a contact.</p>
+                              <p className="muted">These are source-linked
+                                research observations, not imported workspace contacts.
+                                Public email evidence is independently reviewed; a
+                                published address is not proof of send permission.</p>
                             </div>
                             <button type="button" className="secondary"
                               disabled={campaignObservationsStatus === "loading"}
@@ -2186,8 +2322,18 @@ function App() {
                                 <span className="campaign-unverified">Unverified</span>
                               </div>
                               <small>{item.category.replaceAll("_", " ")}
-                                {" · "}Email not checked
+                                {" · "}{item.emailTriageStatus && item.emailTriageStatus !== "UNCHECKED"
+                                  ? item.emailTriageStatus.replaceAll("_", " ").toLowerCase()
+                                  : "Email not checked"}
                                 {" · "}{new Date(item.observedAt).toLocaleString()}</small>
+                              {item.emailTriageEmail && <p>
+                                <strong>Public email evidence: </strong>
+                                {item.emailTriageEmail} — human review required,
+                                not a saved contact or permission to send.</p>}
+                              {item.emailTriageCode && !item.emailTriageEmail &&
+                                <p className="muted">Inspection:
+                                  {" "}{item.emailTriageCode.replaceAll("_", " ")}.
+                                  No contact created.</p>}
                               <p>{item.rationale}</p>
                               <a href={item.citationUrl} target="_blank"
                                 rel="noopener noreferrer">View provider-cited source</a>
@@ -2322,6 +2468,10 @@ function App() {
                           setCampaignRunApprovalNotice("");
                           setCampaignRunApprovalBusy(false);
                           setCampaignNoReplayConfirmed(false);
+                          setCampaignEmailTriage(null);
+                          setCampaignTriageConfirmed(false);
+                          setCampaignTriageNotice("");
+                          setCampaignTriageBusy(false);
                           setCampaignProgressId(null);
                           setCampaignProgress(null);
                           setCampaignProgressStatus("idle");
