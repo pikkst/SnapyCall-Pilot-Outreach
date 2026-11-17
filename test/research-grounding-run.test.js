@@ -132,6 +132,18 @@ test("in-flight, stale lease and expired approval do not replay", async () => {
   assert.equal(expired.status, "EXPIRED");
 });
 
+test("cancelled discovery blocks a previously authorized grounding HEAD", async () => {
+  const { db, events } = fixture({
+    runStatus: "RUNNING", discoveryStatus: "CANCELLED",
+  });
+  const claimed = await claimGroundingObservation(db, scope, {
+    now: () => clock,
+  });
+  assert.equal(claimed.status, "DISCOVERY_CANCELLED");
+  assert.ok(events.some(e => e.data?.groundingRunStatus === "PAUSED"));
+  assert.equal(events.some(e => e.kind === "observation"), false);
+});
+
 test("source-count drift pauses before dispatch, even with previous approval", async () => {
   const { db, events } = fixture({
     runStatus: "RUNNING", sources: [citation],
