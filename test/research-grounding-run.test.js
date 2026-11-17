@@ -155,6 +155,49 @@ test("stop is idempotent, owner scoped, and prevents future claims", async () =>
   }).db, scope)).status, "NOT_RUNNING");
 });
 
+test("identical evidence replay is read-only after successful claim clearance", async () => {
+  const { db, events } = fixture({ runStatus: "RUNNING" });
+  const original = db.$transaction;
+  db.$transaction = fn => original(tx => {
+    const query = tx.$queryRaw;
+    tx.$queryRaw = async parts => {
+      if (parts.join(" ").includes('FROM "ResearchCampaignObservation"')) {
+        return [{
+          id: observationId, citationUrl: citation,
+          groundingStatus: "SOURCE_HINT",
+          groundingResolvedUrl: "https://experts.example.org/ada",
+          groundingProvenance: "GOOGLE_GROUNDING_LOCATION_HEADER",
+          groundingCode: null,
+          groundingLeaseToken: null,
+          groundingLeaseUntil: null,
+        }];
+      }
+      return query(parts);
+    };
+    return fn(tx);
+  });
+  const same = await persistGroundingSourceHint(db, {
+    ...scope, observationId, originalCitationUrl: citation,
+    claimToken: existingToken,
+    outcome: {
+      status: "SOURCE_HINT", citationUrl: citation,
+      sourceUrl: "https://experts.example.org/ada",
+      provenance: "GOOGLE_GROUNDING_LOCATION_HEADER",
+      identityVerified: false, emailVerified: false,
+      contactCreated: false, sendingEnabled: false,
+    },
+  }, { now: () => clock });
+  assert.equal(same.code, "GROUNDING_EVIDENCE_ALREADY_SAVED");
+  assert.equal(events.length, 0);
+  const conflicting = await persistGroundingSourceHint(db, {
+    ...scope, observationId, originalCitationUrl: citation,
+    claimToken: existingToken,
+    outcome: { status: "REJECTED", code: "GROUNDING_DESTINATION_INVALID" },
+  }, { now: () => clock });
+  assert.equal(conflicting.code, "GROUNDING_EVIDENCE_IMMUTABLE");
+  assert.equal(events.length, 0);
+});
+
 test("persisted claimed evidence requires matching live token, and clears lease", async () => {
   const active = fixture({ runStatus: "RUNNING" });
   const original = active.db.$transaction;
