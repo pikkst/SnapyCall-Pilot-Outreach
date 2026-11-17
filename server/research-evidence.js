@@ -88,7 +88,7 @@ export function normalizeResearchEvidence({ text, citations, limit }) {
 export function buildBoundedRetrievalManifest({ provider, observedAt, records }) {
   if (typeof provider !== "string" || !/^[a-z][a-z0-9_-]{1,39}$/.test(provider) ||
       typeof observedAt !== "string" ||
-      !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(observedAt) ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(observedAt) ||
       !Number.isFinite(Date.parse(observedAt)) ||
       new Date(observedAt).toISOString() !== observedAt ||
       !Array.isArray(records) || records.length < 1 || records.length > 20) {
@@ -121,7 +121,7 @@ export function buildBoundedRetrievalManifest({ provider, observedAt, records })
       observedAt,
     });
   }
-  normalized.sort((a, b) => a.sourceId.localeCompare(b.sourceId, "en"));
+  normalized.sort((a, b) => a.sourceId < b.sourceId ? -1 : a.sourceId > b.sourceId ? 1 : 0);
   const canonicalBytes = JSON.stringify({ version: "bounded-retrieval-v1", records: normalized });
   const digest = createHash("sha256").update(canonicalBytes, "utf8").digest("hex");
   return Object.freeze({
