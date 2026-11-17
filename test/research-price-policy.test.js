@@ -39,6 +39,7 @@ test("provider-specific paid search policies price Gemini grounded prompts and O
 test("all other models remain blocked despite the pilot activation", () => {
   for (const config of [
     { provider: "openai", model: "gpt-4.1" },
+    { provider: "gemini", model: "gemini-3-flash-preview" },
     { provider: "gemini", model: "gemini-3.1-pro-preview" },
     { provider: "anthropic", model: "claude-sonnet-4-5" },
     { provider: "anthropic", model: "arbitrary-custom-model" },
