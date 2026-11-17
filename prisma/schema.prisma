@@ -395,9 +395,10 @@ model ResearchCampaignSource {
   campaign ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
   // A user-provided URL is a research input, never person/email evidence.
   normalizedUrl String @db.VarChar(2048)
+  normalizedUrlHash String @db.Char(64)
   sourceKind String @default("USER_URL")
   status String @default("PENDING_ENRICHMENT")
   createdAt DateTime @default(now())
-  @@unique([campaignId, normalizedUrl])
+  @@unique([campaignId, normalizedUrlHash])
   @@index([campaignId, status, createdAt])
 }
