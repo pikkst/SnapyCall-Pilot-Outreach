@@ -19,6 +19,7 @@ import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchP
 import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
+import { inspectCampaignObservationEmail } from "./research-observation-email.js";
 import { runBoundedCampaignSlice } from "./research-campaign-slice.js";
 import { skipPausedResearchTask } from "./research-campaign-reconciliation.js";
 import { inspectResearchPreview } from "./research-contact-enrichment.js";
@@ -1421,6 +1422,24 @@ app.get("/api/research-campaigns/:id/observations", candidateReadScope,
       verifiedContacts: 0,
       sendingEnabled: false,
     });
+  }));
+
+// Explicit single-observation inspection using the existing bounded public
+// page reader. This does not use AI, write contacts or send invitations.
+app.post("/api/research-campaigns/:id/observations/:observationId/email-evidence",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (req.candidateScope === null) {
+      return res.status(403).json({ error: "Partner workspace required" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    z.object({}).strict().parse(req.body ?? {});
+    const result = await inspectCampaignObservationEmail(prisma, {
+      campaignId: req.params.id, observationId: req.params.observationId,
+      workspaceId: req.candidateScope, ownerId: identity.id,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
   }));
 
 // Explicitly invoked one-task executor. Both flags are OFF by default;
