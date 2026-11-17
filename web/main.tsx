@@ -741,7 +741,7 @@ function App() {
   async function queueManualCampaignSources(workspaceId: string, campaignId: string) {
     if (workspaceId !== activeWorkspaceId || campaignProgressId !== campaignId ||
         manualSourceBusy) return;
-    const urls = manualSourceDraft.split(/\\r?\\n/).map(url => url.trim()).filter(Boolean);
+    const urls = manualSourceDraft.split(/\r?\n/).map(url => url.trim()).filter(Boolean);
     if (!urls.length || urls.length > 25) {
       setManualSourceNotice("Enter 1 to 25 public HTTPS URLs, one per line.");
       return;
@@ -1752,7 +1752,7 @@ function App() {
                           <label>Public source URLs
                             <textarea rows={4} value={manualSourceDraft}
                               disabled={manualSourceBusy}
-                              placeholder={"https://example.org/experts/jane\\nhttps://company.example.org/team"}
+                              placeholder={"https://example.org/experts/jane\nhttps://company.example.org/team"}
                               onChange={event => setManualSourceDraft(event.target.value)}/>
                           </label>
                           <div className="campaign-source-actions">
