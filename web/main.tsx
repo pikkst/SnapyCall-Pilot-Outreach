@@ -43,7 +43,7 @@ type CampaignSourcesResponse = {
 type ApprovedCampaignRun = {
   id: string; status: string; maxTasks: number; startedTasks: number;
   maxWorstCaseCents: number; committedWorstCaseCents: number;
-  lastCode: string | null; sendingEnabled: false;
+  lastCode: string | null; expiresAt: string; sendingEnabled: false;
 };
 type CampaignRunApprovalState = {
   run: ApprovedCampaignRun | null; autonomousRunEnabled: boolean;
@@ -1993,6 +1993,9 @@ function App() {
                             {" · "}Conservative ceiling committed:
                             {" $"}{(campaignRunApproval.run.committedWorstCaseCents / 100).toFixed(2)}
                             {" / $"}{(campaignRunApproval.run.maxWorstCaseCents / 100).toFixed(2)}</p>
+                          <p>Approval expires:
+                            {" "}{new Date(campaignRunApproval.run.expiresAt).toLocaleString()}.
+                            Later calls are forbidden after this time.</p>
                           {campaignRunApproval.run.lastCode &&
                             <p role="status">Attention: {campaignRunApproval.run.lastCode.replaceAll("_", " ")}</p>}
                           {["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
