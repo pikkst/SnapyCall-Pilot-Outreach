@@ -2049,12 +2049,38 @@ function App() {
                     </ol>
                   </>}
                   <div className="campaign-overview">
-                    <h3>Research campaigns</h3>
-                    <p className="muted">Plan a 100-candidate research test using your
-                      own AI provider. A plan costs nothing; each manually approved
-                      work unit can generate a paid provider call. Results are
-                      <strong> unverified expert candidates</strong>, not usable email contacts.
-                      Nothing runs automatically and no invitations are sent.</p>
+                    <h3>Research campaigns · up to 100 cited candidates</h3>
+                    <p className="muted">The same research criteria work for a single search
+                      or a 100-candidate campaign. Planning a campaign is free, but
+                      running its tasks may incur provider charges. A cited candidate
+                      is not a verified contact: only a reviewed name, category and
+                      attributable published email qualifies. No invitations are sent.</p>
+                    <section aria-label="Campaign research setup" className="research-readiness">
+                      <div className="research-readiness-heading">
+                        <h4>Research setup</h4>
+                        <span className={readiness.ready ? "research-ready-label" : "research-pending-label"}>
+                          {readiness.ready ? "Ready for paid research" : "Setup needed"}
+                        </span>
+                      </div>
+                      <ol className="research-readiness-steps">
+                        {readiness.steps.map(step => <li key={step.key}
+                          className={"research-readiness-step " + step.state}>
+                          <strong>{step.title}</strong>
+                          <p className="muted">{step.description}</p>
+                          {step.state === "action" && <button type="button"
+                            className="secondary" onClick={() => setPartnerTab("settings")}>
+                              Configure AI adapter and budget
+                            </button>}
+                        </li>)}
+                      </ol>
+                      <p className="muted">Google Sheets export/sync and Gmail sending
+                        are optional later stages; neither is required for
+                        research. Sheets sync is not active and outreach stays disabled.</p>
+                      {!readiness.ready && <button type="button" className="secondary"
+                        onClick={() => setPartnerTab("settings")}>
+                        Configure AI adapter, spending limit and quotas
+                      </button>}
+                    </section>
                     <div className="form-grid">
                       <label>100-candidate search criteria
                         <textarea rows={2} minLength={12} maxLength={240}
@@ -2688,12 +2714,12 @@ function App() {
                   </section>
                   <section aria-label="AI web research preview" className="review-panel">
                   <h3>Find experts with AI web search</h3>
-                  <p className="muted">Describe the type of experts you need. Run a source-backed search,
-                    then select candidates to save in your review queue. A single search supports up to
-                    20 results. For 100-candidate discovery campaigns, use
-                    Dashboard → Research campaigns. Campaign findings are not
-                    automatically converted into reviewed Candidate records or
-                    verified email contacts.</p>
+                  <p className="muted">Use the same research criteria for one request
+                    (up to 20 cited candidates) or to plan a 100-candidate campaign.
+                    Planning is free; running any AI search requires your own
+                    configured provider, application spending limit and quotas.
+                    These are unverified candidates until a specific published
+                    email is independently reviewed. Sheets and Gmail are optional later.</p>
                   <details className="research-technical-details">
                     <summary>Search limits and costs</summary>
                     <p className="muted">Paid public-web research with your selected
@@ -2745,8 +2771,28 @@ function App() {
                     </label>
                     <button type="submit" disabled={researchStatus === "loading" ||
                       !readiness.ready}>
-                      {researchStatus === "loading" ? "Researching…" : "Search public web"}
+                      {researchStatus === "loading" ? "Researching…" : "Run one search"}
                     </button>
+                    <button type="button" className="secondary"
+                      disabled={researchStatus === "loading" ||
+                        researchQuery.trim().length < 12 ||
+                        researchQuery.trim().length > 240}
+                      onClick={() => {
+                        // Reuse the existing free planning and paid approval
+                        // contracts; navigation never starts a provider call.
+                        setCampaignTestQuery(researchQuery.trim());
+                        campaignCreateIdempotency.current = null;
+                        setCampaignTestNotice(
+                          "Criteria copied from your single search. Review the setup, then plan your 100-candidate campaign for free.");
+                        setPartnerTab("dashboard");
+                      }}>
+                      Plan 100-candidate campaign (free)
+                    </button>
+                    {researchQuery.trim().length > 240 &&
+                      <p className="muted" role="status">
+                        Shorten the criteria to 240 characters to use them in a
+                        campaign. Single-search criteria can be longer.
+                      </p>}
                   </form>
                   {!readiness.ready && <p className="muted" role="status">
                     Paid AI search stays disabled until the server confirms it is available.
