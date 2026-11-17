@@ -165,3 +165,50 @@ test("source-resolution summary has no contacts, sends or provider spending", as
     contactsCreated: 0, providerCalls: 0, sendingEnabled: false,
   });
 });
+
+// Read-only readiness must mirror the write-side validation without making
+// an external request or consuming a one-shot authorization.
+test("source readiness uses authoritative observations, not target progress", async () => {
+  const source = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/ABCDEFGH12345";
+  async function check({ status = "COMPLETED", run = "IDLE", count = 2,
+    citations = [source, source], enabled = true } = {}) {
+    let inspected = 0;
+    const db = {
+      researchCampaign: { findFirst: async () => ({
+        id: campaignId, status, groundingRunStatus: run,
+        groundingRunMaxSources: 0, groundingRunExpiresAt: null,
+      }) },
+      researchCampaignObservation: {
+        groupBy: async () => [{
+          groundingStatus: "UNCHECKED", _count: { id: count },
+        }],
+        count: async () => 0,
+        findMany: async () => { inspected++; return citations.map(citationUrl =>
+          ({ citationUrl })); },
+      },
+    };
+    const result = await groundingResolutionSummary(db,
+      { campaignId, workspaceId, ownerId }, { enabled });
+    return { result, inspected };
+  }
+  const ready = await check();
+  assert.equal(ready.result.canApprove, true);
+  assert.equal(ready.result.sourceCount, 2);
+  assert.equal(ready.result.approvalBlockReason, null);
+  assert.equal(ready.inspected, 1);
+  for (const [options, reason] of [
+    [{ enabled: false }, "SERVER_DISABLED"],
+    [{ status: "RUNNING" }, "DISCOVERY_NOT_TERMINAL"],
+    [{ run: "PAUSED" }, "APPROVAL_ALREADY_USED"],
+    [{ count: 0 }, "SOURCE_COUNT_OUT_OF_RANGE"],
+    [{ count: 251 }, "SOURCE_COUNT_OUT_OF_RANGE"],
+    [{ citations: [source, "https://example.org/"] }, "CITATION_REVIEW_REQUIRED"],
+  ]) {
+    const checked = await check(options);
+    assert.equal(checked.result.canApprove, false);
+    assert.equal(checked.result.approvalBlockReason, reason);
+    if (reason !== "CITATION_REVIEW_REQUIRED") {
+      assert.equal(checked.inspected, 0);
+    }
+  }
+});
