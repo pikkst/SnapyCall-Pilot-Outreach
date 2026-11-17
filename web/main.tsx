@@ -19,6 +19,14 @@ type CampaignProgress = {
     paused: number; failed: number; cancelled: number };
   contactVerification: "NOT_PERFORMED"; sendingEnabled: false;
 };
+type CampaignObservation = {
+  id: string; name: string; category: string; citationUrl: string;
+  rationale: string; status: string; observedAt: string;
+};
+type CampaignObservationsPage = {
+  observations: CampaignObservation[]; nextCursor: string | null;
+  verifiedContacts: number; sendingEnabled: false;
+};
 type PartnerTab = "dashboard" | "candidates" | "discovery" | "drafts" | "profile" | "settings";
 type PartnerSession = { authenticated: boolean; conflict?: boolean; userId?: string; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
@@ -224,6 +232,11 @@ function App() {
   const campaignCreateIdempotency = useRef<string | null>(null);
   const [campaignProgressId, setCampaignProgressId] = useState<string | null>(null);
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress | null>(null);
+  const [campaignObservations, setCampaignObservations] = useState<CampaignObservation[]>([]);
+  const [campaignObservationsCursor, setCampaignObservationsCursor] = useState<string | null>(null);
+  const [campaignObservationsStatus, setCampaignObservationsStatus] =
+    useState<"idle" | "loading" | "ready" | "error">("idle");
+  const campaignObservationsRequest = useRef(0);
   const [campaignProgressStatus, setCampaignProgressStatus] =
     useState<"idle" | "loading" | "ready" | "error">("idle");
   const [workspaceDataStatus, setWorkspaceDataStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -680,6 +693,10 @@ function App() {
     setSkipChargeConfirmed(false);
     const workspaceGeneration = workspaceRequest.current;
     const request = ++campaignProgressRequest.current;
+    ++campaignObservationsRequest.current;
+    setCampaignObservations([]);
+    setCampaignObservationsCursor(null);
+    setCampaignObservationsStatus("idle");
     setCampaignProgressId(campaignId);
     setCampaignProgress(null);
     setCampaignProgressStatus("loading");
@@ -696,6 +713,35 @@ function App() {
       if (workspaceRequest.current !== workspaceGeneration ||
           campaignProgressRequest.current !== request) return;
       setCampaignProgressStatus("error");
+    }
+  }
+
+  async function loadCampaignObservations(workspaceId: string, campaignId: string,
+    after: string | null = null) {
+    if (activeWorkspaceId !== workspaceId || campaignProgressId !== campaignId ||
+        campaignObservationsStatus === "loading") return;
+    const generation = workspaceRequest.current;
+    const request = ++campaignObservationsRequest.current;
+    setCampaignObservationsStatus("loading");
+    try {
+      // Reuse the already owner- and workspace-scoped read endpoint.
+      // No provider calls, contact verification or candidate import here.
+      const page = await api<CampaignObservationsPage>("/research-campaigns/" +
+        encodeURIComponent(campaignId) + "/observations?workspaceId=" +
+        encodeURIComponent(workspaceId) + (after ? "&after=" +
+          encodeURIComponent(after) : ""));
+      if (generation !== workspaceRequest.current ||
+          request !== campaignObservationsRequest.current) return;
+      setCampaignObservations(current => after
+        ? [...current, ...page.observations.filter(item =>
+          !current.some(existing => existing.id === item.id))]
+        : page.observations);
+      setCampaignObservationsCursor(page.nextCursor);
+      setCampaignObservationsStatus("ready");
+    } catch {
+      if (generation !== workspaceRequest.current ||
+          request !== campaignObservationsRequest.current) return;
+      setCampaignObservationsStatus("error");
     }
   }
 
@@ -1671,6 +1717,61 @@ function App() {
                               {" "}Review your application budget and spend ledger in AI settings.
                               No automatic budget increase or refund is performed.</p>}
                         </>}
+                        <section className="campaign-observations"
+                          aria-label="Saved campaign findings">
+                          <div className="campaign-observations-heading">
+                            <div>
+                              <h5>Saved research findings</h5>
+                              <p className="muted">These are unverified source-linked
+                                observations, not imported workspace contacts. Email
+                                addresses have not been checked. Review the source
+                                before promoting any person to a contact.</p>
+                            </div>
+                            <button type="button" className="secondary"
+                              disabled={campaignObservationsStatus === "loading"}
+                              onClick={() => void loadCampaignObservations(
+                                p.id, campaignProgress.id)}>
+                              {campaignObservationsStatus === "idle"
+                                ? "View saved findings" : "Reload findings"}
+                            </button>
+                          </div>
+                          {campaignObservationsStatus === "loading" &&
+                            <p role="status">Loading saved findings…</p>}
+                          {campaignObservationsStatus === "error" &&
+                            <p role="alert">Unable to load findings. No research
+                              request was started. Try again.</p>}
+                          {campaignObservationsStatus !== "idle" && (
+                            <p className="muted" role="status">
+                              Showing {campaignObservations.length} of
+                              {" "}{campaignProgress.uniqueSourcedCandidates} saved
+                              observations · 0 verified contacts in this
+                              research view · Email not checked</p>
+                          )}
+                          {campaignObservationsStatus === "ready" &&
+                            campaignObservations.length === 0 &&
+                            <p>No source-linked findings saved yet.</p>}
+                          {campaignObservations.length > 0 && <ul className="campaign-observation-list">
+                            {campaignObservations.map(item => <li key={item.id}>
+                              <div className="campaign-observation-title">
+                                <strong>{item.name}</strong>
+                                <span className="campaign-unverified">Unverified</span>
+                              </div>
+                              <small>{item.category.replaceAll("_", " ")}
+                                {" · "}Email not checked
+                                {" · "}{new Date(item.observedAt).toLocaleString()}</small>
+                              <p>{item.rationale}</p>
+                              <a href={item.citationUrl} target="_blank"
+                                rel="noopener noreferrer">View provider-cited source</a>
+                            </li>)}
+                          </ul>}
+                          {campaignObservationsCursor &&
+                            <button type="button" className="secondary"
+                              disabled={campaignObservationsStatus === "loading"}
+                              onClick={() => void loadCampaignObservations(
+                                p.id, campaignProgress.id, campaignObservationsCursor)}>
+                              Load more saved findings
+                            </button>}
+                        </section>
                         <button type="button" className="secondary"
                           onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
                           Refresh progress</button>
@@ -1678,6 +1779,10 @@ function App() {
                       <button type="button" className="secondary"
                         onClick={() => {
                           ++campaignProgressRequest.current;
+                          ++campaignObservationsRequest.current;
+                          setCampaignObservations([]);
+                          setCampaignObservationsCursor(null);
+                          setCampaignObservationsStatus("idle");
                           setCampaignProgressId(null);
                           setCampaignProgress(null);
                           setCampaignProgressStatus("idle");
