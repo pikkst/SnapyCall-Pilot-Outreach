@@ -45,6 +45,26 @@ and returns an idempotent response only for identical outcomes. Rejected or
 unresolved results retain a sanitized reason code without a destination URL.
 No source URL or person data is duplicated into audit metadata.
 
+### Grounding authorization and one-shot source claims (internal, not activated)
+
+`approveGroundingResolution`, `claimGroundingObservation` and
+`stopGroundingResolution` now provide a DB-persisted, owner/workspace-scoped
+approval with exact observed-source snapshot count, a maximum of 250,
+24-hour expiry, membership/campaign row locks and one outstanding observation
+lease. The first source request must happen **after** claim commit. Expired
+claims put the campaign in PAUSED/LEASE_REVIEW_REQUIRED, never replay.
+
+`persistGroundingSourceHint` requires a matching, unexpired claim token when
+the campaign has an active grounding approval; the commit atomically clears
+the token. A user stop prevents a late in-flight result from being committed.
+No endpoints, server timer, live HTTP dispatch, automatic 233-row backfill,
+outreach, contacts or email inspection are enabled by this change.
+
+The next integration must connect **only** the trusted backend worker to
+the existing resolver and save function, enforce a bounded HTTP dispatch
+and explicit owner confirmation in UI, and expose read-only progress.
+A saved SOURCE_HINT remains unverified until separate person/email inspection.
+
 **Current boundary:** the persistence function is an internal trusted-adapter
 contract, not a new API or a browser-supplied source acceptance path. It is not
 wired to background jobs or historical data. Before any execution, add

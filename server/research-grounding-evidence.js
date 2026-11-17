@@ -51,7 +51,7 @@ export function validateGroundingOutcome(citationUrl, outcome) {
 
 export async function persistGroundingSourceHint(db, {
   campaignId, observationId, workspaceId, ownerId, originalCitationUrl,
-  outcome,
+  outcome, claimToken = null,
 }, { now = () => new Date() } = {}) {
   if (![campaignId, observationId, workspaceId, ownerId].every(isWorkspaceId) ||
       !OBSERVATION_ID.test(observationId)) {
@@ -69,7 +69,7 @@ export async function persistGroundingSourceHint(db, {
 
     // Lock order: workspace membership -> campaign -> observation.
     const campaigns = await tx.$queryRaw`
-      SELECT "id" FROM "ResearchCampaign"
+      SELECT "id","groundingRunStatus" FROM "ResearchCampaign"
       WHERE "id" = ${campaignId} AND "workspaceId" = ${workspaceId}
         AND "ownerId" = ${ownerId} AND "status" != 'CANCELLED'
       FOR UPDATE`;
@@ -78,7 +78,8 @@ export async function persistGroundingSourceHint(db, {
     }
     const rows = await tx.$queryRaw`
       SELECT "id","citationUrl","groundingStatus",
-        "groundingResolvedUrl","groundingProvenance","groundingCode"
+        "groundingResolvedUrl","groundingProvenance","groundingCode",
+        "groundingLeaseToken","groundingLeaseUntil"
       FROM "ResearchCampaignObservation"
       WHERE "id" = ${observationId} AND "campaignId" = ${campaignId}
       FOR UPDATE`;
@@ -91,6 +92,8 @@ export async function persistGroundingSourceHint(db, {
     if (row.citationUrl !== originalCitationUrl) {
       return { status: 409, code: "GROUNDING_CITATION_CHANGED" };
     }
+    // A completed identical write is a read-only replay, not a new
+    // dispatch. Handle it before checking the cleared claim token.
     if (row.groundingStatus !== "UNCHECKED") {
       const same = row.groundingStatus === fields.groundingStatus &&
         row.groundingResolvedUrl === fields.groundingResolvedUrl &&
@@ -100,10 +103,25 @@ export async function persistGroundingSourceHint(db, {
         ? { status: 200, code: "GROUNDING_EVIDENCE_ALREADY_SAVED" }
         : { status: 409, code: "GROUNDING_EVIDENCE_IMMUTABLE" };
     }
+    // A first commit requires the active fencing token. Expired or stopped
+    // claims cannot write results after an uncertain external request.
+    const running = campaigns[0].groundingRunStatus === "RUNNING";
+    if (row.groundingLeaseToken != null || running) {
+      if (!running || typeof claimToken !== "string" ||
+          claimToken !== row.groundingLeaseToken ||
+          !(row.groundingLeaseUntil instanceof Date) ||
+          row.groundingLeaseUntil <= clock) {
+        return { status: 409, code: "GROUNDING_LEASE_UNCONFIRMED" };
+      }
+    } else if (claimToken !== null) {
+      return { status: 409, code: "GROUNDING_LEASE_UNCONFIRMED" };
+    }
     const changed = await tx.researchCampaignObservation.updateMany({
       where: { id: observationId, campaignId,
-        citationUrl: originalCitationUrl, groundingStatus: "UNCHECKED" },
-      data: { ...fields, groundingResolvedAt: clock },
+        citationUrl: originalCitationUrl, groundingStatus: "UNCHECKED",
+        groundingLeaseToken: claimToken },
+      data: { ...fields, groundingResolvedAt: clock,
+        groundingLeaseToken: null, groundingLeaseUntil: null },
     });
     if (changed.count !== 1) {
       return { status: 409, code: "GROUNDING_EVIDENCE_CONFLICT" };
