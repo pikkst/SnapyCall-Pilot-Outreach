@@ -1788,52 +1788,7 @@ function App() {
                         Loading committed research progress…</p>}
                       {campaignProgressStatus === "error" && <p role="alert">
                         Progress could not be loaded.
-                        <section className="campaign-manual-sources"
-                          aria-label="Add public research sources">
-                          <h5>Add public source URLs</h5>
-                          <p className="muted">Paste up to 25 public HTTPS profile or
-                            company page URLs, one per line. These sources are
-                            saved for a future evidence review stage. Saving does
-                            not launch AI, inspect websites, create contacts or
-                            authorize provider spending.</p>
-                          <label>Public source URLs
-                            <textarea rows={4} value={manualSourceDraft}
-                              disabled={manualSourceBusy}
-                              placeholder={"https://example.org/experts/jane\nhttps://company.example.org/team"}
-                              onChange={event => setManualSourceDraft(event.target.value)}/>
-                          </label>
-                          <div className="campaign-source-actions">
-                            <button type="button"
-                              disabled={manualSourceBusy ||
-                                !manualSourceDraft.trim()}
-                              onClick={() => void queueManualCampaignSources(
-                                p.id, campaignProgressId)}>
-                              {manualSourceBusy ? "Saving sources…" : "Add to research queue"}
-                            </button>
-                            <button type="button" className="secondary"
-                              disabled={manualSourceBusy || manualSourceStatus === "loading"}
-                              onClick={() => void loadManualCampaignSources(
-                                p.id, campaignProgressId)}>
-                              {manualSourceStatus === "loading"
-                                ? "Loading sources…" : "View queued sources"}
-                            </button>
-                          </div>
-                          {manualSourceNotice && <p role="status">{manualSourceNotice}</p>}
-                          {manualSourceStatus === "error" &&
-                            <p role="alert">Saved source list unavailable. Try again.</p>}
-                          {manualSourceStatus === "ready" &&
-                            <p className="muted">{manualSources.length} saved source(s)
-                              shown · Not inspected · No contacts created</p>}
-                          {manualSourceStatus === "ready" && manualSources.length > 0 &&
-                            <ul className="campaign-source-list">
-                              {manualSources.map(source => <li key={source.id}>
-                                <a href={source.normalizedUrl} target="_blank"
-                                  rel="noopener noreferrer">{source.normalizedUrl}</a>
-                                <small>{source.status.replaceAll("_", " ")}
-                                  {" · "}Added {new Date(source.createdAt).toLocaleString()}</small>
-                              </li>)}
-                            </ul>}
-                        </section>
+
                         <button type="button" className="secondary"
                           onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
                           Retry</button></p>}
@@ -2041,6 +1996,52 @@ function App() {
                                 p.id, campaignProgress.id, campaignObservationsCursor)}>
                               Load more saved findings
                             </button>}
+                        </section>
+                        <section className="campaign-manual-sources"
+                          aria-label="Add public research sources">
+                          <h5>Add public source URLs</h5>
+                          <p className="muted">Paste up to 25 public HTTPS profile or
+                            company page URLs, one per line. These sources are
+                            saved for a future evidence review stage. Saving does
+                            not launch AI, inspect websites, create contacts or
+                            authorize provider spending.</p>
+                          <label>Public source URLs
+                            <textarea rows={4} value={manualSourceDraft}
+                              disabled={manualSourceBusy}
+                              placeholder={"https://example.org/experts/jane\nhttps://company.example.org/team"}
+                              onChange={event => setManualSourceDraft(event.target.value)}/>
+                          </label>
+                          <div className="campaign-source-actions">
+                            <button type="button"
+                              disabled={manualSourceBusy ||
+                                !manualSourceDraft.trim()}
+                              onClick={() => void queueManualCampaignSources(
+                                p.id, campaignProgressId)}>
+                              {manualSourceBusy ? "Saving sources…" : "Add to research queue"}
+                            </button>
+                            <button type="button" className="secondary"
+                              disabled={manualSourceBusy || manualSourceStatus === "loading"}
+                              onClick={() => void loadManualCampaignSources(
+                                p.id, campaignProgressId)}>
+                              {manualSourceStatus === "loading"
+                                ? "Loading sources…" : "View queued sources"}
+                            </button>
+                          </div>
+                          {manualSourceNotice && <p role="status">{manualSourceNotice}</p>}
+                          {manualSourceStatus === "error" &&
+                            <p role="alert">Saved source list unavailable. Try again.</p>}
+                          {manualSourceStatus === "ready" &&
+                            <p className="muted">{manualSources.length} saved source(s)
+                              shown · Not inspected · No contacts created</p>}
+                          {manualSourceStatus === "ready" && manualSources.length > 0 &&
+                            <ul className="campaign-source-list">
+                              {manualSources.map(source => <li key={source.id}>
+                                <a href={source.normalizedUrl} target="_blank"
+                                  rel="noopener noreferrer">{source.normalizedUrl}</a>
+                                <small>{source.status.replaceAll("_", " ")}
+                                  {" · "}Added {new Date(source.createdAt).toLocaleString()}</small>
+                              </li>)}
+                            </ul>}
                         </section>
                         <button type="button" className="secondary"
                           onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
