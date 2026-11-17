@@ -45,61 +45,41 @@ and returns an idempotent response only for identical outcomes. Rejected or
 unresolved results retain a sanitized reason code without a destination URL.
 No source URL or person data is duplicated into audit metadata.
 
-### Grounding authorization and one-shot source claims (internal, not activated)
+### Grounding authorization and one-shot source resolution (OFF by default)
 
-`approveGroundingResolution`, `claimGroundingObservation` and
-`stopGroundingResolution` now provide a DB-persisted, owner/workspace-scoped
-approval with exact observed-source snapshot count, a maximum of 250,
-24-hour expiry, membership/campaign row locks and one outstanding observation
-lease. The first source request must happen **after** claim commit. Expired
-claims put the campaign in PAUSED/LEASE_REVIEW_REQUIRED, never replay.
+`AI_GROUNDING_RESOLUTION_ENABLED=true` gates a separate owner-scoped stage
+for resolving provider-cited Google grounding redirect headers. The new
+`POST /api/research-campaigns/:id/grounding/start` endpoint requires
+`{maxSources,confirmPublicRequests:true}`, existing workspace session,
+origin protection and limiter. A matching owner stop and read-only summary
+GET endpoint are available. No UI control exists yet and the feature must
+remain OFF until explicit rollout and authenticated staging smoke.
 
-`persistGroundingSourceHint` requires a matching, unexpired claim token when
-the campaign has an active grounding approval; the commit atomically clears
-the token. A user stop prevents a late in-flight result from being committed.
-No endpoints, server timer, live HTTP dispatch, automatic 233-row backfill,
-outreach, contacts or email inspection are enabled by this change.
+Approval is immutable and applies only to an exact 1–250 observation
+snapshot in a COMPLETED or PARTIAL discovery campaign. The backend uses
+the existing membership/campaign lock ordering, persists a one-shot
+per-observation lease **before** invoking the bounded single-redirect
+Google HEAD resolver, and atomically writes a provenance-tagged result
+only for a matching, non-expired token. A crash after dispatch pauses on
+expired lease instead of silently replaying an uncertain HTTP request.
+A stop blocks new claims and late result commits. No token is ever accepted
+from the browser.
 
-The source resolver is now integrated into a **separately gated**
-`AI_GROUNDING_RESOLUTION_ENABLED=true` backend stage. The feature is OFF
-by default and must stay disabled until authenticated staging tests and
-explicit external-fetch approval. The existing server exposes owner-scoped
-`POST /api/research-campaigns/:id/grounding/start` with
-`{maxSources,confirmPublicRequests:true}`, owner stop and read-only
-`GET /api/research-campaigns/:id/grounding`. The start API uses existing
-origin protection, workspace session, limiter and exact source-snapshot
-approval. The timer invokes the existing one-hop Google Location resolver
-only *after* a durable, one-shot claim; it never reads the resulting target
-page, contacts an AI model, checks a mailbox or sends outreach.
+Resolved destinations are **SOURCE_HINT** only, not verified identity,
+email ownership or contact permission. The original provider citation
+remains unchanged. Neither the target website nor mailbox is inspected;
+there are no AI-provider API calls, Candidate writes or email sends.
+The 233 historical observations are not processed automatically by a
+merge or deploy. A run requires explicit owner approval after the feature
+is enabled. The separate person/email evidence and contact-review
+contract stays authoritative.
 
-The resolver's outcome remains an unverified `SOURCE_HINT`. A persisted
-failure is `UNRESOLVED` or `REJECTED`, never a verified person/email.
-Crash after dispatch leaves an in-flight claim; the next tick pauses on
-expiry for manual reconciliation rather than repeating the request.
-The Render Free instance can sleep, so this is not an always-on execution
-SLA. A separately provisioned always-on scheduler and authenticated
-owner-approved E2E smoke are required before production activation.
-
-The next integration must connect **only** the trusted backend worker to
-the existing resolver and save function, enforce a bounded HTTP dispatch
-and explicit owner confirmation in UI, and expose read-only progress.
-A saved SOURCE_HINT remains unverified until separate person/email inspection.
-
-**Current boundary:** the persistence function is an internal trusted-adapter
-contract, not a new API or a browser-supplied source acceptance path. It is not
-wired to background jobs or historical data. Before any execution, add
-campaign-owner approval, an atomic pre-dispatch lease/claim, max-attempt limits,
-a stopping mechanism and audited recovery of unknown HTTP outcomes.
-A saved `SOURCE_HINT` cannot bypass the direct-source email-triage preflight
-or the independent person-email review gate.
-
-This module is intentionally **not wired** to automated historical backfills,
-triage approval, contact acceptance or any network-triggering UI action.
-Before enabling source resolution for the 233 existing observations, implement
-owner-scoped durable approvals, leases, immutable provenance storage, bounded
-per-domain fetch rates, expiration/recovery and authenticated staging smoke.
-The existing `retrieveCitedPublicPage` inspector must still enforce robots,
-DNS pinning and independent person-email attribution for actual page reads.
+This is not an always-on SLA on Render Free. Before activating for a
+partner: authenticate owner/workspace flows in staging, review public-site
+access rules and rate limits, provide user-facing consent and progress UX,
+establish alerting, and provision a reliable scheduler. Do not enable
+`AI_EMAIL_TRIAGE_ENABLED` or infer that a saved SOURCE_HINT is already a
+direct-profile citation usable by triage.
 
 ### Trigger and constraints
 
