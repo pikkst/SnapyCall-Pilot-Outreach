@@ -27,6 +27,9 @@ import { normalizeManualResearchSources, enqueueManualResearchSources } from "./
 import { inspectCampaignObservationEmail } from "./research-observation-email.js";
 import { approveEmailTriage, stopEmailTriage, emailTriageSummary,
   startEmailTriageWorker } from "./research-email-triage-worker.js";
+import { approveGroundingResolution, stopGroundingResolution,
+  groundingResolutionSummary, startGroundingResolutionWorker }
+  from "./research-grounding-worker.js";
 import { acceptReviewedCampaignContact } from "./research-observation-contact-intake.js";
 import { runBoundedCampaignSlice } from "./research-campaign-slice.js";
 import { skipPausedResearchTask } from "./research-campaign-reconciliation.js";
@@ -1486,6 +1489,64 @@ app.get("/api/research-campaigns/:id/observations", candidateReadScope,
     });
   }));
 
+// Provider-cited grounding HEAD requests are separately owner-authorized.
+// All side effects remain OFF unless explicitly enabled on this server.
+app.post("/api/research-campaigns/:id/grounding/start",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (env.AI_GROUNDING_RESOLUTION_ENABLED !== "true") {
+      return res.status(503).json({ code: "GROUNDING_RESOLUTION_DISABLED" });
+    }
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const input = z.object({
+      maxSources: z.number().int().min(1).max(250),
+      confirmPublicRequests: z.literal(true),
+    }).strict().parse(req.body ?? {});
+    const result = await approveGroundingResolution(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id, ...input,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
+app.post("/api/research-campaigns/:id/grounding/stop",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    z.object({ confirmStop: z.literal(true) }).strict().parse(req.body ?? {});
+    const result = await stopGroundingResolution(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
+app.get("/api/research-campaigns/:id/grounding",
+  candidateReadScope, safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const summary = await groundingResolutionSummary(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id,
+    });
+    if (!summary) return res.status(404).json({ code: "CAMPAIGN_NOT_FOUND" });
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      ...summary, enabled: env.AI_GROUNDING_RESOLUTION_ENABLED === "true",
+    });
+  }));
+
 // Public-profile inspection is a separate non-AI, non-contact workflow.
 // A completed discovery campaign can receive one immutable owner approval.
 app.post("/api/research-campaigns/:id/email-triage/start",
@@ -2012,6 +2073,8 @@ async function start() {
   // No automatic spending without an explicitly enabled server feature and
   // a persisted per-campaign approval. The loop is not an always-on SLA on
   // Render free or while the service is sleeping.
+  const stopGroundingWorker = env.AI_GROUNDING_RESOLUTION_ENABLED === "true"
+    ? startGroundingResolutionWorker(prisma) : () => {};
   const stopEmailTriageWorker = env.AI_EMAIL_TRIAGE_ENABLED === "true"
     ? startEmailTriageWorker(prisma) : () => {};
   const stopApprovedWorker = env.AI_AGENT_AUTORUN_ENABLED === "true" &&
@@ -2024,6 +2087,7 @@ async function start() {
     if (shuttingDown) return;
     shuttingDown = true;
     stopApprovedWorker();
+    stopGroundingWorker();
     stopEmailTriageWorker();
     server.close(async () => {
       await prisma.$disconnect();
