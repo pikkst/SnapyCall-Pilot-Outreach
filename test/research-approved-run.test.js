@@ -18,6 +18,7 @@ const fakeRun = {
   priceVersion: price.priceVersion,
   worstCasePerCallCents: 200, maxTasks: 3, maxWorstCaseCents: 600,
   committedWorstCaseCents: 0, startedTasks: 0, status: "APPROVED",
+  expiresAt: new Date("2099-01-01T00:00:00Z"),
 };
 
 test("approval requires explicit conservative total and no-repeat acceptance", () => {
@@ -50,6 +51,8 @@ test("new approval captures owner-owned frozen price envelope with no provider c
         assert.equal(data.maxTasks, 3);
         assert.equal(data.maxWorstCaseCents, 600);
         assert.equal(data.priceVersion, price.priceVersion);
+        assert.ok(data.expiresAt instanceof Date);
+        assert.ok(data.expiresAt > new Date());
         return { ...fakeRun, ...data };
       },
     },
@@ -121,6 +124,7 @@ test("max calls, conservative cents, provider drift and in-flight task fail clos
     [{ ...fakeRun, model: "new-model" }, 0, "RUN_PRICE_OR_MODEL_CHANGED"],
     [fakeRun, 1, "RUN_TASK_ALREADY_IN_FLIGHT"],
     [{ ...fakeRun, status: "PAUSED" }, 0, "RUN_NOT_APPROVED"],
+    [{ ...fakeRun, expiresAt: new Date("2020-01-01") }, 0, "RUN_APPROVAL_EXPIRED"],
   ]) {
     const tx = {
       researchCampaignRun: {
