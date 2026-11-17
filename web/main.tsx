@@ -758,7 +758,7 @@ function App() {
       batchInFlight.current = false;
       if (generation === workspaceRequest.current) {
         setCampaignTestBusy(false);
-        await openCampaignProgress(workspaceId, campaignId);
+        await refreshSelectedCampaignProgress(workspaceId, campaignId);
         try { await refreshCampaignList(workspaceId, generation); }
         catch { setCampaignListStatus("error"); }
         try {
@@ -1065,6 +1065,32 @@ function App() {
       if (workspaceRequest.current !== workspaceGeneration ||
           campaignProgressRequest.current !== request) return;
       setCampaignProgressStatus("error");
+    }
+  }
+
+  async function refreshSelectedCampaignProgress(workspaceId: string, campaignId: string) {
+    // Refresh without resetting the selected campaign's review or progress UI.
+    if (activeWorkspaceId !== workspaceId ||
+        campaignProgressId !== campaignId) return;
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    try {
+      const progress = await api<CampaignProgress>("/research-campaigns/" +
+        encodeURIComponent(campaignId) + "/progress?workspaceId=" +
+        encodeURIComponent(workspaceId));
+      if (generation !== workspaceRequest.current ||
+          request !== campaignProgressRequest.current) return;
+      setCampaignProgress(progress);
+      setCampaignProgressLastSeen(Date.now());
+      setCampaignProgressLiveWarning(false);
+      void loadCampaignRunApproval(workspaceId, campaignId);
+      void loadCampaignGrounding(workspaceId, campaignId);
+      void loadCampaignEmailTriage(workspaceId, campaignId);
+    } catch {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setCampaignProgressLiveWarning(true);
+      }
     }
   }
 
@@ -2380,22 +2406,6 @@ function App() {
                     {campaignListStatus === "error" && <p role="status">
                       Campaign status is unavailable. Candidate data remains accessible.
                     </p>}
-                    {campaignListStatus === "ready" && (workspaceCampaigns.length
-                      ? <ul>{workspaceCampaigns.map(item => <li key={item.id}>
-                          <strong>{item.query}</strong> — {item.status.toLowerCase()}
-                          <small>Campaign {item.id.slice(-6)} ·
-                            Created {new Date(item.createdAt).toLocaleString()}</small>
-                          <small>{item.uniqueSourcedCandidates} unique cited candidates /
-                            target {item.targetCount} · {item.plannedTasks} planned tasks ·
-                            No automatic execution</small>
-                          <button type="button" className="secondary"
-                            disabled={campaignProgressStatus === "loading"}
-                            onClick={() => void openCampaignProgress(p.id, item.id)}>
-                            {campaignProgressId === item.id && campaignProgressStatus === "loading"
-                              ? "Loading…" : "View progress"}
-                          </button>
-                        </li>)}</ul>
-                      : <p className="muted">No research campaigns planned in this workspace.</p>)}
                     {campaignProgressId && <section className="review-panel"
                       aria-label="Campaign research progress" aria-live="polite">
                       <h4>Campaign progress</h4>
@@ -2415,6 +2425,19 @@ function App() {
                           value={Math.min(campaignProgress.uniqueSourcedCandidates,
                             campaignProgress.targetCount)}/>
                         <p>Operational status: <strong>{campaignProgress.operationalState}</strong></p>
+                        {campaignProgress.operationalState === "PAUSED_REVIEW" &&
+                          <p role="alert" className="campaign-blocker">
+                            Research is paused. A possibly billable task needs
+                            manual reconciliation. The remaining queued tasks
+                            are NOT running. Do not reattempt this paid request.
+                          </p>}
+                        {campaignProgress.uniqueSourcedCandidates === 0 &&
+                          campaignProgress.noGroundingTasks > 0 &&
+                          <p role="status" className="muted">
+                            No source-backed candidates yet: {campaignProgress.noGroundingTasks}
+                            {" "}completed research task(s) returned no verifiable citations.
+                            No name or email was accepted from those attempts.
+                          </p>
                         {campaignGrounding && <section
                           className="campaign-email-triage"
                           data-state={campaignGrounding.status}
@@ -2968,6 +2991,26 @@ function App() {
                           setCampaignProgressStatus("idle");
                         }}>Close</button>
                     </section>}
+                    <details className="research-campaign-history" open={!campaignProgressId}>
+                      <summary>Campaign history ({workspaceCampaigns.length})</summary>
+                    {campaignListStatus === "ready" && (workspaceCampaigns.length
+                      ? <ul>{workspaceCampaigns.map(item => <li key={item.id}>
+                          <strong>{item.query}</strong> — {item.status.toLowerCase()}
+                          <small>Campaign {item.id.slice(-6)} ·
+                            Created {new Date(item.createdAt).toLocaleString()}</small>
+                          <small>{item.uniqueSourcedCandidates} unique cited candidates /
+                            target {item.targetCount} · {item.plannedTasks} planned tasks ·
+                            No automatic execution</small>
+                          <button type="button" className="secondary"
+                            disabled={campaignProgressStatus === "loading"}
+                            onClick={() => void openCampaignProgress(p.id, item.id)}>
+                            {campaignProgressId === item.id && campaignProgressStatus === "loading"
+                              ? "Loading…" : "View progress"}
+                          </button>
+                        </li>)}</ul>
+                      : <p className="muted">No research campaigns planned in this workspace.</p>)}
+                    </details>
+
                   </div>}
                   <section aria-label="Manual expert lead" className="review-panel">
                     <h3>Add an expert manually</h3>
