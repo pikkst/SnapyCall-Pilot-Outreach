@@ -11,7 +11,7 @@ const input = { campaignId, workspaceId, ownerId, encryptionKey: "test-only-encr
 
 function fakeDatabase({ queued = true, member = true,
   memberAtCommit = true, providerResult = "ok", failedCAS = false,
-  settlementUnavailable = false, certifiedUsage = null } = {}) {
+  settlementUnavailable = false, certifiedUsage = null, approvedRun = false } = {}) {
   const events = [];
   let reservation;
   let membershipLocks = 0;
@@ -50,7 +50,17 @@ function fakeDatabase({ queued = true, member = true,
       findFirst: async () => ({ targetCount: 100 }),
       updateMany: async () => ({ count: 1 }),
     },
-    researchCampaignRun: { findUnique: async () => null },
+    researchCampaignRun: {
+      findUnique: async () => approvedRun ? {
+        id: "run-1", campaignId, workspaceId, ownerId,
+        provider: "gemini", model: "gemini-2.5-flash",
+        priceVersion: "gemini-2.5-flash-grounded-prompt-2026-11-16",
+        worstCasePerCallCents: 200, maxTasks: 3, startedTasks: 0,
+        maxWorstCaseCents: 600, committedWorstCaseCents: 0,
+        status: "APPROVED", expiresAt: new Date("2099-01-01T00:00:00Z"),
+      } : null,
+      updateMany: async () => { events.push("run-allowance-reserved"); return { count: 1 }; },
+    },
     researchOwnerBudget: {},
     researchSpendReservation: {
       findUnique: async () => reservation ?? null,
@@ -271,4 +281,25 @@ test("worker settles certified Gemini grounded-prompt price once, not full reser
   assert.equal(events.filter(x => x === "provider-called").length, 1);
   assert.equal(events.filter(x => x === "money-settled").length, 1);
   assert.ok(events.indexOf("money-settled") < events.indexOf("evidence-saved"));
+});
+
+test("legacy manual execute-next cannot bypass an existing autonomous approval", async () => {
+  const { db, events, search } = fakeDatabase({ approvedRun: true });
+  await assert.rejects(() => runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  }), error => error?.code === "RUN_REQUIRES_AUTONOMOUS_EXECUTOR");
+  assert.equal(events.includes("provider-called"), false);
+  assert.equal(events.includes("money-reserved"), false);
+});
+
+test("authorized executor consumes run allowance before a provider call", async () => {
+  const { db, events, search } = fakeDatabase({ approvedRun: true });
+  const result = await runOneCampaignTask(db, {
+    ...input, autonomousApproved: true,
+  }, { search, decrypt: () => "test-only-provider-key", now: () => now });
+  assert.equal(result.status, "COMPLETED");
+  assert.ok(events.indexOf("run-allowance-reserved") <
+    events.indexOf("money-reserved"));
+  assert.ok(events.indexOf("money-reserved") <
+    events.indexOf("provider-called"));
 });
