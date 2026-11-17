@@ -118,6 +118,7 @@ export async function runOneCampaignTask(db, {
   };
 
   let outcome;
+  let providerReturned = false;
   let reconciliationRequired = false;
   try {
     // Membership may have been revoked after the reservation transaction.
@@ -137,6 +138,7 @@ export async function runOneCampaignTask(db, {
         query: claim.query, limit: claim.limit,
         provider: setting.provider, model: setting.model, apiKey,
       });
+      providerReturned = true;
       // Missing certified billing evidence keeps the full reserved ceiling.
       await settle(calculateVerifiedSpendCents(price, result.usage));
       const write = await commitCampaignResearchResult(db, claim, result, now(), {
@@ -197,6 +199,35 @@ export async function runOneCampaignTask(db, {
       // uncertainty after dispatch still require manual reconciliation.
       failure = invoked ? "BILLING_UNCERTAIN" : "UNCLASSIFIED";
       outcome = { status: "PAUSED", attempted: invoked, code: failure };
+    }
+    // Persist only controlled failure classes, never raw provider errors,
+    // prompt text, API keys or model output. These diagnostics distinguish
+    // malformed/unfinished responses from charge or DB-commit uncertainty
+    // during later operator reconciliation, without authorizing a replay.
+    if (invoked && outcome?.status === "PAUSED") {
+      const safeReason = providerReturned
+        ? "POST_PROVIDER_COMMIT_OR_SETTLEMENT_UNCERTAIN"
+        : error?.message === "Gemini search response incomplete"
+        ? "GEMINI_RESPONSE_INCOMPLETE"
+        : error?.message === "Gemini search returned no structured response"
+        ? "GEMINI_RESPONSE_MALFORMED"
+        : error?.message === "AI research did not return structured results" ||
+          error?.message === "AI research returned an invalid candidate list"
+        ? "CITED_OUTPUT_INVALID"
+        : error?.name === "AbortError"
+        ? "UPSTREAM_ABORTED"
+        : "UPSTREAM_DISPATCH_UNCERTAIN";
+      try {
+        await db.auditEvent.create({ data: {
+          actorId: ownerId, action: "research.campaign.execution.paused",
+          entityId: claim.taskId,
+          metadata: { workspaceId, campaignId, provider: setting.provider,
+            code: "BILLING_UNCERTAIN", safeReason,
+            billedCallPossible: true, automaticRetryAllowed: false },
+        } });
+      } catch {
+        console.warn("[research-campaign] Sanitized pause diagnostic unavailable");
+      }
     }
   } finally {
     if (!settled) {

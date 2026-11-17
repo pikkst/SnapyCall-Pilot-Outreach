@@ -106,6 +106,16 @@ function fakeDatabase({ queued = true, member = true,
       events.push("concurrency-released"); return { count: 1 };
     } },
     auditEvent: { create: async ({ data }) => {
+      if (data.action === "research.campaign.execution.paused") {
+        events.push("pause-diagnostic-audited");
+        assert.equal(data.metadata.workspaceId, workspaceId);
+        assert.equal(data.metadata.campaignId, campaignId);
+        assert.equal(data.metadata.provider, "gemini");
+        assert.equal(data.metadata.code, "BILLING_UNCERTAIN");
+        assert.equal(data.metadata.automaticRetryAllowed, false);
+        assert.ok(!JSON.stringify(data.metadata).includes("test-only-provider-key"));
+        return;
+      }
       events.push("diagnostic-audited");
       assert.equal(data.action, "research.campaign.evidence.rejected");
       assert.deepEqual(data.metadata, {
@@ -276,6 +286,20 @@ test("terminal uncited Gemini response completes as zero evidence, charges conse
   assert.ok(!events.includes("evidence-saved"));
   assert.ok(events.indexOf("money-settled") < events.indexOf("task-completed"));
   assert.equal(events.filter(x => x === "money-settled").length, 1);
+});
+
+test("an unknown billed provider failure logs only a bounded reason and never replays", async () => {
+  const { db, events, search, getReservation } =
+    fakeDatabase({ providerResult: "fails" });
+  const result = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(result.status, "PAUSED");
+  assert.equal(result.code, "BILLING_UNCERTAIN");
+  assert.equal(getReservation().chargedCents, 200);
+  assert.equal(events.filter(e => e === "provider-called").length, 1);
+  assert.equal(events.filter(e => e === "pause-diagnostic-audited").length, 1);
+  assert.ok(!events.includes("task-completed"));
 });
 
 test("uncited terminal response with failed evidence transaction remains PAUSED, not a false success", async () => {
