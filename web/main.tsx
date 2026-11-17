@@ -265,6 +265,7 @@ function App() {
   const [campaignListStatus, setCampaignListStatus] = useState<"idle" | "ready" | "error">("idle");
   const [campaignTestQuery, setCampaignTestQuery] =
     useState("Find English-speaking AI automation consultants who offer online consulting, with public professional profiles");
+  const [researchMode, setResearchMode] = useState<"single" | "campaign">("single");
   const [campaignTestBusy, setCampaignTestBusy] = useState(false);
   const [campaignTestNotice, setCampaignTestNotice] = useState("");
   const [campaignPaidConfirmed, setCampaignPaidConfirmed] = useState(false);
@@ -2048,7 +2049,307 @@ function App() {
                       </li>
                     </ol>
                   </>}
-                  <div className="campaign-overview">
+                </div>}
+                {partnerTab === "discovery" && <>
+                  <section className="review-panel" aria-label="Research workspace">
+                    <h2>Find experts</h2>
+                    <p className="muted">One research workspace. Connect your
+                      personal AI adapter, set a spending limit, and choose
+                      how many sourced candidates you want to research.
+                      Only independently reviewed person-specific emails
+                      count toward usable contacts. No emails are sent.</p>
+                    <div className="research-mode-choice" role="group"
+                      aria-label="Choose research mode">
+                      <button type="button"
+                        aria-pressed={researchMode === "single"}
+                        className={researchMode === "single" ? "active" : "secondary"}
+                        onClick={() => setResearchMode("single")}>
+                        One search · up to 20 candidates
+                      </button>
+                      <button type="button"
+                        aria-pressed={researchMode === "campaign"}
+                        className={researchMode === "campaign" ? "active" : "secondary"}
+                        onClick={() => {
+                          setResearchMode("campaign");
+                          setCampaignTestQuery(researchQuery.trim().slice(0,240));
+                        }}>
+                        Campaign · 100 candidate target
+                      </button>
+                    </div>
+                  </section>
+                  <section aria-label="Manual expert lead" className="review-panel">
+                    <h3>Add an expert manually</h3>
+                    <p className="muted">Enter an expert name and the public page you reviewed.
+                      This does not scan or fetch the source website, check permissions,
+                      extract emails, qualify an expert or send any messages.
+                      Restricted directories must be researched manually or with permission.
+                      After saving, open an independent browser search or prepare a draft
+                      research query without triggering an automated provider call.</p>
+                    <form onSubmit={event => void saveManualSeed(p.id, event)}>
+                      <label>Expert name
+                        <input required minLength={2} maxLength={160} value={seedName}
+                          onChange={event => setSeedName(event.target.value)}/>
+                      </label>
+                      <label>Field
+                        <select value={seedCategory} onChange={event => setSeedCategory(event.target.value)}>
+                          {categories.map(([value, title]) =>
+                            <option key={value} value={value}>{title}</option>)}
+                        </select>
+                      </label>
+                      <label>Source page URL (HTTPS)
+                        <input type="url" required maxLength={2048} pattern="https://.*"
+                          value={seedUrl} onChange={event => setSeedUrl(event.target.value)}
+                          placeholder="https://example.org/experts/profile"/>
+                      </label>
+                      <button type="submit" disabled={seedSaving}>
+                        {seedSaving ? "Saving…" : "Add to my workspace"}
+                      </button>
+                    </form>
+                  </section>
+                  {researchMode === "single" && <section aria-label="AI web research preview" className="review-panel">
+                  <h3>Find experts with AI web search</h3>
+                  <p className="muted">Use the same research criteria for one request
+                    (up to 20 cited candidates) or to plan a 100-candidate campaign.
+                    Planning is free; running any AI search requires your own
+                    configured provider, application spending limit and quotas.
+                    These are unverified candidates until a specific published
+                    email is independently reviewed. Sheets and Gmail are optional later.</p>
+                  <details className="research-technical-details">
+                    <summary>Search limits and costs</summary>
+                    <p className="muted">Paid public-web research with your selected
+                    { " " + personalAi.provider + " " + personalAi.model } model.
+                    Only explicitly priced models can run. Claude and OpenAI permit at most
+                    three built-in web searches per request; Gemini 2.5 is billed by
+                    grounded prompt, not by query count. Every call reserves a conservative
+                    amount from your owner-wide application USD budget. Review-only:
+                    no candidates are imported or contacted. Failed requests may still be charged.</p>
+                  <p className="muted">Safety rate limit: at most 2 research requests
+                    per 60 seconds, regardless of the saved daily attempt limit.
+                    Wait at least one minute before another test to avoid HTTP 429.</p>
+                  </details>
+                  <section aria-label="Research setup checklist" className="research-readiness">
+                    <div className="research-readiness-heading">
+                      <h4>Ready to search?</h4>
+                      <span className={readiness.ready ? "research-ready-label" : "research-pending-label"}>
+                        {readiness.ready ? "Ready" : "Setup needed"}
+                      </span>
+                    </div>
+                    <ol className="research-readiness-steps">
+                      {readiness.steps.map(step => <li key={step.key}
+                        className={"research-readiness-step " + step.state}>
+                        <strong>{step.title}</strong>
+                        <p className="muted">{step.description}</p>
+                        {step.state === "action" && <button type="button"
+                          className="secondary" onClick={() => setPartnerTab("settings")}>
+                            Open AI settings
+                          </button>}
+                      </li>)}
+                    </ol>
+                    {!readiness.ready && <button type="button" className="secondary"
+                      disabled={personalAiStatus === "loading" || budgetStatus === "loading" ||
+                        researchLimitsStatus === "loading"}
+                      onClick={() => void Promise.allSettled([
+                        loadPersonalAiSettings(), loadResearchBudget(), loadResearchLimits(),
+                      ])}>
+                      Refresh search readiness
+                    </button>}
+                    {readiness.ready && <p className="muted">
+                      This authorizes only a single bounded search request. Results require
+                      manual review and no emails are sent.
+                    </p>}
+                  </section>
+                  <form onSubmit={event => void runResearch(p.id, event)}>
+                    <label>Research criteria
+                      <input value={researchQuery} maxLength={350} minLength={12} required
+                        onChange={event => setResearchQuery(event.target.value)}/>
+                    </label>
+                    <button type="submit" disabled={researchStatus === "loading" ||
+                      !readiness.ready}>
+                      {researchStatus === "loading" ? "Researching…" : "Run one search"}
+                    </button>
+                    <button type="button" className="secondary"
+                      disabled={researchStatus === "loading" ||
+                        researchQuery.trim().length < 12 ||
+                        researchQuery.trim().length > 240}
+                      onClick={() => {
+                        // Reuse the existing free planning and paid approval
+                        // contracts; navigation never starts a provider call.
+                        setCampaignTestQuery(researchQuery.trim());
+                        campaignCreateIdempotency.current = null;
+                        setCampaignTestNotice(
+                          "Criteria copied from your single search. Review the setup, then plan your 100-candidate campaign for free.");
+                        setResearchMode("campaign");
+                      }}>
+                      Plan 100-candidate campaign (free)
+                    </button>
+                    {researchQuery.trim().length > 240 &&
+                      <p className="muted" role="status">
+                        Shorten the criteria to 240 characters to use them in a
+                        campaign. Single-search criteria can be longer.
+                      </p>}
+                  </form>
+                  {!readiness.ready && <p className="muted" role="status">
+                    Paid AI search stays disabled until the server confirms it is available.
+                    Adding credits directly to your AI provider does not configure this application.
+                  </p>}
+                  {researchStatus === "error" && <>
+                    <p role="alert">{researchError}</p>
+                    <p className="muted">An unsuccessful provider request may still have
+                      reserved application budget. Review the refreshed budget
+                      before retrying.</p>
+                  </>}
+                  {researchResult && <>
+                    <p className="muted">{researchResult.candidates.length} evidence-linked candidates for manual review
+                      from {researchResult.provider} ({researchResult.model}).
+                      Web requests: {researchResult.usage.searchRequests ?? "unknown"}.
+                      Remaining requests today: {researchResult.quota.remaining.userWorkspace}
+                      personal / {researchResult.quota.remaining.workspace} workspace.
+                      Saving candidates requires explicit source review and does not authorize outreach.</p>
+                    {researchResult.warnings.map(message => <p key={message} className="muted">{message}</p>)}
+                    {researchResult.publicBusinessContacts && <>
+                      <p className="muted">Public business inbox observations:
+                        {researchResult.publicBusinessContacts.length}.
+                        These contacts are not verified as belonging to any
+                        specific expert. Review the source before using one.</p>
+                      <ul>{researchResult.publicBusinessContacts.map(contact =>
+                        <li key={contact.sourceUrl + contact.observedEmail}>
+                          <strong>{contact.observedEmail}</strong> — Review required
+                          <p>Business inbox observed on a cited page;
+                            identity and contact permission are not verified.</p>
+                          <a href={contact.sourceUrl} target="_blank" rel="noopener noreferrer">
+                            Inspected public source</a>
+                        </li>)}</ul>
+                    </>}
+                    {researchResult.contactAssociations?.length ? <>
+                      <h4>Source associations (unverified)</h4>
+                      <ul>{researchResult.contactAssociations.map(association =>
+                        <li key={association.sourceUrl + association.observedEmail}>
+                          <strong>{association.observedEmail}</strong> — {
+                            association.relationship === "SHARED_SOURCE_AMBIGUOUS"
+                              ? "Shared page: multiple people, attribution ambiguous"
+                              : "Same cited page only; no person-level verification"
+                          }
+                          <p>Cited people: {association.candidateNames.join(", ") || "unknown"}.
+                            Organization, individual identity and permission are unverified.</p>
+                        </li>)}</ul>
+                    </> : null}
+                    {researchResult.profileObservations?.length ? <>
+                      <h4>Expert name observations on inspected sources</h4>
+                      <ul>{researchResult.profileObservations.map(profile =>
+                        <li key={profile.sourceUrl + profile.name}>
+                          <strong>{profile.name}</strong> — {
+                            profile.observation === "EXACT_NAME_ON_INSPECTED_SOURCE"
+                              ? "Full name observed on cited page; identity and affiliation not verified"
+                              : "Name not observed in inspected page"
+                          }
+                        </li>)}</ul>
+                    </> : null}
+                    {researchResult.identityCollisions?.length ? <>
+                      <h4>Possible namesakes — manual identity review</h4>
+                      <ul>{researchResult.identityCollisions.map(collision =>
+                        <li key={collision.name}>
+                          <strong>{collision.name}</strong> appears across {
+                            collision.sourceUrls.length} cited pages.
+                          These records have not been automatically merged.
+                        </li>)}</ul>
+                    </> : null}
+                    {researchResult.evidenceReviewOrder?.length ? <>
+                      <h4>Evidence review priority (not an expertise score)</h4>
+                      <ol>{researchResult.evidenceReviewOrder.map(item =>
+                        <li key={item.sourceUrl + item.name}>
+                          <strong>{item.name}</strong> — {
+                            item.evidenceLevel === "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX"
+                              ? "Public business inbox found, person not verified"
+                              : item.evidenceLevel === "PUBLIC_SOURCE_INSPECTED_NO_CONTACT"
+                              ? "Public source inspected, no confirmed contact"
+                              : "Provider citation only"
+                          }
+                        </li>)}</ol>
+                    </> : null}
+                    <div className="review-batch-actions">
+                      <label className="checkbox-review">
+                        <input type="checkbox"
+                          checked={researchResult.candidates.length > 0 &&
+                            researchResult.candidates.every(item =>
+                              selectedResearchCandidates.includes(reviewedCandidateKey(item)) ||
+                              savedResearchCandidates.includes(reviewedCandidateKey(item)))}
+                          disabled={savingResearchCandidate !== null}
+                          onChange={event => setSelectedResearchCandidates(event.target.checked
+                            ? researchResult.candidates.map(reviewedCandidateKey) : [])}/>
+                        <span>Select all discovered candidates</span>
+                      </label>
+                      <button type="button"
+                        disabled={savingResearchCandidate !== null ||
+                          selectedDiscoverySeedBatch(researchResult.candidates,
+                            selectedResearchCandidates, savedResearchCandidates).length === 0}
+                        onClick={() => void saveReviewedResearchCandidates(p.id)}>
+                        {savingResearchCandidate === "__batch__" ? "Saving selected candidates…" :
+                          "Save selected to review queue (" + selectedDiscoverySeedBatch(
+                            researchResult.candidates, selectedResearchCandidates,
+                            savedResearchCandidates).length + ")"}
+                      </button>
+                      <p className="muted">You can queue candidates without opening every profile.
+                        Source links and observed emails are unverified; queueing never approves
+                        identities, contact permission or outreach.</p>
+                    </div>
+                    <ul>{researchResult.candidates.map(item => {
+                      const reviewKey = reviewedCandidateKey(item);
+                      const reviewed = reviewedResearchSources.includes(reviewKey);
+                      const saved = savedResearchCandidates.includes(reviewKey);
+                      const selected = selectedResearchCandidates.includes(reviewKey);
+                      return <li key={reviewKey}>
+                        <label className="checkbox-review">
+                          <input type="checkbox" checked={selected || saved}
+                            disabled={saved || savingResearchCandidate !== null}
+                            onChange={event => setSelectedResearchCandidates(prev =>
+                              event.target.checked ? [...new Set([...prev, reviewKey])] :
+                                prev.filter(key => key !== reviewKey))}/>
+                          <span>{saved ? "In review queue" : "Include in review queue"}</span>
+                        </label>
+                        <strong>{item.name}</strong> — {item.category}
+                        <p>{item.rationale}</p>
+                        <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">
+                          Provider-cited source (open to review)</a>
+                        <label className="muted">Reviewed public profile URL (HTTPS)
+                          <input type="url" required maxLength={2048}
+                            placeholder="https://actual-expert-website.example/profile"
+                            value={reviewedResearchUrls[reviewKey] ?? (
+                              item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
+                                ? "" : item.sourceUrl)}
+                            disabled={saved || savingResearchCandidate === reviewKey}
+                            onChange={e => {
+                              setReviewedResearchUrls(prev => ({
+                                ...prev, [reviewKey]: e.target.value,
+                              }));
+                              setReviewedResearchSources(prev =>
+                                prev.filter(key => key !== reviewKey));
+                            }}/>
+                          {item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
+                            ? "Gemini provided a redirect citation. Open it and copy the final website URL here."
+                            : "Confirm this is the page you independently reviewed."}
+                        </label>
+                        <label className="muted">
+                          <input type="checkbox" checked={reviewed}
+                            disabled={saved || savingResearchCandidate === reviewKey}
+                            onChange={e => setReviewedResearchSources(prev =>
+                              e.target.checked ? [...prev, reviewKey] :
+                                prev.filter(key => key !== reviewKey))}/>
+                          I independently reviewed this public source. The person's
+                          identity and contact information are not yet verified.
+                        </label>
+                        <button type="button" className="secondary"
+                          disabled={!reviewed || saved || savingResearchCandidate !== null ||
+                            !resolvedReviewedSource(item, reviewedResearchUrls)}
+                          onClick={() => void saveReviewedResearchCandidates(p.id, reviewKey)}>
+                          {saved ? "Saved to candidates" :
+                            savingResearchCandidate === reviewKey ? "Saving…" :
+                            "Save to workspace for review"}
+                        </button>
+                      </li>;
+                    })}</ul>
+                  </>}
+                </section>}
+                  {researchMode === "campaign" && <div className="campaign-overview">
                     <h3>Research campaigns · up to 100 cited candidates</h3>
                     <p className="muted">The same research criteria work for a single search
                       or a 100-candidate campaign. Planning a campaign is free, but
@@ -2681,280 +2982,7 @@ function App() {
                         }}>Close</button>
                     </section>}
                   </div>
-                </div>}
-                {partnerTab === "discovery" && <>
-                  <section aria-label="Manual expert lead" className="review-panel">
-                    <h3>Add an expert manually</h3>
-                    <p className="muted">Enter an expert name and the public page you reviewed.
-                      This does not scan or fetch the source website, check permissions,
-                      extract emails, qualify an expert or send any messages.
-                      Restricted directories must be researched manually or with permission.
-                      After saving, open an independent browser search or prepare a draft
-                      research query without triggering an automated provider call.</p>
-                    <form onSubmit={event => void saveManualSeed(p.id, event)}>
-                      <label>Expert name
-                        <input required minLength={2} maxLength={160} value={seedName}
-                          onChange={event => setSeedName(event.target.value)}/>
-                      </label>
-                      <label>Field
-                        <select value={seedCategory} onChange={event => setSeedCategory(event.target.value)}>
-                          {categories.map(([value, title]) =>
-                            <option key={value} value={value}>{title}</option>)}
-                        </select>
-                      </label>
-                      <label>Source page URL (HTTPS)
-                        <input type="url" required maxLength={2048} pattern="https://.*"
-                          value={seedUrl} onChange={event => setSeedUrl(event.target.value)}
-                          placeholder="https://example.org/experts/profile"/>
-                      </label>
-                      <button type="submit" disabled={seedSaving}>
-                        {seedSaving ? "Saving…" : "Add to my workspace"}
-                      </button>
-                    </form>
-                  </section>
-                  <section aria-label="AI web research preview" className="review-panel">
-                  <h3>Find experts with AI web search</h3>
-                  <p className="muted">Use the same research criteria for one request
-                    (up to 20 cited candidates) or to plan a 100-candidate campaign.
-                    Planning is free; running any AI search requires your own
-                    configured provider, application spending limit and quotas.
-                    These are unverified candidates until a specific published
-                    email is independently reviewed. Sheets and Gmail are optional later.</p>
-                  <details className="research-technical-details">
-                    <summary>Search limits and costs</summary>
-                    <p className="muted">Paid public-web research with your selected
-                    { " " + personalAi.provider + " " + personalAi.model } model.
-                    Only explicitly priced models can run. Claude and OpenAI permit at most
-                    three built-in web searches per request; Gemini 2.5 is billed by
-                    grounded prompt, not by query count. Every call reserves a conservative
-                    amount from your owner-wide application USD budget. Review-only:
-                    no candidates are imported or contacted. Failed requests may still be charged.</p>
-                  <p className="muted">Safety rate limit: at most 2 research requests
-                    per 60 seconds, regardless of the saved daily attempt limit.
-                    Wait at least one minute before another test to avoid HTTP 429.</p>
-                  </details>
-                  <section aria-label="Research setup checklist" className="research-readiness">
-                    <div className="research-readiness-heading">
-                      <h4>Ready to search?</h4>
-                      <span className={readiness.ready ? "research-ready-label" : "research-pending-label"}>
-                        {readiness.ready ? "Ready" : "Setup needed"}
-                      </span>
-                    </div>
-                    <ol className="research-readiness-steps">
-                      {readiness.steps.map(step => <li key={step.key}
-                        className={"research-readiness-step " + step.state}>
-                        <strong>{step.title}</strong>
-                        <p className="muted">{step.description}</p>
-                        {step.state === "action" && <button type="button"
-                          className="secondary" onClick={() => setPartnerTab("settings")}>
-                            Open AI settings
-                          </button>}
-                      </li>)}
-                    </ol>
-                    {!readiness.ready && <button type="button" className="secondary"
-                      disabled={personalAiStatus === "loading" || budgetStatus === "loading" ||
-                        researchLimitsStatus === "loading"}
-                      onClick={() => void Promise.allSettled([
-                        loadPersonalAiSettings(), loadResearchBudget(), loadResearchLimits(),
-                      ])}>
-                      Refresh search readiness
-                    </button>}
-                    {readiness.ready && <p className="muted">
-                      This authorizes only a single bounded search request. Results require
-                      manual review and no emails are sent.
-                    </p>}
-                  </section>
-                  <form onSubmit={event => void runResearch(p.id, event)}>
-                    <label>Research criteria
-                      <input value={researchQuery} maxLength={350} minLength={12} required
-                        onChange={event => setResearchQuery(event.target.value)}/>
-                    </label>
-                    <button type="submit" disabled={researchStatus === "loading" ||
-                      !readiness.ready}>
-                      {researchStatus === "loading" ? "Researching…" : "Run one search"}
-                    </button>
-                    <button type="button" className="secondary"
-                      disabled={researchStatus === "loading" ||
-                        researchQuery.trim().length < 12 ||
-                        researchQuery.trim().length > 240}
-                      onClick={() => {
-                        // Reuse the existing free planning and paid approval
-                        // contracts; navigation never starts a provider call.
-                        setCampaignTestQuery(researchQuery.trim());
-                        campaignCreateIdempotency.current = null;
-                        setCampaignTestNotice(
-                          "Criteria copied from your single search. Review the setup, then plan your 100-candidate campaign for free.");
-                        setPartnerTab("dashboard");
-                      }}>
-                      Plan 100-candidate campaign (free)
-                    </button>
-                    {researchQuery.trim().length > 240 &&
-                      <p className="muted" role="status">
-                        Shorten the criteria to 240 characters to use them in a
-                        campaign. Single-search criteria can be longer.
-                      </p>}
-                  </form>
-                  {!readiness.ready && <p className="muted" role="status">
-                    Paid AI search stays disabled until the server confirms it is available.
-                    Adding credits directly to your AI provider does not configure this application.
-                  </p>}
-                  {researchStatus === "error" && <>
-                    <p role="alert">{researchError}</p>
-                    <p className="muted">An unsuccessful provider request may still have
-                      reserved application budget. Review the refreshed budget
-                      before retrying.</p>
-                  </>}
-                  {researchResult && <>
-                    <p className="muted">{researchResult.candidates.length} evidence-linked candidates for manual review
-                      from {researchResult.provider} ({researchResult.model}).
-                      Web requests: {researchResult.usage.searchRequests ?? "unknown"}.
-                      Remaining requests today: {researchResult.quota.remaining.userWorkspace}
-                      personal / {researchResult.quota.remaining.workspace} workspace.
-                      Saving candidates requires explicit source review and does not authorize outreach.</p>
-                    {researchResult.warnings.map(message => <p key={message} className="muted">{message}</p>)}
-                    {researchResult.publicBusinessContacts && <>
-                      <p className="muted">Public business inbox observations:
-                        {researchResult.publicBusinessContacts.length}.
-                        These contacts are not verified as belonging to any
-                        specific expert. Review the source before using one.</p>
-                      <ul>{researchResult.publicBusinessContacts.map(contact =>
-                        <li key={contact.sourceUrl + contact.observedEmail}>
-                          <strong>{contact.observedEmail}</strong> — Review required
-                          <p>Business inbox observed on a cited page;
-                            identity and contact permission are not verified.</p>
-                          <a href={contact.sourceUrl} target="_blank" rel="noopener noreferrer">
-                            Inspected public source</a>
-                        </li>)}</ul>
-                    </>}
-                    {researchResult.contactAssociations?.length ? <>
-                      <h4>Source associations (unverified)</h4>
-                      <ul>{researchResult.contactAssociations.map(association =>
-                        <li key={association.sourceUrl + association.observedEmail}>
-                          <strong>{association.observedEmail}</strong> — {
-                            association.relationship === "SHARED_SOURCE_AMBIGUOUS"
-                              ? "Shared page: multiple people, attribution ambiguous"
-                              : "Same cited page only; no person-level verification"
-                          }
-                          <p>Cited people: {association.candidateNames.join(", ") || "unknown"}.
-                            Organization, individual identity and permission are unverified.</p>
-                        </li>)}</ul>
-                    </> : null}
-                    {researchResult.profileObservations?.length ? <>
-                      <h4>Expert name observations on inspected sources</h4>
-                      <ul>{researchResult.profileObservations.map(profile =>
-                        <li key={profile.sourceUrl + profile.name}>
-                          <strong>{profile.name}</strong> — {
-                            profile.observation === "EXACT_NAME_ON_INSPECTED_SOURCE"
-                              ? "Full name observed on cited page; identity and affiliation not verified"
-                              : "Name not observed in inspected page"
-                          }
-                        </li>)}</ul>
-                    </> : null}
-                    {researchResult.identityCollisions?.length ? <>
-                      <h4>Possible namesakes — manual identity review</h4>
-                      <ul>{researchResult.identityCollisions.map(collision =>
-                        <li key={collision.name}>
-                          <strong>{collision.name}</strong> appears across {
-                            collision.sourceUrls.length} cited pages.
-                          These records have not been automatically merged.
-                        </li>)}</ul>
-                    </> : null}
-                    {researchResult.evidenceReviewOrder?.length ? <>
-                      <h4>Evidence review priority (not an expertise score)</h4>
-                      <ol>{researchResult.evidenceReviewOrder.map(item =>
-                        <li key={item.sourceUrl + item.name}>
-                          <strong>{item.name}</strong> — {
-                            item.evidenceLevel === "PUBLIC_SOURCE_WITH_UNVERIFIED_BUSINESS_INBOX"
-                              ? "Public business inbox found, person not verified"
-                              : item.evidenceLevel === "PUBLIC_SOURCE_INSPECTED_NO_CONTACT"
-                              ? "Public source inspected, no confirmed contact"
-                              : "Provider citation only"
-                          }
-                        </li>)}</ol>
-                    </> : null}
-                    <div className="review-batch-actions">
-                      <label className="checkbox-review">
-                        <input type="checkbox"
-                          checked={researchResult.candidates.length > 0 &&
-                            researchResult.candidates.every(item =>
-                              selectedResearchCandidates.includes(reviewedCandidateKey(item)) ||
-                              savedResearchCandidates.includes(reviewedCandidateKey(item)))}
-                          disabled={savingResearchCandidate !== null}
-                          onChange={event => setSelectedResearchCandidates(event.target.checked
-                            ? researchResult.candidates.map(reviewedCandidateKey) : [])}/>
-                        <span>Select all discovered candidates</span>
-                      </label>
-                      <button type="button"
-                        disabled={savingResearchCandidate !== null ||
-                          selectedDiscoverySeedBatch(researchResult.candidates,
-                            selectedResearchCandidates, savedResearchCandidates).length === 0}
-                        onClick={() => void saveReviewedResearchCandidates(p.id)}>
-                        {savingResearchCandidate === "__batch__" ? "Saving selected candidates…" :
-                          "Save selected to review queue (" + selectedDiscoverySeedBatch(
-                            researchResult.candidates, selectedResearchCandidates,
-                            savedResearchCandidates).length + ")"}
-                      </button>
-                      <p className="muted">You can queue candidates without opening every profile.
-                        Source links and observed emails are unverified; queueing never approves
-                        identities, contact permission or outreach.</p>
-                    </div>
-                    <ul>{researchResult.candidates.map(item => {
-                      const reviewKey = reviewedCandidateKey(item);
-                      const reviewed = reviewedResearchSources.includes(reviewKey);
-                      const saved = savedResearchCandidates.includes(reviewKey);
-                      const selected = selectedResearchCandidates.includes(reviewKey);
-                      return <li key={reviewKey}>
-                        <label className="checkbox-review">
-                          <input type="checkbox" checked={selected || saved}
-                            disabled={saved || savingResearchCandidate !== null}
-                            onChange={event => setSelectedResearchCandidates(prev =>
-                              event.target.checked ? [...new Set([...prev, reviewKey])] :
-                                prev.filter(key => key !== reviewKey))}/>
-                          <span>{saved ? "In review queue" : "Include in review queue"}</span>
-                        </label>
-                        <strong>{item.name}</strong> — {item.category}
-                        <p>{item.rationale}</p>
-                        <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">
-                          Provider-cited source (open to review)</a>
-                        <label className="muted">Reviewed public profile URL (HTTPS)
-                          <input type="url" required maxLength={2048}
-                            placeholder="https://actual-expert-website.example/profile"
-                            value={reviewedResearchUrls[reviewKey] ?? (
-                              item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
-                                ? "" : item.sourceUrl)}
-                            disabled={saved || savingResearchCandidate === reviewKey}
-                            onChange={e => {
-                              setReviewedResearchUrls(prev => ({
-                                ...prev, [reviewKey]: e.target.value,
-                              }));
-                              setReviewedResearchSources(prev =>
-                                prev.filter(key => key !== reviewKey));
-                            }}/>
-                          {item.sourceUrl.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")
-                            ? "Gemini provided a redirect citation. Open it and copy the final website URL here."
-                            : "Confirm this is the page you independently reviewed."}
-                        </label>
-                        <label className="muted">
-                          <input type="checkbox" checked={reviewed}
-                            disabled={saved || savingResearchCandidate === reviewKey}
-                            onChange={e => setReviewedResearchSources(prev =>
-                              e.target.checked ? [...prev, reviewKey] :
-                                prev.filter(key => key !== reviewKey))}/>
-                          I independently reviewed this public source. The person's
-                          identity and contact information are not yet verified.
-                        </label>
-                        <button type="button" className="secondary"
-                          disabled={!reviewed || saved || savingResearchCandidate !== null ||
-                            !resolvedReviewedSource(item, reviewedResearchUrls)}
-                          onClick={() => void saveReviewedResearchCandidates(p.id, reviewKey)}>
-                          {saved ? "Saved to candidates" :
-                            savingResearchCandidate === reviewKey ? "Saving…" :
-                            "Save to workspace for review"}
-                        </button>
-                      </li>;
-                    })}</ul>
-                  </>}
-                </section></>}
+                </>}
                 {(partnerTab === "candidates" || partnerTab === "drafts") && <>
                 <h3>My candidates and outreach drafts</h3>
                 <p className="muted">Workspace-isolated candidate review. Public person-email
