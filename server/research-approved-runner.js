@@ -2,6 +2,7 @@
 // It is restart-safe at the DB lease boundary but availability requires a
 // continuously running worker/scheduler; a sleeping free instance is NOT one.
 import { runOneCampaignTask } from "./research-campaign-worker.js";
+import { ResearchPacingRequired } from "./research-quota.js";
 import { finishApprovedRunTask, pauseApprovedRun,
   ApprovedRunBlocked } from "./research-campaign-run-approval.js";
 
@@ -18,7 +19,8 @@ export async function tickApprovedCampaignRun(db, {
   const eligible = await db.researchCampaignRun.findFirst({
     where: { status: { in: ["APPROVED", "RUNNING"] } },
     select: { campaignId: true, workspaceId: true, ownerId: true },
-    orderBy: [{ approvedAt: "asc" }, { id: "asc" }],
+    // Updating the run after each tick rotates active campaigns fairly.
+    orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
   });
   if (!eligible) return { status: "IDLE" };
   const scope = {
@@ -33,6 +35,17 @@ export async function tickApprovedCampaignRun(db, {
     await finish(db, { ...scope, result });
     return { status: result.status, code: result.code ?? null };
   } catch (error) {
+    if (error instanceof ResearchPacingRequired) {
+      // The failed transaction reserved no money, quota or task claim.
+      // Persist an informational wait under the normal membership and
+      // campaign row locks; do not pause or consume fresh authorization.
+      const waiting = await finish(db, {
+        ...scope, result: { status: "RATE_LIMIT_WAIT", attempted: false },
+      });
+      return { status: waiting.code === "RUNNING" ? "WAITING" : waiting.code,
+        code: waiting.lastCode ?? error.code,
+        retryAfterSeconds: error.retryAfterSeconds };
+    }
     if (error instanceof ApprovedRunBlocked &&
         error.code === "RUN_TASK_ALREADY_IN_FLIGHT") {
       return { status: "IN_FLIGHT" };
