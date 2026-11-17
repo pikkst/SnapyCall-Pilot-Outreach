@@ -47,6 +47,7 @@ import {
   reserveResearchAttempt, ResearchQuotaExceeded, lockedResearchPreferences,
   validateResearchPreferences, RESEARCH_DAILY_USER_WORKSPACE_LIMIT,
   reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded,
+  ResearchPacingRequired,
 } from "./research-quota.js";
 import { validateMonthlyBudgetCents, reserveOwnerSpend, settleOwnerSpend,
   ResearchBudgetExceeded, readOwnerBudgetSnapshot,
@@ -875,6 +876,12 @@ app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, resear
     if (error instanceof ResearchConcurrencyExceeded) {
       return res.status(429).json({ error: "Active research concurrency limit reached",
         code: "RESEARCH_CONCURRENCY_EXCEEDED" });
+    }
+    if (error instanceof ResearchPacingRequired) {
+      res.set("Retry-After", String(error.retryAfterSeconds));
+      return res.status(429).json({ code: "RESEARCH_PACING_WAIT",
+        retryAfterSeconds: error.retryAfterSeconds,
+        error: "The next AI request is safely scheduled; no paid call was started." });
     }
     if (error instanceof ResearchBudgetExceeded) {
       return res.status(429).json({ error: "Monthly research budget unavailable or exhausted",
@@ -1759,6 +1766,12 @@ app.post("/api/research-campaigns/:id/execute-next",
       if ((input.maxTasks ?? 1) > 1) {
         const slice = await runBoundedCampaignSlice({ maxTasks: input.maxTasks },
           { runTask });
+        if (slice.status === "WAITING" && slice.code === "RESEARCH_PACING_WAIT") {
+          res.set("Retry-After", String(slice.retryAfterSeconds));
+          return res.status(429).json({
+            ...slice, error: "AI request pacing is active; completed tasks remain saved. No additional paid call was started.",
+          });
+        }
         if (slice.status !== "SLICE_COMPLETED") {
           return res.status(409).json({
             ...slice, error: "Campaign halted; inspect progress, lease and spend before retrying",
@@ -1785,6 +1798,12 @@ app.post("/api/research-campaigns/:id/execute-next",
       if (error instanceof ResearchWorkerPreflightError) {
         return res.status(409).json({ code: error.code,
           error: "AI research settings or limits require attention" });
+      }
+      if (error instanceof ResearchPacingRequired) {
+        res.set("Retry-After", String(error.retryAfterSeconds));
+        return res.status(429).json({ code: "RESEARCH_PACING_WAIT",
+          retryAfterSeconds: error.retryAfterSeconds,
+          error: "No AI call was started. Wait before requesting another task." });
       }
       if (error instanceof ResearchQuotaExceeded ||
           error instanceof ResearchConcurrencyExceeded) {

@@ -98,3 +98,40 @@ test("research lease rejects invalid identities and out-of-bounds concurrency wi
     workspaceId, userId, maxConcurrent: 1,
   }), ResearchConcurrencyExceeded);
 });
+
+test("workspace pacing fails before a lease insert, using persisted DB time", async () => {
+  const { reserveResearchLease, ResearchPacingRequired,
+    RESEARCH_MIN_DISPATCH_INTERVAL_MS } =
+    await import("../server/research-quota.js");
+  assert.equal(RESEARCH_MIN_DISPATCH_INTERVAL_MS, 35_000);
+  const operations = [];
+  let delay = 17_400;
+  const tx = {
+    $queryRaw: async (strings) => {
+      const query = strings.join("?");
+      operations.push(query);
+      if (query.includes('FROM "Partner"')) return [{ id: workspaceId }];
+      if (query.includes('COUNT(*)::int AS "workspace"')) {
+        return [{ workspace: 0, user: 0 }];
+      }
+      if (query.includes('AS "waitMs"')) return [{ waitMs: delay }];
+      throw Error("Unexpected SQL");
+    },
+    $executeRaw: async () => { operations.push("lease-created"); return 1; },
+  };
+  await assert.rejects(() => reserveResearchLease(tx, {
+    workspaceId, userId, maxConcurrent: 1,
+  }), error => error instanceof ResearchPacingRequired &&
+    error.code === "RESEARCH_PACING_WAIT" &&
+    error.retryAfterSeconds === 18);
+  assert.equal(operations.includes("lease-created"), false);
+  assert.ok(operations.find(q => q.includes('FROM "Partner"')) !== undefined);
+  assert.ok(operations.find(q => q.includes('FROM "ResearchRunLease"') &&
+    q.includes('ORDER BY "createdAt" DESC')));
+  delay = 0;
+  const lease = await reserveResearchLease(tx, {
+    workspaceId, userId, maxConcurrent: 1,
+  });
+  assert.equal(typeof lease, "string");
+  assert.equal(operations.includes("lease-created"), true);
+});

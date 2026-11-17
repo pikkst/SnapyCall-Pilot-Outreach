@@ -83,6 +83,18 @@ export async function reserveResearchAttempt(tx, {
   return { dayUtc: day, remaining };
 }
 
+// Persisted dispatch pacing shared by manual searches and agent campaigns.
+export const RESEARCH_MIN_DISPATCH_INTERVAL_MS = 35_000;
+
+export class ResearchPacingRequired extends Error {
+  constructor(waitMs) {
+    super("Research dispatch must wait for its next eligible start");
+    this.name = "ResearchPacingRequired";
+    this.code = "RESEARCH_PACING_WAIT";
+    this.retryAfterSeconds = Math.max(1, Math.ceil(waitMs / 1000));
+  }
+}
+
 export class ResearchConcurrencyExceeded extends Error {
   constructor() {
     super("Maximum active research searches reached");
@@ -112,6 +124,18 @@ export async function reserveResearchLease(tx, { workspaceId, userId, maxConcurr
       AND "releasedAt" IS NULL AND "expiresAt" > NOW()`;
   if (counts.length !== 1 || counts[0].workspace >= RESEARCH_MAX_WORKSPACE_CONCURRENCY ||
       counts[0].user >= maxConcurrent) throw new ResearchConcurrencyExceeded();
+  // Under the locked workspace row, every instance sees the previous
+  // committed dispatch, including already released concurrency leases.
+  // No budget, quota, or autonomous attempt is consumed on rejection.
+  const recent = await tx.$queryRaw`
+    SELECT GREATEST(0, CEIL(EXTRACT(EPOCH FROM
+      ("createdAt" + ${RESEARCH_MIN_DISPATCH_INTERVAL_MS} * INTERVAL '1 millisecond'
+        - NOW())) * 1000))::int AS "waitMs"
+    FROM "ResearchRunLease" WHERE "workspaceId" = ${workspaceId}
+    ORDER BY "createdAt" DESC LIMIT 1`;
+  if (recent.length > 0 && recent[0].waitMs > 0) {
+    throw new ResearchPacingRequired(recent[0].waitMs);
+  }
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   await tx.$executeRaw`

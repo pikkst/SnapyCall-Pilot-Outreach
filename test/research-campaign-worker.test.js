@@ -12,7 +12,7 @@ const input = { campaignId, workspaceId, ownerId, encryptionKey: "test-only-encr
 function fakeDatabase({ queued = true, member = true,
   memberAtCommit = true, providerResult = "ok", failedCAS = false,
   settlementUnavailable = false, certifiedUsage = null, approvedRun = false,
-  failedZeroEvidenceCAS = false } = {}) {
+  failedZeroEvidenceCAS = false, pacingWaitMs = 0 } = {}) {
   const events = [];
   let reservation;
   let membershipLocks = 0;
@@ -31,6 +31,7 @@ function fakeDatabase({ queued = true, member = true,
         { dailyLimit: 50, maxCandidates: 10, maxConcurrent: 1 },
       ];
       if (sql.includes('SELECT "id" FROM "Partner"')) return [{ id: workspaceId }];
+      if (sql.includes('AS "waitMs"')) return [{ waitMs: pacingWaitMs }];
       if (sql.includes('FROM "ResearchRunLease"')) return [{ workspace: 0, user: 0 }];
       if (sql.includes('SELECT "monthlyLimitCents"')) return [{ monthlyLimitCents: 10000 }];
       if (sql.includes('INSERT INTO "ResearchDailyQuota"')) return [{ attempts: 1 }];
@@ -152,6 +153,18 @@ test("worker reserves money and quota before a single provider call, then stores
   assert.ok(events.indexOf("money-settled") < events.indexOf("evidence-saved"));
   assert.equal(getReservation().chargedCents, 200);
   assert.equal(events.at(-1), "concurrency-released");
+});
+
+test("DB pacing rejects a second paid task with no provider, money or quota use", async () => {
+  const { db, events, search } = fakeDatabase({ pacingWaitMs: 18_200 });
+  await assert.rejects(() => runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  }), error => error.name === "ResearchPacingRequired" &&
+    error.retryAfterSeconds === 19);
+  assert.equal(events.includes("provider-called"), false);
+  assert.equal(events.includes("money-reserved"), false);
+  assert.equal(events.includes("task-claimed"), false);
+  assert.equal(events.includes("concurrency-reserved"), false);
 });
 
 test("worker does not spend or call provider if there is no queued task", async () => {

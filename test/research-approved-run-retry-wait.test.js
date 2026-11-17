@@ -93,3 +93,27 @@ test("revoked workspace membership forbids approved run state mutations", async 
   assert.deepEqual(result, { code: "WORKSPACE_ACCESS_REVOKED" });
   assert.deepEqual(writes, []);
 });
+
+test("a paced dispatch keeps immutable approval active and stores a wait status", async () => {
+  const { db, writes } = mockDb();
+  const result = await finishApprovedRunTask(db, {
+    ...scope, result: { status: "RATE_LIMIT_WAIT", attempted: false },
+  });
+  assert.deepEqual(result, { code: "RUNNING", lastCode: "WAITING_RATE_LIMIT" });
+  assert.deepEqual(writes, [{ status: "RUNNING", lastCode: "WAITING_RATE_LIMIT" }]);
+});
+
+test("paced wait still respects expiry, task cap, budget and terminal campaign", async () => {
+  for (const options of [
+    { expiresAt: new Date("2000-01-01") },
+    { maxTasks: 1 },
+    { maxWorstCaseCents: 200 },
+    { campaignStatus: "PARTIAL" },
+  ]) {
+    const { db } = mockDb(options);
+    const result = await finishApprovedRunTask(db, {
+      ...scope, result: { status: "RATE_LIMIT_WAIT", attempted: false },
+    });
+    assert.notEqual(result.code, "RUNNING");
+  }
+});
