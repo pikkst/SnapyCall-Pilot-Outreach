@@ -329,6 +329,13 @@ model ResearchCampaignObservation {
   citationUrl String
   rationale String
   status String @default("UNVERIFIED")
+  // Independent source resolution: immutable original citationUrl is preserved.
+  // SOURCE_HINT is not proof of person identity or email ownership.
+  groundingStatus String @default("UNCHECKED")
+  groundingResolvedUrl String? @db.VarChar(2048)
+  groundingProvenance String?
+  groundingCode String?
+  groundingResolvedAt DateTime?
   // Non-billable public-profile inspection is not contact promotion.
   emailTriageStatus String @default("UNCHECKED")
   emailTriageCode String?
