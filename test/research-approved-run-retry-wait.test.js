@@ -117,3 +117,12 @@ test("paced wait still respects expiry, task cap, budget and terminal campaign",
     assert.notEqual(result.code, "RUNNING");
   }
 });
+
+test("quality STOP persists a distinct non-retryable paused approval", async () => {
+  const { db, writes } = mockDb({ campaignStatus: "QUALITY_STOP" });
+  const result = await finishApprovedRunTask(db, {
+    ...scope, result: { status: "COMPLETED", attempted: true },
+  });
+  assert.deepEqual(result, { code: "PAUSED", lastCode: "QUALITY_STOP" });
+  assert.deepEqual(writes, [{ status: "PAUSED", lastCode: "QUALITY_STOP" }]);
+});
