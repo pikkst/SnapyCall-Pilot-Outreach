@@ -2,7 +2,7 @@
 // Candidate mutations or outreach. Every profile is attempted at most once.
 import { randomUUID } from "node:crypto";
 import { lockActiveWorkspaceMembership } from "./workspace-access.js";
-import { inspectCampaignObservationEmail } from "./research-observation-email.js";
+import { inspectCampaignObservationEmail, isDirectPublicProfileUrl } from "./research-observation-email.js";
 
 const CUID = /^c[a-z0-9]{10,40}$/;
 const MAX_PAGES = 250;
@@ -65,6 +65,23 @@ export async function approveEmailTriage(db, {
     if (count < 1 || count > maxPages) {
       return { status: 409, code: "EMAIL_TRIAGE_PAGE_CAP_EXCEEDED",
         availableObservations: count };
+    }
+    // Historical Gemini grounding URLs are not independently inspectable
+    // profiles. Reject an all-opaque campaign before persisting approval:
+    // otherwise every observation would be marked BLOCKED without a fetch.
+    // Preserve the original provider citation and require source resolution
+    // or independently supplied direct profiles in a separate reviewed flow.
+    const sources = await tx.researchCampaignObservation.findMany({
+      where: { campaignId },
+      select: { citationUrl: true },
+      take: maxPages,
+    });
+    if (sources.length !== count) {
+      return { status: 409, code: "EMAIL_TRIAGE_SOURCE_SNAPSHOT_CHANGED" };
+    }
+    if (!sources.some(source => isDirectPublicProfileUrl(source.citationUrl))) {
+      return { status: 409, code: "EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED",
+        availableObservations: count, inspectableObservations: 0 };
     }
     // Reject reauthorization if any previously claimed page exists.
     const previouslyChecked = await tx.researchCampaignObservation.count({
