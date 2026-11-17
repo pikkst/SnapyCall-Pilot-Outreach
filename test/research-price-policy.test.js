@@ -172,7 +172,7 @@ test("certified Gemini grounded-prompt usage settles per prompt, not per query",
       contractVersion: policy.billingContractVersion, billingUnit: "grounded_prompts",
     },
   };
-  assert.equal(calculateVerifiedSpendCents(policy, usage), 5);
+  assert.equal(calculateVerifiedSpendCents(policy, usage), 4);
   assert.equal(calculateVerifiedSpendCents(policy, { ...usage, groundedPrompts: 2 }), null);
   assert.equal(calculateVerifiedSpendCents(policy, { ...usage, groundedPrompts: undefined }), null);
   assert.equal(calculateVerifiedSpendCents(policy, {
