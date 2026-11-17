@@ -11,6 +11,8 @@ export function researchReadiness({ aiStatus, keyConfigured, budgetStatus,
   const modelMatches = !savedProvider || !savedModel ||
     (selectedProvider === savedProvider && selectedModel === savedModel);
   const unavailableModel = pricingStatus === "MODEL_PRICING_UNAVAILABLE";
+  const isGemini3Flash = savedProvider === "gemini" &&
+    savedModel === "gemini-3-flash-preview";
 
   const steps = [
     {
@@ -44,8 +46,10 @@ export function researchReadiness({ aiStatus, keyConfigured, budgetStatus,
         !keyConfigured || monthlyLimitCents === null ?
           "Complete the previous steps before checking availability." :
           !modelMatches ? "Save this model selection, then refresh the server's cost authorization." :
-          unavailableModel ?
+          unavailableModel && isGemini3Flash ?
             "This model cannot run paid campaign search yet: its Google Search query count is decided by the provider, so the app cannot enforce a maximum search cost before each request. Your API key and monthly budget are already configured; adding credit or increasing the budget will not remove this safety block. The separate one-time Gemini 3 diagnostic does not enable a campaign." :
+          unavailableModel ?
+            "This model has no approved app-enforced search billing ceiling. Choose an approved model or check its pricing support; adding provider credit cannot enable paid research." :
           enforcedForPaidSearch ?
             "The server confirms an approved model, enabled research and sufficient application budget." :
             "Search is not available for this model, remaining budget or environment. Adding provider credit alone will not enable it.",
