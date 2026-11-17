@@ -19,6 +19,13 @@ type CampaignProgress = {
     paused: number; failed: number; cancelled: number };
   contactVerification: "NOT_PERFORMED"; sendingEnabled: false;
 };
+type ManualCampaignSource = {
+  id: string; normalizedUrl: string; sourceKind: string;
+  status: string; createdAt: string;
+};
+type CampaignSourcesResponse = {
+  sources: ManualCampaignSource[]; inspected: false; providerCallsAuthorized: false;
+};
 type PartnerTab = "dashboard" | "candidates" | "discovery" | "drafts" | "profile" | "settings";
 type PartnerSession = { authenticated: boolean; conflict?: boolean; userId?: string; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
@@ -224,6 +231,13 @@ function App() {
   const campaignCreateIdempotency = useRef<string | null>(null);
   const [campaignProgressId, setCampaignProgressId] = useState<string | null>(null);
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress | null>(null);
+  const [manualSourceDraft, setManualSourceDraft] = useState("");
+  const [manualSources, setManualSources] = useState<ManualCampaignSource[]>([]);
+  const [manualSourceStatus, setManualSourceStatus] =
+    useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [manualSourceNotice, setManualSourceNotice] = useState("");
+  const [manualSourceBusy, setManualSourceBusy] = useState(false);
+  const manualSourceRequest = useRef(0);
   const [campaignProgressStatus, setCampaignProgressStatus] =
     useState<"idle" | "loading" | "ready" | "error">("idle");
   const [workspaceDataStatus, setWorkspaceDataStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -680,6 +694,11 @@ function App() {
     setSkipChargeConfirmed(false);
     const workspaceGeneration = workspaceRequest.current;
     const request = ++campaignProgressRequest.current;
+    ++manualSourceRequest.current;
+    setManualSourceDraft("");
+    setManualSources([]);
+    setManualSourceStatus("idle");
+    setManualSourceNotice("");
     setCampaignProgressId(campaignId);
     setCampaignProgress(null);
     setCampaignProgressStatus("loading");
@@ -696,6 +715,57 @@ function App() {
       if (workspaceRequest.current !== workspaceGeneration ||
           campaignProgressRequest.current !== request) return;
       setCampaignProgressStatus("error");
+    }
+  }
+
+  async function loadManualCampaignSources(workspaceId: string, campaignId: string) {
+    if (workspaceId !== activeWorkspaceId || campaignProgressId !== campaignId) return;
+    const generation = workspaceRequest.current;
+    const request = ++manualSourceRequest.current;
+    setManualSourceStatus("loading");
+    try {
+      const result = await api<CampaignSourcesResponse>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/sources?workspaceId=" + encodeURIComponent(workspaceId));
+      if (generation !== workspaceRequest.current ||
+          request !== manualSourceRequest.current) return;
+      setManualSources(result.sources);
+      setManualSourceStatus("ready");
+    } catch {
+      if (generation !== workspaceRequest.current ||
+          request !== manualSourceRequest.current) return;
+      setManualSourceStatus("error");
+    }
+  }
+
+  async function queueManualCampaignSources(workspaceId: string, campaignId: string) {
+    if (workspaceId !== activeWorkspaceId || campaignProgressId !== campaignId ||
+        manualSourceBusy) return;
+    const urls = manualSourceDraft.split(/\\r?\\n/).map(url => url.trim()).filter(Boolean);
+    if (!urls.length || urls.length > 25) {
+      setManualSourceNotice("Enter 1 to 25 public HTTPS URLs, one per line.");
+      return;
+    }
+    const generation = workspaceRequest.current;
+    setManualSourceBusy(true);
+    setManualSourceNotice("");
+    try {
+      const result = await api<{ added: number; submitted: number }>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/sources?workspaceId=" + encodeURIComponent(workspaceId), {
+          method: "POST", body: JSON.stringify({ urls }),
+        });
+      if (generation !== workspaceRequest.current) return;
+      setManualSourceDraft("");
+      setManualSourceNotice(result.added + " new source(s) queued for future enrichment. " +
+        "No AI search or email inspection has been started.");
+      await loadManualCampaignSources(workspaceId, campaignId);
+    } catch (error) {
+      if (generation === workspaceRequest.current)
+        setManualSourceNotice(error instanceof Error ? error.message :
+          "Could not save source URLs.");
+    } finally {
+      if (generation === workspaceRequest.current) setManualSourceBusy(false);
     }
   }
 
@@ -1671,6 +1741,52 @@ function App() {
                               {" "}Review your application budget and spend ledger in AI settings.
                               No automatic budget increase or refund is performed.</p>}
                         </>}
+                        <section className="campaign-manual-sources"
+                          aria-label="Add public research sources">
+                          <h5>Add public source URLs</h5>
+                          <p className="muted">Paste up to 25 public HTTPS profile or
+                            company page URLs, one per line. These sources are
+                            saved for a future evidence review stage. Saving does
+                            not launch AI, inspect websites, create contacts or
+                            authorize provider spending.</p>
+                          <label>Public source URLs
+                            <textarea rows={4} value={manualSourceDraft}
+                              disabled={manualSourceBusy}
+                              placeholder={"https://example.org/experts/jane\\nhttps://company.example.org/team"}
+                              onChange={event => setManualSourceDraft(event.target.value)}/>
+                          </label>
+                          <div className="campaign-source-actions">
+                            <button type="button"
+                              disabled={manualSourceBusy ||
+                                !manualSourceDraft.trim()}
+                              onClick={() => void queueManualCampaignSources(
+                                p.id, campaignProgress.id)}>
+                              {manualSourceBusy ? "Saving sources…" : "Add to research queue"}
+                            </button>
+                            <button type="button" className="secondary"
+                              disabled={manualSourceBusy || manualSourceStatus === "loading"}
+                              onClick={() => void loadManualCampaignSources(
+                                p.id, campaignProgress.id)}>
+                              {manualSourceStatus === "loading"
+                                ? "Loading sources…" : "View queued sources"}
+                            </button>
+                          </div>
+                          {manualSourceNotice && <p role="status">{manualSourceNotice}</p>}
+                          {manualSourceStatus === "error" &&
+                            <p role="alert">Saved source list unavailable. Try again.</p>}
+                          {manualSourceStatus === "ready" &&
+                            <p className="muted">{manualSources.length} saved source(s)
+                              shown · Not inspected · No contacts created</p>}
+                          {manualSourceStatus === "ready" && manualSources.length > 0 &&
+                            <ul className="campaign-source-list">
+                              {manualSources.map(source => <li key={source.id}>
+                                <a href={source.normalizedUrl} target="_blank"
+                                  rel="noopener noreferrer">{source.normalizedUrl}</a>
+                                <small>{source.status.replaceAll("_", " ")}
+                                  {" · "}Added {new Date(source.createdAt).toLocaleString()}</small>
+                              </li>)}
+                            </ul>}
+                        </section>
                         <button type="button" className="secondary"
                           onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
                           Refresh progress</button>
@@ -1678,6 +1794,11 @@ function App() {
                       <button type="button" className="secondary"
                         onClick={() => {
                           ++campaignProgressRequest.current;
+                          ++manualSourceRequest.current;
+                          setManualSourceDraft("");
+                          setManualSources([]);
+                          setManualSourceStatus("idle");
+                          setManualSourceNotice("");
                           setCampaignProgressId(null);
                           setCampaignProgress(null);
                           setCampaignProgressStatus("idle");
