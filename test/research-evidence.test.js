@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildBoundedRetrievalManifest, normalizeResearchEvidence, publicCitationUrl } from "../server/research-evidence.js";
+import { buildBoundedRetrievalManifest, normalizeBoundedRetrievalEvidence, normalizeResearchEvidence, publicCitationUrl } from "../server/research-evidence.js";
 
 const url = "https://profiles.example.org/consultant";
 const candidate = {
@@ -118,5 +118,65 @@ test("bounded manifest fails closed for ambiguous or malformed retrieval records
   ]) assert.throws(() => manifest(records), TypeError);
   assert.throws(() => buildBoundedRetrievalManifest({
     provider: "synthetic_test", observedAt: "not-a-time", records: [boundedRecord],
+  }), TypeError);
+});
+
+const boundedCandidate = {
+  name: "Independent Expert", category: "AI_AUTOMATION",
+  sourceId: "doc-01", rationale: "Referenced public professional profile",
+};
+const bind = (items, data = manifest([boundedRecord])) =>
+  normalizeBoundedRetrievalEvidence({
+    text: JSON.stringify({ candidates: items }),
+    manifest: data, limit: 10,
+  });
+
+test("model source IDs resolve only through the verified retrieval manifest", () => {
+  const data = manifest([boundedRecord]);
+  const result = bind([boundedCandidate], data);
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].sourceUrl, "https://profiles.example.org/consultant");
+  assert.equal(result.candidates[0].email, null);
+  assert.equal(result.candidates[0].contactReviewed, false);
+  assert.equal(result.candidates[0].status, "REVIEW_PENDING");
+  assert.equal(result.manifestDigest, data.digest);
+  assert.equal(result.imported, false);
+  assert.equal(result.reviewRequired, true);
+  assert.equal(result.sendingEnabled, false);
+});
+
+test("unknown sources and fabricated model URLs cannot become cited candidates", () => {
+  const forged = [
+    { ...boundedCandidate, sourceId: "not-in-retrieval" },
+    { ...boundedCandidate, sourceUrl: "https://invented.example.org/" },
+    { ...boundedCandidate, email: "madeup@example.org" },
+    { ...boundedCandidate, profileReviewed: true },
+  ];
+  const result = bind(forged);
+  assert.equal(result.candidates.length, 0);
+  assert.ok(result.warnings.length > 0);
+  assert.equal(result.sources.length, 1);
+});
+
+test("a modified or mixed-provenance manifest is rejected before normalization", () => {
+  const original = manifest([boundedRecord]);
+  for (const tampered of [
+    { ...original, digest: "0".repeat(64) },
+    { ...original, records: [{ ...original.records[0], excerpt: "Altered text" }] },
+    { ...original, records: [{ ...original.records[0], sourceProvider: "other" }] },
+    { ...original, records: [{ ...original.records[0], sourceId: "elsewhere" }] },
+  ]) assert.throws(() => bind([boundedCandidate], tampered), TypeError);
+});
+
+test("bounded model output rejects malformed and oversized candidate envelopes", () => {
+  const data = manifest([boundedRecord]);
+  for (const text of ["not json", "{}", JSON.stringify({
+    candidates: Array(21).fill(boundedCandidate),
+  })]) assert.throws(() => normalizeBoundedRetrievalEvidence({
+    text, manifest: data, limit: 10,
+  }));
+  assert.throws(() => normalizeBoundedRetrievalEvidence({
+    text: JSON.stringify({ candidates: [boundedCandidate] }),
+    manifest: data, limit: 21,
   }), TypeError);
 });
