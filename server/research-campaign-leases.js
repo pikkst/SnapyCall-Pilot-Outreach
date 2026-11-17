@@ -132,9 +132,13 @@ export async function claimResearchTask(db, { campaignId, workspaceId, ownerId,
 
 // Fencing tokens reject stale, cancelled or duplicated completions. Caller
 // must commit evidence observations in the SAME transaction in the executor.
-export async function completeResearchTask(tx, claim, { observedCount, now = new Date() }) {
+export async function completeResearchTask(tx, claim, {
+  observedCount, now = new Date(), completionCode = null,
+}) {
   if (!Number.isInteger(observedCount) || observedCount < 0 ||
-    observedCount > claim.limit || !(now instanceof Date) ||
+    observedCount > claim.limit ||
+    (completionCode !== null && (completionCode !== "NO_VERIFIABLE_GROUNDING" || observedCount !== 0)) ||
+    !(now instanceof Date) ||
     !Number.isFinite(now.getTime())) {
     throw new TypeError("Invalid task result count");
   }
@@ -144,7 +148,7 @@ export async function completeResearchTask(tx, claim, { observedCount, now = new
       campaign: { workspaceId: claim.workspaceId, ownerId: claim.ownerId,
         status: "RUNNING" } },
     data: { status: "COMPLETED", observedCount, completedAt: now,
-      leaseToken: null, leaseUntil: null },
+      lastErrorCode: completionCode, leaseToken: null, leaseUntil: null },
   });
   return updated.count === 1;
 }
