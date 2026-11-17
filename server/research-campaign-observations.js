@@ -55,8 +55,12 @@ export function normalizeCampaignObservations(preview, limit) {
 // A stale worker cannot insert observations. Uniqueness is enforced across
 // campaign tasks by PostgreSQL, not by process-local memory.
 export async function commitCampaignResearchResult(db, claim, preview,
-  now = new Date(), { beforeCommit = null } = {}) {
+  now = new Date(), { beforeCommit = null, completionCode = null } = {}) {
   const observations = normalizeCampaignObservations(preview, claim.limit);
+  if (completionCode !== null && (completionCode !== "NO_VERIFIABLE_GROUNDING" ||
+      observations.length !== 0)) {
+    throw new TypeError("Zero-evidence completion must have no observations");
+  }
   if (beforeCommit !== null && typeof beforeCommit !== "function") {
     throw new TypeError("Invalid membership guard");
   }
@@ -75,7 +79,7 @@ export async function commitCampaignResearchResult(db, claim, preview,
       FOR UPDATE`;
     if (campaignRows.length !== 1) throw new CampaignLeaseConflict();
     const applied = await completeResearchTask(tx, claim, {
-      observedCount: observations.length, now,
+      observedCount: observations.length, completionCode, now,
     });
     if (!applied) throw new CampaignLeaseConflict();
     const saved = observations.length ? await tx.researchCampaignObservation.createMany({
@@ -239,6 +243,8 @@ export function summarizeCampaignProgress(campaign) {
     rawCandidateObservations: rawObservations,
     duplicateObservations: Math.max(0, rawObservations - unique),
     plannedTasks: campaign.tasks.length, tasks: byStatus,
+    noGroundingTasks: campaign.tasks.filter(task => task.status === "COMPLETED" &&
+      task.lastErrorCode === "NO_VERIFIABLE_GROUNDING").length,
     pausedTaskReview: campaign.tasks.filter(task =>
       task.status === "PAUSED" && Number.isInteger(task.taskIndex) &&
       task.lastErrorCode === "BILLING_UNCERTAIN").map(task => ({
