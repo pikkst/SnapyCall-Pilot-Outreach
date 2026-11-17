@@ -29,7 +29,7 @@ export class ResearchStructuredOutputUnavailableError extends Error {
 
 const models = {
   openai: /^gpt-[a-zA-Z0-9][a-zA-Z0-9._-]{1,75}$/,
-  gemini: /^gemini-(?:2\.5|3\.)[a-zA-Z0-9._-]{1,70}$/,
+  gemini: /^gemini-(?:2\.5|3(?:\.|-))[a-zA-Z0-9._-]{1,70}$/,
 };
 
 export function assertWebResearchModel(provider, model) {
