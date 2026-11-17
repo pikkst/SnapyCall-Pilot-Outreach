@@ -19,6 +19,10 @@ import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchP
 import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
+import { approveCampaignRun, stopApprovedCampaignRun,
+  publicRunStatus, ApprovedRunBlocked }
+  from "./research-campaign-run-approval.js";
+import { startApprovedCampaignWorker } from "./research-approved-runner.js";
 import { normalizeManualResearchSources, enqueueManualResearchSources } from "./research-manual-sources.js";
 import { inspectCampaignObservationEmail } from "./research-observation-email.js";
 import { acceptReviewedCampaignContact } from "./research-observation-contact-intake.js";
@@ -1519,6 +1523,88 @@ app.post("/api/research-campaigns/:id/observations/:observationId/accept-contact
 
 // Explicitly invoked one-task executor. Both flags are OFF by default;
 // nothing schedules background work or permits autonomous paid requests.
+// New opt-in autonomous approval. Feature flag is OFF by default.
+// Only a clean, not-yet-executed campaign may be approved; all prices
+// and immutable attempt/cost caps come from verified server-side policy.
+app.post("/api/research-campaigns/:id/approve-run",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (env.AI_AGENT_RESEARCH_ENABLED !== "true" ||
+        env.AI_AGENT_EXECUTOR_ENABLED !== "true" ||
+        env.AI_AGENT_AUTORUN_ENABLED !== "true") {
+      return res.status(503).json({ code: "AUTONOMOUS_RUN_DISABLED" });
+    }
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const result = await approveCampaignRun(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id, input: req.body,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
+app.post("/api/research-campaigns/:id/approved-run/stop",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    z.object({ confirmStop: z.literal(true) }).strict().parse(req.body ?? {});
+    const result = await stopApprovedCampaignRun(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
+app.get("/api/research-campaigns/:id/approved-run",
+  candidateReadScope, safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const campaign = await prisma.researchCampaign.findFirst({
+      where: { id: req.params.id, workspaceId: req.candidateScope,
+        ownerId: identity.id }, select: { id: true },
+    });
+    if (!campaign) return res.status(404).json({ code: "CAMPAIGN_NOT_FOUND" });
+    const run = await prisma.researchCampaignRun.findUnique({
+      where: { campaignId: campaign.id },
+    });
+    let priceEnvelope = null;
+    if (!run && env.AI_AGENT_AUTORUN_ENABLED === "true") {
+      const setting = await prisma.aiSetting.findUnique({
+        where: { ownerId: identity.id },
+        select: { provider: true, model: true },
+      });
+      if (setting) {
+        try {
+          const price = requireResearchPriceEnvelope(setting);
+          priceEnvelope = {
+            provider: setting.provider, model: setting.model,
+            worstCasePerCallCents: price.worstCaseCents,
+            priceVersion: price.priceVersion,
+          };
+        } catch {
+          // An unavailable price policy never enables paid approval.
+        }
+      }
+    }
+    res.set("Cache-Control", "no-store");
+    return res.json({ run: run ? publicRunStatus(run) : null,
+      priceEnvelope,
+      autonomousRunEnabled: env.AI_AGENT_AUTORUN_ENABLED === "true" &&
+        env.AI_AGENT_RESEARCH_ENABLED === "true" &&
+        env.AI_AGENT_EXECUTOR_ENABLED === "true",
+      sendingEnabled: false });
+  }));
+
 app.post("/api/research-campaigns/:id/execute-next",
   candidateReadScope, requireOrigin, campaignExecutionLimiter, safe(async (req, res) => {
     if (env.AI_AGENT_RESEARCH_ENABLED !== "true" ||
@@ -1562,6 +1648,10 @@ app.post("/api/research-campaigns/:id/execute-next",
       }
       return res.json(output);
     } catch (error) {
+      if (error instanceof ApprovedRunBlocked) {
+        return res.status(409).json({ code: error.code,
+          error: "This campaign has a separate immutable run authorization" });
+      }
       if (error instanceof ResearchWorkerPreflightError) {
         return res.status(409).json({ code: error.code,
           error: "AI research settings or limits require attention" });
@@ -1850,10 +1940,19 @@ async function start() {
   const port = Number(process.env.PORT ?? 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid PORT");
   const server = app.listen(port, "0.0.0.0", () => console.log("Pilot admin listening on port " + port));
+  // No automatic spending without an explicitly enabled server feature and
+  // a persisted per-campaign approval. The loop is not an always-on SLA on
+  // Render free or while the service is sleeping.
+  const stopApprovedWorker = env.AI_AGENT_AUTORUN_ENABLED === "true" &&
+    env.AI_AGENT_RESEARCH_ENABLED === "true" &&
+    env.AI_AGENT_EXECUTOR_ENABLED === "true"
+    ? startApprovedCampaignWorker(prisma, { encryptionKey: env.AI_ENCRYPTION_KEY })
+    : () => {};
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopApprovedWorker();
     server.close(async () => {
       await prisma.$disconnect();
       process.exit(0);

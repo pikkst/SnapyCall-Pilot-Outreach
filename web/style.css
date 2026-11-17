@@ -162,3 +162,11 @@ td button+button{margin-left:6px}
 .campaign-stage-steps li[data-stage-state="FINISHED"] .campaign-stage-marker{background:#d6f2e2;color:#226746}
 .campaign-stage-steps li[data-stage-state="DISABLED"]{opacity:.72}
 @media(prefers-reduced-motion:no-preference){.campaign-stage-steps li[data-stage-state="ACTIVE"] .campaign-stage-marker{animation:campaign-active-pulse 1.65s ease-in-out infinite}@keyframes campaign-active-pulse{0%,100%{box-shadow:0 0 0 0 rgba(31,139,83,.12)}50%{box-shadow:0 0 0 8px rgba(31,139,83,.06)}}}
+
+/* An explicit conservative USD budget is never a provider-invoice claim. */
+.campaign-approved-run{margin:14px 0;padding:16px;border:1px solid #c7d5ea;border-radius:12px;background:#f7faff}
+.campaign-approved-run>strong{display:block;margin-bottom:8px}
+.campaign-approved-run p{line-height:1.55;margin:8px 0;font-size:13px}
+.campaign-approved-run input[type=number]{display:block;max-width:130px;margin-top:7px}
+.campaign-approved-run input[type=checkbox]{flex:none;margin-top:4px}
+.campaign-approved-run button{margin:8px 0}

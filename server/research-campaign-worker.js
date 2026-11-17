@@ -12,6 +12,7 @@ import { requireResearchPriceEnvelope, calculateVerifiedSpendCents } from "./res
 import { assertWebResearchModel } from "./research-provider-adapters.js";
 import { researchCandidates } from "./ai-research.js";
 import { decryptKey } from "./security.js";
+import { reserveApprovedRunCall, ApprovedRunBlocked } from "./research-campaign-run-approval.js";
 
 export class ResearchWorkerPreflightError extends Error {
   constructor(code) {
@@ -23,6 +24,7 @@ export class ResearchWorkerPreflightError extends Error {
 
 export async function runOneCampaignTask(db, {
   campaignId, workspaceId, ownerId, encryptionKey,
+  autonomousApproved = false,
 }, {
   search = researchCandidates, now = () => new Date(),
   membership = requireWorkspaceMembership,
@@ -60,6 +62,19 @@ export async function runOneCampaignTask(db, {
     ...scope, now: now(),
     beforeLock: tx => lockActiveWorkspaceMembership(tx, { workspaceId, userId: ownerId }),
     reserveInTransaction: async (tx, task) => {
+      // Existing explicit executor cannot spend against an autonomous approval.
+      // Campaign and membership rows are already locked by claimResearchTask.
+      if (autonomousApproved) {
+        await reserveApprovedRunCall(tx, {
+          campaignId, workspaceId, ownerId,
+          provider: setting.provider, model: setting.model, price,
+        });
+      } else {
+        const priorRun = await tx.researchCampaignRun.findUnique({
+          where: { campaignId }, select: { id: true },
+        });
+        if (priorRun) throw new ApprovedRunBlocked("RUN_REQUIRES_AUTONOMOUS_EXECUTOR");
+      }
       const preferences = await lockedResearchPreferences(tx, ownerId);
       if (task.limit > preferences.maxCandidates) {
         throw new ResearchWorkerPreflightError("RESEARCH_RESULT_LIMIT_EXCEEDED");
