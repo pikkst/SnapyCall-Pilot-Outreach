@@ -10,6 +10,15 @@ This is a **release gate**, not evidence that these steps have passed. Do not de
 4. Set a **monthly application research budget** and task/day limits. The USD application ledger is conservative, **not** the Google AI Studio bill or prepaid balance. Do not ask Grey to raise the budget just because the app reserved a worst-case ceiling.
 5. Confirm source/grounding and public-email inspection feature availability. If their server flags are OFF, the dashboard must visibly report them as unavailable; do not imply that source-to-email enrichment can run.
 
+## Unified Research workspace UI contract (Grey pilot)
+
+1. Enter **Research / Find experts**, choose **One search** (up to 20 cited candidates) or **Campaign** (100 cited-candidate target) without navigating to a separate dashboard-only workflow.
+2. Check the same readiness state in both modes. Configure the personal AI adapter first; save the monthly USD *application* budget and attempt limits before any paid execution. Missing requirements should link to AI settings. Planning a 100-target campaign is free and must not issue a paid provider request.
+3. When changing between modes, criteria should be copied into the campaign editor subject to its 240-character server contract; changing campaign criteria must preserve the current text and invalidate the old create-idempotency key. A planned campaign is still inert until an explicit, separately capped paid approval.
+4. Review existing campaigns, their persisted progress and contact-evidence stages in the **same Research workspace**. A sourced observation is not a named email or usable contact.
+5. Confirm Google Sheets and Gmail are **optional follow-on integrations**. Google Forms/Sheets currently has read-only consent but no active sync, and Gmail sending remains disabled. Neither is required to configure paid research.
+6. Inspect phone and desktop layouts, keyboard focus on both mode buttons, separate campaign status/error states, long criteria and slow read-only progress fetches. Confirm switching workspaces cannot show a stale previous workspace's results.
+
 ## Single-run pilot acceptance
 
 1. Start with a small new research campaign (e.g., 5–10 public professionals) using an explicit narrow request and approved conservative attempt cap. Avoid a 100-contact paid campaign for initial smoke.

@@ -177,3 +177,12 @@ td button+button{margin-left:6px}
 .campaign-email-triage button{margin:9px 0}
 .campaign-email-triage[data-state="RUNNING"]{border-color:#8ebfa7}
 @media(prefers-reduced-motion:no-preference){.campaign-email-triage[data-state="RUNNING"] .campaign-stage-state{animation:campaign-active-pulse 1.65s ease-in-out infinite;border-radius:8px;padding:4px}}
+
+
+/* Grey pilot: one Research workspace, accessible choice of one-off vs campaign. */
+.research-mode-choice{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:18px 0 4px}
+.research-mode-choice button{min-height:48px;border:1px solid #cfdaf1;white-space:normal;text-align:center;background:#fff;color:#2c4773}
+.research-mode-choice button.active{background:#eaf0ff;color:#1d3c93;border:2px solid #3153c4;box-shadow:0 0 0 2px #e1e9ff}
+.research-mode-choice button:focus-visible{outline:3px solid #5c7fe0;outline-offset:3px}
+.research-mode-choice button:hover:not(:disabled){background:#edf3ff;opacity:1}
+@media(max-width:600px){.research-mode-choice{grid-template-columns:minmax(0,1fr)}.research-mode-choice button{width:100%}}
