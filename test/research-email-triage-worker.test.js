@@ -40,10 +40,10 @@ function fixture({ status = "RUNNING", discovery = "COMPLETED",
     },
     researchCampaignObservation: {
       count: async ({ where }) => {
+        if (where.emailTriageStatus === "CHECKING" &&
+            where.emailTriageLeaseUntil) return stale ? 1 : 0;
         if (where.emailTriageStatus === "CHECKING") return checking;
         if (where.emailTriageStatus?.not === "UNCHECKED") return inspected;
-        if (where.emailTriageStatus?.leaseUntil) return stale ? 1 : 0;
-        if (where.emailTriageLeaseUntil) return stale ? 1 : 0;
         return observed;
       },
       updateMany: async ({ data }) => {
