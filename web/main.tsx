@@ -2072,39 +2072,11 @@ function App() {
                         onClick={() => {
                           setResearchMode("campaign");
                           setCampaignTestQuery(researchQuery.trim().slice(0,240));
+                          campaignCreateIdempotency.current = null;
                         }}>
                         Campaign · 100 candidate target
                       </button>
                     </div>
-                  </section>
-                  <section aria-label="Manual expert lead" className="review-panel">
-                    <h3>Add an expert manually</h3>
-                    <p className="muted">Enter an expert name and the public page you reviewed.
-                      This does not scan or fetch the source website, check permissions,
-                      extract emails, qualify an expert or send any messages.
-                      Restricted directories must be researched manually or with permission.
-                      After saving, open an independent browser search or prepare a draft
-                      research query without triggering an automated provider call.</p>
-                    <form onSubmit={event => void saveManualSeed(p.id, event)}>
-                      <label>Expert name
-                        <input required minLength={2} maxLength={160} value={seedName}
-                          onChange={event => setSeedName(event.target.value)}/>
-                      </label>
-                      <label>Field
-                        <select value={seedCategory} onChange={event => setSeedCategory(event.target.value)}>
-                          {categories.map(([value, title]) =>
-                            <option key={value} value={value}>{title}</option>)}
-                        </select>
-                      </label>
-                      <label>Source page URL (HTTPS)
-                        <input type="url" required maxLength={2048} pattern="https://.*"
-                          value={seedUrl} onChange={event => setSeedUrl(event.target.value)}
-                          placeholder="https://example.org/experts/profile"/>
-                      </label>
-                      <button type="submit" disabled={seedSaving}>
-                        {seedSaving ? "Saving…" : "Add to my workspace"}
-                      </button>
-                    </form>
                   </section>
                   {researchMode === "single" && <section aria-label="AI web research preview" className="review-panel">
                   <h3>Find experts with AI web search</h3>
@@ -2161,7 +2133,13 @@ function App() {
                   <form onSubmit={event => void runResearch(p.id, event)}>
                     <label>Research criteria
                       <input value={researchQuery} maxLength={350} minLength={12} required
-                        onChange={event => setResearchQuery(event.target.value)}/>
+                        onChange={event => {
+                          setResearchQuery(event.target.value);
+                          if (event.target.value.trim().length <= 240) {
+                            setCampaignTestQuery(event.target.value);
+                            campaignCreateIdempotency.current = null;
+                          }
+                        }}/>
                     </label>
                     <button type="submit" disabled={researchStatus === "loading" ||
                       !readiness.ready}>
@@ -2388,6 +2366,7 @@ function App() {
                           disabled={campaignTestBusy} value={campaignTestQuery}
                           onChange={event => {
                             setCampaignTestQuery(event.target.value);
+                            setResearchQuery(event.target.value);
                             campaignCreateIdempotency.current = null;
                           }} />
                       </label>
@@ -2982,6 +2961,35 @@ function App() {
                         }}>Close</button>
                     </section>}
                   </div>
+                  <section aria-label="Manual expert lead" className="review-panel">
+                    <h3>Add an expert manually</h3>
+                    <p className="muted">Enter an expert name and the public page you reviewed.
+                      This does not scan or fetch the source website, check permissions,
+                      extract emails, qualify an expert or send any messages.
+                      Restricted directories must be researched manually or with permission.
+                      After saving, open an independent browser search or prepare a draft
+                      research query without triggering an automated provider call.</p>
+                    <form onSubmit={event => void saveManualSeed(p.id, event)}>
+                      <label>Expert name
+                        <input required minLength={2} maxLength={160} value={seedName}
+                          onChange={event => setSeedName(event.target.value)}/>
+                      </label>
+                      <label>Field
+                        <select value={seedCategory} onChange={event => setSeedCategory(event.target.value)}>
+                          {categories.map(([value, title]) =>
+                            <option key={value} value={value}>{title}</option>)}
+                        </select>
+                      </label>
+                      <label>Source page URL (HTTPS)
+                        <input type="url" required maxLength={2048} pattern="https://.*"
+                          value={seedUrl} onChange={event => setSeedUrl(event.target.value)}
+                          placeholder="https://example.org/experts/profile"/>
+                      </label>
+                      <button type="submit" disabled={seedSaving}>
+                        {seedSaving ? "Saving…" : "Add to my workspace"}
+                      </button>
+                    </form>
+                  </section>
                 </>}
                 {(partnerTab === "candidates" || partnerTab === "drafts") && <>
                 <h3>My candidates and outreach drafts</h3>
