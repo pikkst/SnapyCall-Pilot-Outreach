@@ -12,4 +12,7 @@ export function researchReadiness(input: {
   monthlyLimitCents: number | null;
   enforcedForPaidSearch: boolean;
   limitsStatus: "loading" | "ready" | "error";
+  pricingStatus?: "READY" | "MODEL_PRICING_UNAVAILABLE" | "AI_SETTINGS_REQUIRED" | "RESEARCH_DISABLED" | "INSUFFICIENT_APP_BUDGET";
+  selectedProvider?: string; selectedModel?: string;
+  savedProvider?: string | null; savedModel?: string | null;
 }): { steps: ResearchReadinessStep[]; ready: boolean };
