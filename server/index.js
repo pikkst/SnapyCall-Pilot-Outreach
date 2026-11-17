@@ -934,7 +934,9 @@ app.post("/api/discovery/gemini3-one-shot", candidateReadScope, requireOrigin,
           error instanceof ResearchProviderHttpError ?
           "PROVIDER_HTTP_REJECTED" : "UNCONFIRMED_UPSTREAM_OUTCOME";
         return res.status(200).json({
-          status: "COMPLETED_WITH_NO_ACCEPTED_EVIDENCE",
+          status: outcomeCode === "UNCONFIRMED_UPSTREAM_OUTCOME" ||
+            outcomeCode === "PROVIDER_HTTP_REJECTED" ?
+            "BILLING_UNCERTAIN" : "COMPLETED_WITH_NO_ACCEPTED_EVIDENCE",
           code: outcomeCode, diagnostic: summary,
           noContactsImported: true, noEmailSent: true,
           providerInvoiceConfirmed: false,
