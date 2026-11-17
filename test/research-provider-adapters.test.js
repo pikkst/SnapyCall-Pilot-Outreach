@@ -271,3 +271,36 @@ test("truncated Gemini output or invalid provider envelope never qualifies as sa
       groundingMetadata: null }] }),
   }), error => error.code === "NO_VERIFIABLE_GROUNDING");
 });
+
+test("Gemini 3 Flash preview uses supported minimal thinking and never certifies 2.5 tariffs", async () => {
+  const result = await researchCandidates({
+    provider: "gemini", model: "gemini-3-flash-preview",
+    apiKey: "gemini-test-user-key", query,
+  }, { post: async (url, headers, payload) => {
+    assert.match(url, /models\/gemini-3-flash-preview:generateContent$/);
+    assert.equal(headers["x-goog-api-key"], "gemini-test-user-key");
+    assert.deepEqual(payload.tools, [{ google_search: {} }]);
+    assert.deepEqual(payload.generationConfig.thinkingConfig, { thinkingLevel: "minimal" });
+    assert.equal(payload.generationConfig.maxOutputTokens, 3200);
+    return {
+      candidates: [{
+        finishReason: "STOP",
+        content: { parts: [{ text: raw }] },
+        groundingMetadata: {
+          webSearchQueries: ["consultant US", "expert Canada"],
+          groundingChunks: [{ web: { uri: source, title: "Provider-backed source" } }],
+        },
+      }],
+      usageMetadata: {
+        promptTokenCount: 200, candidatesTokenCount: 155,
+        thoughtsTokenCount: 0, totalTokenCount: 355,
+      },
+    };
+  } });
+  assert.deepEqual(result.candidates.map(c => c.name), ["Verified Professional"]);
+  assert.equal(result.usage.searchRequests, 2);
+  assert.equal(result.usage.billingEvidence, undefined,
+    "Never certify Gemini 3 query-based billing as the 2.5 grounded-prompt tariff");
+  assert.equal(result.usage.groundedPrompts, undefined);
+  assert.equal(result.sendingEnabled, false);
+});
