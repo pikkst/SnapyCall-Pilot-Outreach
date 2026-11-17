@@ -282,6 +282,11 @@ model ResearchCampaign {
   emailTriageAuthorizedAt DateTime?
   emailTriageExpiresAt DateTime?
   emailTriageMaxPages Int @default(0)
+  // Explicit one-shot authorization for unverified Google redirect resolution.
+  groundingRunStatus String @default("IDLE")
+  groundingRunMaxSources Int @default(0)
+  groundingRunApprovedAt DateTime?
+  groundingRunExpiresAt DateTime?
 
   @@unique([workspaceId, ownerId, idempotencyKey])
   @@index([workspaceId, createdAt])
@@ -336,6 +341,9 @@ model ResearchCampaignObservation {
   groundingProvenance String?
   groundingCode String?
   groundingResolvedAt DateTime?
+  // A committed claim is not retried automatically after an uncertain HEAD.
+  groundingLeaseToken String?
+  groundingLeaseUntil DateTime?
   // Non-billable public-profile inspection is not contact promotion.
   emailTriageStatus String @default("UNCHECKED")
   emailTriageCode String?
