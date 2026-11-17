@@ -1504,6 +1504,30 @@ function App() {
     }
   }
 
+  async function loadGemini3OneShot(workspaceId: string) {
+    if (activeWorkspaceId !== workspaceId) return;
+    setGemini3TestError("");
+    try {
+      const result = await api<Gemini3OneShotResult>(
+        "/discovery/gemini3-one-shot?workspaceId=" +
+        encodeURIComponent(workspaceId));
+      if (activeWorkspaceId !== workspaceId) return;
+      if (result.status === "FINISHED") {
+        gemini3TestAttempted.current = true;
+        setGemini3TestResult(result);
+      } else if (result.status === "PENDING_RECONCILIATION") {
+        gemini3TestAttempted.current = true;
+        setGemini3TestError("A provider call may have been billed. " +
+          "The outcome needs manual reconciliation. No replay is allowed.");
+      } else {
+        setGemini3TestError("No Gemini 3 diagnostic has been run for this owner.");
+      }
+    } catch (error) {
+      setGemini3TestError(error instanceof Error ? error.message :
+        "Saved diagnostic unavailable");
+    }
+  }
+
   async function runGemini3OneShot(workspaceId: string) {
     if (gemini3TestAttempted.current || gemini3TestBusy ||
         !gemini3TestConfirmed || activeWorkspaceId !== workspaceId ||
@@ -2273,6 +2297,11 @@ function App() {
                           onClick={() => void runGemini3OneShot(p.id)}>
                           {gemini3TestBusy ? "Running one provider call…" :
                             "Run ONE Gemini 3 Search cost test"}
+                        </button>
+                        <button type="button" className="secondary"
+                          disabled={gemini3TestBusy}
+                          onClick={() => void loadGemini3OneShot(p.id)}>
+                          View saved test metrics (no provider call)
                         </button>
                         {gemini3TestError && <p role="alert">
                           {gemini3TestError} The call may have been billed;
