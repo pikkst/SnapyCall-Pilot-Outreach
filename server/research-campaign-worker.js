@@ -164,6 +164,7 @@ export async function runOneCampaignTask(db, {
         if (!settled) await settle(null);
         const write = await commitCampaignResearchResult(db, claim,
           { candidates: [], sources: [] }, now(), {
+            completionCode: "NO_VERIFIABLE_GROUNDING",
             beforeCommit: tx => lockActiveWorkspaceMembership(tx, {
               workspaceId, userId: ownerId,
             }),
