@@ -2960,7 +2960,7 @@ function App() {
                           setCampaignProgressStatus("idle");
                         }}>Close</button>
                     </section>}
-                  </div>
+                  </div>}
                   <section aria-label="Manual expert lead" className="review-panel">
                     <h3>Add an expert manually</h3>
                     <p className="muted">Enter an expert name and the public page you reviewed.
