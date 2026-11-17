@@ -5,6 +5,7 @@ import { manualIndependentResearch } from "../src/manual-research.js";
 import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch, selectedDiscoverySeedBatch } from "../src/research-review-batch.js";
 import { researchReadiness } from "../src/research-readiness.js";
 import { runApprovedCampaignBatch } from "../src/campaign-batch.js";
+import { campaignStageTimeline } from "../src/campaign-stage-timeline.js";
 import { describeCampaignBudget } from "../src/campaign-budget-status.js";
 import { singleAuthorizedWorkspaceId } from "../src/partner-workspace-navigation.js";
 
@@ -244,6 +245,8 @@ function App() {
   const campaignCreateIdempotency = useRef<string | null>(null);
   const [campaignProgressId, setCampaignProgressId] = useState<string | null>(null);
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress | null>(null);
+  const [campaignProgressLastSeen, setCampaignProgressLastSeen] = useState<number | null>(null);
+  const [campaignProgressLiveWarning, setCampaignProgressLiveWarning] = useState(false);
   const [manualSourceDraft, setManualSourceDraft] = useState("");
   const [manualSources, setManualSources] = useState<ManualCampaignSource[]>([]);
   const [manualSourceStatus, setManualSourceStatus] =
@@ -424,6 +427,40 @@ function App() {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [loggedIn, partnerSession?.authenticated]);
+
+  useEffect(() => {
+    // Read-only server progress refresh, not an autonomous executor or AI call.
+    if (!activeWorkspaceId || !campaignProgressId ||
+        campaignProgressStatus !== "ready") return;
+    const generation = workspaceRequest.current;
+    const opened = campaignProgressRequest.current;
+    let disposed = false;
+    let inFlight = false;
+    const refresh = async () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      try {
+        const progress = await api<CampaignProgress>("/research-campaigns/" +
+          encodeURIComponent(campaignProgressId) + "/progress?workspaceId=" +
+          encodeURIComponent(activeWorkspaceId));
+        if (!disposed && generation === workspaceRequest.current &&
+            opened === campaignProgressRequest.current) {
+          setCampaignProgress(progress);
+          setCampaignProgressLastSeen(Date.now());
+          setCampaignProgressLiveWarning(false);
+        }
+      } catch {
+        if (!disposed && generation === workspaceRequest.current &&
+            opened === campaignProgressRequest.current) {
+          setCampaignProgressLiveWarning(true);
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    const interval = window.setInterval(() => void refresh(), 6_000);
+    return () => { disposed = true; window.clearInterval(interval); };
+  }, [activeWorkspaceId, campaignProgressId, campaignProgressStatus]);
 
   async function loadMyProfile() {
     setProfileState("loading");
@@ -739,6 +776,8 @@ function App() {
     setManualSources([]);
     setManualSourceStatus("idle");
     setManualSourceNotice("");
+    setCampaignProgressLastSeen(null);
+    setCampaignProgressLiveWarning(false);
     setCampaignProgressId(campaignId);
     setCampaignProgress(null);
     setCampaignProgressStatus("loading");
@@ -750,6 +789,8 @@ function App() {
       if (workspaceRequest.current !== workspaceGeneration ||
           campaignProgressRequest.current !== request) return;
       setCampaignProgress(snapshot);
+      setCampaignProgressLastSeen(Date.now());
+      setCampaignProgressLiveWarning(false);
       setCampaignProgressStatus("ready");
     } catch {
       if (workspaceRequest.current !== workspaceGeneration ||
@@ -1800,6 +1841,36 @@ function App() {
                           value={Math.min(campaignProgress.uniqueSourcedCandidates,
                             campaignProgress.targetCount)}/>
                         <p>Operational status: <strong>{campaignProgress.operationalState}</strong></p>
+                        <section className="campaign-stage-timeline"
+                          aria-label="Live campaign stages">
+                          <div className="campaign-stage-header">
+                            <strong>Agent pipeline</strong>
+                            <small>{campaignProgressLastSeen
+                              ? "Last server update " +
+                                new Date(campaignProgressLastSeen).toLocaleTimeString()
+                              : "Waiting for a saved server snapshot"}
+                              {" · "}Auto-refresh every 6 seconds</small>
+                          </div>
+                          {campaignProgressLiveWarning &&
+                            <p role="status">Live status temporarily unavailable.
+                              The last confirmed snapshot is shown; this view
+                              does not start another research request.</p>}
+                          <ol className="campaign-stage-steps">
+                            {campaignStageTimeline(campaignProgress).map((stage, stageIndex) =>
+                              <li key={stage.key} data-stage-state={stage.status}
+                                aria-current={stage.status === "ACTIVE" ? "step" : undefined}>
+                                <span className="campaign-stage-marker"
+                                  aria-hidden="true">{stageIndex + 1}</span>
+                                <div>
+                                  <strong>{stage.title}</strong>
+                                  <span className="campaign-stage-state">
+                                    {stage.status.replaceAll("_", " ").toLowerCase()}
+                                  </span>
+                                  <p>{stage.detail}</p>
+                                </div>
+                              </li>)}
+                          </ol>
+                        </section>
                         <p className="muted">Tasks: {campaignProgress.tasks.completed} complete ·
                           {campaignProgress.tasks.queued} queued ·
                           {campaignProgress.tasks.running} running ·
@@ -2065,6 +2136,8 @@ function App() {
                           setManualSources([]);
                           setManualSourceStatus("idle");
                           setManualSourceNotice("");
+                          setCampaignProgressLastSeen(null);
+                          setCampaignProgressLiveWarning(false);
                           setCampaignProgressId(null);
                           setCampaignProgress(null);
                           setCampaignProgressStatus("idle");
