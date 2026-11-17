@@ -150,7 +150,12 @@ type ResearchReconciliationOverview = {
 };
 
 type ResearchBudget = { monthlyLimitCents: number | null; currency: "USD";
-  enforcedForPaidSearch: boolean; ledger?: {
+  enforcedForPaidSearch: boolean;
+  provider?: string | null; model?: string | null;
+  pricingStatus?: "READY" | "MODEL_PRICING_UNAVAILABLE" |
+    "AI_SETTINGS_REQUIRED" | "RESEARCH_DISABLED" | "INSUFFICIENT_APP_BUDGET";
+  worstCaseCents?: number | null;
+  ledger?: {
     monthUtc: string; reservedCents: number; settledCents: number;
     pendingReservations: number; availableCents: number | null;
     billingSource: "application-estimate";
@@ -1940,6 +1945,11 @@ function App() {
     monthlyLimitCents: researchBudget.monthlyLimitCents,
     enforcedForPaidSearch: researchBudget.enforcedForPaidSearch,
     limitsStatus: researchLimitsStatus,
+    pricingStatus: researchBudget.pricingStatus,
+    savedProvider: researchBudget.provider,
+    savedModel: researchBudget.model,
+    selectedProvider: personalAi.provider,
+    selectedModel: personalAi.model,
   });
 
   if (sessionConflict) return (
@@ -3329,11 +3339,15 @@ function App() {
               {personalAi.provider === "gemini" &&
                 personalAi.model === "gemini-3-flash-preview" &&
                 <p role="status" className="muted">
-                  Gemini 3 Flash supports Google Search, but its search queries
-                  are charged individually. This model is selectable and the
-                  existing API key is retained when saved; paid research remains
-                  blocked until a separately reviewed query-cost ceiling exists.
-                  Changing the model will not run AI or replay past tasks.
+                  Gemini 3 Flash supports Google Search, but the provider
+                  can execute multiple separately billed queries in one call.
+                  The application cannot verify a hard query-cost limit, so
+                  paid discovery is currently disabled for this exact model.
+                  Save this model without replacing your existing Gemini API
+                  key. No paid search or replay occurs when saving.
+                  Google AI Studio's optional project spending cap may lag
+                  billing by about 10 minutes and is not an app-level
+                  per-request cost ceiling.
                 </p>}
               <label>Personal API key <input type="password" autoComplete="off"
                 value={personalApiKey} required={!personalAi.keyConfigured}
@@ -3399,7 +3413,9 @@ function App() {
             The application ledger is conservative, not a provider invoice or external billing cap.</p>
           <p role="status">{researchBudget.enforcedForPaidSearch
             ? "Approved web research is enabled within your saved application budget."
-            : "Web research is not yet available for this model, budget or environment."}</p>
+            : researchBudget.pricingStatus === "MODEL_PRICING_UNAVAILABLE"
+              ? "Paid research is blocked: your selected model has no reviewed, enforceable per-call Search cost ceiling. This is not a missing API key or monthly budget."
+              : "Web research is not yet available for this model, budget or environment."}</p>
           {budgetStatus === "loading" ? <p className="muted">Loading budget…</p>
             : budgetStatus === "error" ?
               <button type="button" className="secondary"
