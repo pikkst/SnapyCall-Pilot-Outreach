@@ -5,7 +5,10 @@ export const MAX_CONSECUTIVE_QUALITY_FAILURES = 3;
 
 export function consecutiveQualityFailures(tasks) {
   if (!Array.isArray(tasks)) throw new TypeError("Task outcomes are required");
-  const ordered = [...tasks].sort((a, b) => b.taskIndex - a.taskIndex);
+  // A legacy read-only projection may omit taskIndex; only trustworthy
+  // indexed task outcomes can establish a consecutive streak.
+  const ordered = tasks.filter(task => Number.isInteger(task?.taskIndex))
+    .sort((a, b) => b.taskIndex - a.taskIndex);
   // The future queued tasks are not quality outcomes. Anchor at the latest
   // completed task, then require contiguous task indexes to prevent skipping
   // over a PAUSED, CANCELLED or unsettled paid task.
