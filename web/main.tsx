@@ -14,6 +14,7 @@ type CampaignProgress = {
   id: string; status: string; operationalState: string; action: string;
   targetCount: number; uniqueSourcedCandidates: number;
   rawCandidateObservations: number; duplicateObservations: number;
+  noGroundingTasks: number;
   plannedTasks: number; expiredLeases: number; needsReconciliation: boolean;
   pausedTaskReview: Array<{taskIndex: number;lastErrorCode: "BILLING_UNCERTAIN"}>;
   tasks: { queued: number; running: number; completed: number;
@@ -27,6 +28,7 @@ type CampaignObservation = {
   emailTriageEmail?: string | null; emailTriageAt?: string | null;
 };
 type CampaignGroundingState = {
+  sourceCount: number; canApprove: boolean; approvalBlockReason: string | null;
   status: "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED";
   maxSources: number; expiresAt: string | null;
   remaining: number; checking: number; sourceHints: number;
@@ -914,8 +916,8 @@ function App() {
     if (campaignGroundingBusy || workspaceId !== activeWorkspaceId ||
         campaignId !== campaignProgressId) return;
     if (action === "start" && (!campaignGroundingConfirmed ||
-        !campaignGrounding?.enabled ||
-        !["COMPLETED", "PARTIAL"].includes(campaignProgress?.status ?? ""))) return;
+        !campaignGrounding?.canApprove ||
+        !campaignGrounding?.enabled)) return;
     const generation = workspaceRequest.current;
     const request = campaignProgressRequest.current;
     setCampaignGroundingBusy(true);
@@ -926,7 +928,7 @@ function App() {
         encodeURIComponent(workspaceId), {
           method: "POST",
           body: JSON.stringify(action === "start" ? {
-            maxSources: campaignProgress?.uniqueSourcedCandidates ?? 0,
+            maxSources: campaignGrounding?.sourceCount ?? 0,
             confirmPublicRequests: true,
           } : { confirmStop: true }),
         });
@@ -2144,17 +2146,15 @@ function App() {
                               Stop future source checks
                             </button>}
                           {campaignGrounding.status === "IDLE" &&
-                            campaignGrounding.enabled &&
-                            ["COMPLETED", "PARTIAL"].includes(campaignProgress.status) &&
-                            campaignProgress.uniqueSourcedCandidates > 0 &&
-                            campaignProgress.uniqueSourcedCandidates <= 250 && <>
+                            campaignGrounding.canApprove &&
+                            campaignGrounding.enabled && <>
                               <label className="campaign-contact-confirm">
                                 <input type="checkbox"
                                   checked={campaignGroundingConfirmed}
                                   onChange={event => setCampaignGroundingConfirmed(
                                     event.target.checked)}/>
                                 I authorize one Google redirect-header check for
-                                each of {campaignProgress.uniqueSourcedCandidates} saved
+                                each of {campaignGrounding.sourceCount} saved
                                 citations. This approval lasts 24 hours. A
                                 potentially dispatched request is not retried
                                 automatically after an uncertain outcome.
@@ -2169,9 +2169,19 @@ function App() {
                               </button>
                             </>}
                           {campaignGrounding.status === "IDLE" &&
-                            !campaignGrounding.enabled &&
-                            <p className="muted">Source-resolution agent is
-                              disabled on this server.</p>}
+                            !campaignGrounding.canApprove &&
+                            <p className="muted" role="status">
+                              Source resolution unavailable: {
+                                ({
+                                  SERVER_DISABLED: "the server feature is disabled",
+                                  DISCOVERY_NOT_TERMINAL: "the research campaign has not finished",
+                                  SOURCE_COUNT_OUT_OF_RANGE: "the campaign must contain 1–250 saved sources",
+                                  SOURCE_ALREADY_ATTEMPTED: "source resolution has already been attempted",
+                                  CITATION_REVIEW_REQUIRED: "one or more sources require review",
+                                  APPROVAL_ALREADY_USED: "the one-shot authorization was already used",
+                                } as Record<string, string>)[campaignGrounding.approvalBlockReason ?? ""] ??
+                                "the source snapshot requires review"
+                              }.</p>}
                           {campaignGrounding.status === "PAUSED" &&
                             <p role="status">Source resolution is paused.
                               Previously dispatched requests will not be
@@ -2279,8 +2289,15 @@ function App() {
                           <p>Approval expires:
                             {" "}{new Date(campaignRunApproval.run.expiresAt).toLocaleString()}.
                             Later calls are forbidden after this time.</p>
+                          {campaignRunApproval.run.lastCode === "WAITING_RETRY" &&
+                            <p role="status" className="muted">
+                              Waiting for the next eligible task. The existing
+                              approval remains active; no paid request is repeated
+                              during this wait. Progress updates automatically.
+                            </p>}
                           {campaignRunApproval.run.lastCode &&
-                            <p role="status">Attention: {campaignRunApproval.run.lastCode.replaceAll("_", " ")}</p>}
+                            campaignRunApproval.run.lastCode !== "WAITING_RETRY" &&
+                            <p role="alert">Attention: {campaignRunApproval.run.lastCode.replaceAll("_", " ")}</p>}
                           {["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
                             <button type="button" className="secondary"
                               disabled={campaignRunApprovalBusy}
@@ -2346,6 +2363,15 @@ function App() {
                           Manual reconciliation required. Expired worker leases:
                           {" " + campaignProgress.expiredLeases}.
                           Do not restart paid research until the spend ledger is checked.</p>}
+                        {campaignProgress.noGroundingTasks > 0 &&
+                          <p role="status" className="muted">
+                            {campaignProgress.noGroundingTasks} research {
+                              campaignProgress.noGroundingTasks === 1 ? "task" : "tasks"
+                            } finished without verifiable source citations.
+                            These attempts are complete and will not be retried.
+                            No people or emails were accepted from them.
+                            Application spend remains conservative, not the provider invoice.
+                          </p>}
                         <p className="muted">Next step: {campaignProgress.action}.
                           No email checks or messages were sent by this view.</p>
                         {campaignProgress.pausedTaskReview?.length === 1 &&

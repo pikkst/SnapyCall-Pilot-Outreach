@@ -81,6 +81,28 @@ test("completion requires matching lease, status and bounded result count", asyn
   assert.equal(result.status, "QUEUED");
 });
 
+test("terminal no-grounding completion is fenced and stores a zero-evidence diagnostic", async () => {
+  const claim = { ...scope, taskId: "task-1", leaseToken: "token", limit: 10 };
+  let input;
+  const tx = { researchCampaignTask: { updateMany: async value => {
+    input = value; return { count: 1 };
+  } } };
+  assert.equal(await completeResearchTask(tx, claim, {
+    observedCount: 0, completionCode: "NO_VERIFIABLE_GROUNDING", now,
+  }), true);
+  assert.equal(input.where.leaseToken, "token");
+  assert.equal(input.data.status, "COMPLETED");
+  assert.equal(input.data.lastErrorCode, "NO_VERIFIABLE_GROUNDING");
+  assert.equal(input.data.observedCount, 0);
+  for (const invalid of [
+    { observedCount: 1, completionCode: "NO_VERIFIABLE_GROUNDING" },
+    { observedCount: 0, completionCode: "BILLING_UNCERTAIN" },
+  ]) {
+    await assert.rejects(() => completeResearchTask(tx, claim,
+      { ...invalid, now }), TypeError);
+  }
+});
+
 test("target met prevents a new paid lease and closes only fully settled tasks", async () => {
   const events = [];
   const db = { $transaction: async fn => fn({

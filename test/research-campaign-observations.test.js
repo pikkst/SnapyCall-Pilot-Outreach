@@ -126,6 +126,27 @@ const baseProgress = {
     { status: "QUEUED", observedCount: 0, resultLimit: 10 }],
 };
 
+test("campaign progress distinguishes a completed uncited search from a blocked billable task", () => {
+  const snapshot = summarizeCampaignProgress({
+    id: "campaign-1", status: "RUNNING", targetCount: 100,
+    _count: { observations: 7 },
+    tasks: [
+      { status: "COMPLETED", observedCount: 0, resultLimit: 10,
+        lastErrorCode: "NO_VERIFIABLE_GROUNDING" },
+      { status: "COMPLETED", observedCount: 7, resultLimit: 10,
+        lastErrorCode: null },
+      { status: "QUEUED", observedCount: 0, resultLimit: 10,
+        lastErrorCode: null },
+    ],
+  });
+  assert.equal(snapshot.noGroundingTasks, 1);
+  assert.equal(snapshot.tasks.completed, 2);
+  assert.equal(snapshot.tasks.paused, 0);
+  assert.equal(snapshot.operationalState, "READY");
+  assert.equal(snapshot.uniqueSourcedCandidates, 7);
+  assert.equal(snapshot.contactVerification, "NOT_PERFORMED");
+});
+
 test("campaign status differentiates readiness from actual target completion", () => {
   const ready = deriveCampaignOperationalState(baseProgress, progressNow);
   assert.equal(ready.operationalState, "READY");

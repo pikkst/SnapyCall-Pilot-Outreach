@@ -1539,7 +1539,7 @@ app.get("/api/research-campaigns/:id/grounding",
     const summary = await groundingResolutionSummary(prisma, {
       campaignId: req.params.id, workspaceId: req.candidateScope,
       ownerId: identity.id,
-    });
+    }, { enabled: env.AI_GROUNDING_RESOLUTION_ENABLED === "true" });
     if (!summary) return res.status(404).json({ code: "CAMPAIGN_NOT_FOUND" });
     res.set("Cache-Control", "no-store");
     return res.json({
