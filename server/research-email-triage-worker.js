@@ -79,9 +79,14 @@ export async function approveEmailTriage(db, {
     if (sources.length !== count) {
       return { status: 409, code: "EMAIL_TRIAGE_SOURCE_SNAPSHOT_CHANGED" };
     }
-    if (!sources.some(source => isDirectPublicProfileUrl(source.citationUrl))) {
+    const inspectable = sources.filter(source =>
+      isDirectPublicProfileUrl(source.citationUrl)).length;
+    // Approval is immutable and an inspected observation cannot be retried.
+    // Do not consume a mixed batch's one-shot approval on opaque grounding
+    // redirects, even when some other observations are directly inspectable.
+    if (inspectable !== count) {
       return { status: 409, code: "EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED",
-        availableObservations: count, inspectableObservations: 0 };
+        availableObservations: count, inspectableObservations: inspectable };
     }
     // Reject reauthorization if any previously claimed page exists.
     const previouslyChecked = await tx.researchCampaignObservation.count({
