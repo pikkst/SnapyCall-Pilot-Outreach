@@ -23,6 +23,28 @@ flowchart TD
   J --> L[Candidate only with name, field and verified cited email, REVIEW_PENDING]
 ```
 
+### Grounding redirect source hints (unwired building block)
+
+`server/research-grounding-location.js` can resolve one exact Google
+`grounding-api-redirect` URL using a bounded, DNS-pinned HTTPS HEAD request.
+It inspects a single Location header without following the redirect or
+fetching the destination. The target hostname must independently resolve to
+a public IPv4 address. Invalid, private, relative, nested, inaccessible and
+nonredirect targets fail closed; no paid AI provider calls are involved.
+
+A successful result is only `SOURCE_HINT` with
+`GOOGLE_GROUNDING_LOCATION_HEADER` provenance. It is **not** verified person
+identity, email evidence, approved contact or sending permission. The original
+provider citation must be retained separately from the destination hint.
+
+This module is intentionally **not wired** to automated historical backfills,
+triage approval, contact acceptance or any network-triggering UI action.
+Before enabling source resolution for the 233 existing observations, implement
+owner-scoped durable approvals, leases, immutable provenance storage, bounded
+per-domain fetch rates, expiration/recovery and authenticated staging smoke.
+The existing `retrieveCitedPublicPage` inspector must still enforce robots,
+DNS pinning and independent person-email attribution for actual page reads.
+
 ### Trigger and constraints
 
 - `POST /api/research-campaigns/:id/email-triage/start` with `{maxPages,confirmPublicInspection:true}` is authenticated as the campaign owner and active workspace member, uses Origin protection + rate limiter, requires terminal discovery status `COMPLETED` or `PARTIAL`, and cannot re-authorize an already attempted campaign.
