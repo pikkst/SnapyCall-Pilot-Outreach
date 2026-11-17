@@ -16,7 +16,7 @@ const digest = "a".repeat(64);
 function fixture({ status = "RUNNING", discovery = "COMPLETED",
   observed = 5, checking = 0, inspected = 0, expired = false,
   revoked = false, stale = false, prior = false,
-  sourceUrl = "https://experts.example.org/ada" } = {}) {
+  sourceUrl = "https://experts.example.org/ada", sourceUrls = null } = {}) {
   const events = [];
   const tx = {
     $queryRaw: async (parts) => {
@@ -40,8 +40,8 @@ function fixture({ status = "RUNNING", discovery = "COMPLETED",
         return data; },
     },
     researchCampaignObservation: {
-      findMany: async () => Array.from({ length: observed },
-        () => ({ citationUrl: sourceUrl })),
+      findMany: async () => (sourceUrls ?? Array.from({ length: observed },
+        () => sourceUrl)).map(citationUrl => ({ citationUrl })),
       count: async ({ where }) => {
         if (where.emailTriageStatus === "CHECKING" &&
             where.emailTriageLeaseUntil) return stale ? 1 : 0;
@@ -113,6 +113,23 @@ test("all-opaque Gemini citations cannot authorize a misleading email triage bat
   assert.equal(result.code, "EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED");
   assert.equal(result.inspectableObservations, 0);
   assert.equal(result.availableObservations, 233);
+  assert.equal(events.includes("campaign-RUNNING"), false);
+  assert.equal(events.includes("research.campaign.email-triage.approved"), false);
+});
+
+test("mixed direct and opaque citations cannot consume one-shot triage approval", async () => {
+  const direct = "https://experts.example.org/ada";
+  const opaque = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/opaque";
+  const { db, events } = fixture({
+    status: "IDLE", observed: 3, sourceUrls: [direct, opaque, direct],
+  });
+  const result = await approveEmailTriage(db, {
+    ...scope, maxPages: 3, confirmPublicInspection: true,
+  }, { now: () => now });
+  assert.equal(result.status, 409);
+  assert.equal(result.code, "EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED");
+  assert.equal(result.availableObservations, 3);
+  assert.equal(result.inspectableObservations, 2);
   assert.equal(events.includes("campaign-RUNNING"), false);
   assert.equal(events.includes("research.campaign.email-triage.approved"), false);
 });
