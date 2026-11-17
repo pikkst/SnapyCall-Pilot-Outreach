@@ -793,8 +793,16 @@ app.post("/api/discovery/gemini3-one-shot", candidateReadScope, requireOrigin,
     if (req.candidateScope === null) return res.status(403).json({
       code: "WORKSPACE_REQUIRED", error: "Active partner workspace required",
     });
+    if (!/^c[a-z0-9]{10,40}$/.test(env.AI_GEMINI3_SINGLE_TEST_OWNER_ID ?? "")) {
+      return res.status(503).json({ code: "TEST_OWNER_UNCONFIGURED",
+        error: "Single-test owner authorization is not configured" });
+    }
     const identity = await partnerIdentity(req);
     if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    if (identity.id !== env.AI_GEMINI3_SINGLE_TEST_OWNER_ID) {
+      return res.status(403).json({ code: "GEMINI3_TEST_OWNER_MISMATCH",
+        error: "This one-time experiment is not authorized for this account" });
+    }
     const input = z.object({
       query: z.string().trim().min(12).max(350),
       confirmation: z.literal(GEMINI3_TEST_CONFIRMATION),
@@ -837,7 +845,12 @@ app.post("/api/discovery/gemini3-one-shot", candidateReadScope, requireOrigin,
         const used = await tx.auditEvent.count({
           where: { actorId: identity.id, action: GEMINI3_TEST_ACTION },
         });
-        if (used !== 0) return { alreadyUsed: true };
+        if (used !== 0) {
+          // Throwing rolls back the provisional lease and money reservation.
+          throw Object.assign(new Error("Gemini 3 one-shot already consumed"), {
+            code: "GEMINI3_TEST_ALREADY_USED",
+          });
+        }
         const quota = await reserveResearchAttempt(tx, {
           workspaceId: req.candidateScope, userId: identity.id,
           dailyLimit: prefs.dailyLimit,
@@ -853,6 +866,10 @@ app.post("/api/discovery/gemini3-one-shot", candidateReadScope, requireOrigin,
         return { reservationId, leaseId, quota };
       });
     } catch (error) {
+      if (error?.code === "GEMINI3_TEST_ALREADY_USED") {
+        return res.status(409).json({ code: "GEMINI3_TEST_ALREADY_USED",
+          error: "The one-shot experiment is already consumed. No replay allowed." });
+      }
       if (error instanceof ResearchPacingRequired) {
         res.set("Retry-After", String(error.retryAfterSeconds));
         return res.status(429).json({
@@ -872,11 +889,6 @@ app.post("/api/discovery/gemini3-one-shot", candidateReadScope, requireOrigin,
       throw error;
     }
     if (!reservation) return res.status(403).json({ error: "Workspace revoked" });
-    if (reservation.alreadyUsed) return res.status(409).json({
-      code: "GEMINI3_TEST_ALREADY_USED",
-      error: "This owner already authorized a Gemini 3 test. No replay permitted.",
-    });
-
     let settled = false;
     let summary = null;
     let completed = false;
