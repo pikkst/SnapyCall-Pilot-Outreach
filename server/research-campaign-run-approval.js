@@ -197,3 +197,45 @@ export async function pauseApprovedRun(db, {
     data: { status: "PAUSED", lastCode },
   });
 }
+
+export async function stopApprovedCampaignRun(db, {
+  campaignId, workspaceId, ownerId,
+}) {
+  if (![campaignId, workspaceId, ownerId].every(id =>
+      typeof id === "string" && CUID.test(id))) {
+    throw new TypeError("Valid campaign stop scope required");
+  }
+  return db.$transaction(async tx => {
+    if (!await lockActiveWorkspaceMembership(tx, { workspaceId, userId: ownerId })) {
+      return { status: 403, code: "WORKSPACE_ACCESS_REVOKED" };
+    }
+    const rows = await tx.$queryRaw`
+      SELECT "id" FROM "ResearchCampaign"
+      WHERE "id" = ${campaignId} AND "workspaceId" = ${workspaceId}
+        AND "ownerId" = ${ownerId} FOR UPDATE`;
+    if (rows.length !== 1) return { status: 404, code: "CAMPAIGN_NOT_FOUND" };
+    const run = await tx.researchCampaignRun.findUnique({ where: { campaignId } });
+    if (!run || run.workspaceId !== workspaceId || run.ownerId !== ownerId) {
+      return { status: 404, code: "RUN_NOT_FOUND" };
+    }
+    if (["PAUSED", "COMPLETED"].includes(run.status)) {
+      return { status: 200, code: "RUN_ALREADY_TERMINAL",
+        run: publicRunStatus(run) };
+    }
+    const saved = await tx.researchCampaignRun.update({
+      where: { id: run.id }, data: {
+        status: "PAUSED", lastCode: "USER_STOPPED",
+      },
+    });
+    await tx.auditEvent.create({ data: {
+      actorId: ownerId, action: "research.campaign.run.stopped",
+      entityId: campaignId, metadata: {
+        workspaceId, runId: run.id,
+        inFlightMayStillBeBilled: true, automaticRetryAllowed: false,
+        sendingEnabled: false,
+      },
+    } });
+    return { status: 200, code: "RUN_STOPPED",
+      run: publicRunStatus(saved) };
+  });
+}
