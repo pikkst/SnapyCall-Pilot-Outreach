@@ -52,6 +52,11 @@ test("task completion and evidence writing share a transaction and dedupe", asyn
     researchCampaign: { findFirst: async () => ({ targetCount: 100 }) },
     researchCampaignTask: {
       count: async input => input.where.status === "QUEUED" ? 1 : 0,
+      findUnique: async () => ({ taskIndex: 1 }),
+      findMany: async () => [
+        { taskIndex: 1, status: "COMPLETED", observedCount: 2 },
+        { taskIndex: 0, status: "COMPLETED", observedCount: 0 },
+      ],
       updateMany: async input => {
         calls.push(["fence", input.where.leaseToken, input.data.status]);
         return { count: 1 };
