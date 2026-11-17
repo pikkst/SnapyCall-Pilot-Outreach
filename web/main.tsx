@@ -4,7 +4,7 @@ import "./style.css";
 import { manualIndependentResearch } from "../src/manual-research.js";
 import { reviewedCandidateKey, resolvedReviewedSource, reviewedSeedBatch, selectedDiscoverySeedBatch } from "../src/research-review-batch.js";
 import { researchReadiness } from "../src/research-readiness.js";
-import { runApprovedCampaignBatch } from "../src/campaign-batch.js";
+import { runApprovedCampaignBatch, ResearchPacingWait } from "../src/campaign-batch.js";
 import { campaignStageTimeline } from "../src/campaign-stage-timeline.js";
 import { describeCampaignBudget } from "../src/campaign-budget-status.js";
 import { singleAuthorizedWorkspaceId } from "../src/partner-workspace-navigation.js";
@@ -201,7 +201,15 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   const result: unknown = await response.json();
   if (!response.ok) {
-    const info = typeof result === "object" && result !== null ? result as { error?: string; code?: string; stage?: string } : null;
+    const info = typeof result === "object" && result !== null ? result as {
+      error?: string; code?: string; stage?: string; retryAfterSeconds?: number;
+    } : null;
+    if (response.status === 429 && info?.code === "RESEARCH_PACING_WAIT" &&
+        Number.isInteger(info.retryAfterSeconds) &&
+        (info.retryAfterSeconds ?? 0) >= 1 &&
+        (info.retryAfterSeconds ?? 0) <= 120) {
+      throw new ResearchPacingWait(info.retryAfterSeconds!);
+    }
     const message = info?.code && info.stage
       ? "Discovery source error: " + info.code + " (" + info.stage + "). No candidates were imported."
       : (info?.error ?? "Request failed");
@@ -733,7 +741,9 @@ function App() {
         },
       });
       if (generation === workspaceRequest.current) {
-        const finalMessage = result.status === "STOPPED"
+        const finalMessage = result.status === "WAITING"
+          ? "The AI provider gate is busy. The run safely stopped waiting after repeated no-charge rate limits; no uncertain paid call was replayed."
+          : result.status === "STOPPED"
           ? "Stopped at your request."
           : result.status === "RUN_LIMIT_REACHED"
           ? "Approved run limit reached. Check campaign status."
@@ -749,7 +759,9 @@ function App() {
           " No email messages were sent.");
       }
     } catch (error) {
-      // No automatic retry, even for 429 or lost network responses.
+      // Only a typed server-confirmed no-dispatch pacing error can wait.
+      // Any unknown 429, network error or lost provider response remains
+      // non-retryable because a paid call might already have happened.
       if (generation === workspaceRequest.current) setCampaignTestNotice(
         "Batch stopped after " + campaignBatchProgressRef.current +
         " completed tasks: " + (error instanceof Error ? error.message : "Unknown error") +
