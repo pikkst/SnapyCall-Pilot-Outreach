@@ -37,6 +37,22 @@ A successful result is only `SOURCE_HINT` with
 identity, email evidence, approved contact or sending permission. The original
 provider citation must be retained separately from the destination hint.
 
+The additively migrated `ResearchCampaignObservation.grounding*` fields and
+`persistGroundingSourceHint()` record an immutable result independently of
+email-triage status and contact evidence. Persistence locks active membership,
+campaign and observation in that order, checks the unchanged original citation,
+and returns an idempotent response only for identical outcomes. Rejected or
+unresolved results retain a sanitized reason code without a destination URL.
+No source URL or person data is duplicated into audit metadata.
+
+**Current boundary:** the persistence function is an internal trusted-adapter
+contract, not a new API or a browser-supplied source acceptance path. It is not
+wired to background jobs or historical data. Before any execution, add
+campaign-owner approval, an atomic pre-dispatch lease/claim, max-attempt limits,
+a stopping mechanism and audited recovery of unknown HTTP outcomes.
+A saved `SOURCE_HINT` cannot bypass the direct-source email-triage preflight
+or the independent person-email review gate.
+
 This module is intentionally **not wired** to automated historical backfills,
 triage approval, contact acceptance or any network-triggering UI action.
 Before enabling source resolution for the 233 existing observations, implement
