@@ -1560,8 +1560,28 @@ app.get("/api/research-campaigns/:id/approved-run",
     const run = await prisma.researchCampaignRun.findUnique({
       where: { campaignId: campaign.id },
     });
+    let priceEnvelope = null;
+    if (!run && env.AI_AGENT_AUTORUN_ENABLED === "true") {
+      const setting = await prisma.aiSetting.findUnique({
+        where: { ownerId: identity.id },
+        select: { provider: true, model: true },
+      });
+      if (setting) {
+        try {
+          const price = requireResearchPriceEnvelope(setting);
+          priceEnvelope = {
+            provider: setting.provider, model: setting.model,
+            worstCasePerCallCents: price.worstCaseCents,
+            priceVersion: price.priceVersion,
+          };
+        } catch {
+          // An unavailable price policy never enables paid approval.
+        }
+      }
+    }
     res.set("Cache-Control", "no-store");
     return res.json({ run: run ? publicRunStatus(run) : null,
+      priceEnvelope,
       autonomousRunEnabled: env.AI_AGENT_AUTORUN_ENABLED === "true",
       sendingEnabled: false });
   }));
