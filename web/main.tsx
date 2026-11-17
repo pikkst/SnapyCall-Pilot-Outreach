@@ -28,6 +28,7 @@ type CampaignObservation = {
   emailTriageEmail?: string | null; emailTriageAt?: string | null;
 };
 type CampaignGroundingState = {
+  sourceCount: number; canApprove: boolean; approvalBlockReason: string | null;
   status: "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED";
   maxSources: number; expiresAt: string | null;
   remaining: number; checking: number; sourceHints: number;
@@ -915,8 +916,8 @@ function App() {
     if (campaignGroundingBusy || workspaceId !== activeWorkspaceId ||
         campaignId !== campaignProgressId) return;
     if (action === "start" && (!campaignGroundingConfirmed ||
-        !campaignGrounding?.enabled ||
-        !["COMPLETED", "PARTIAL"].includes(campaignProgress?.status ?? ""))) return;
+        !campaignGrounding?.canApprove ||
+        !campaignGrounding?.enabled)) return;
     const generation = workspaceRequest.current;
     const request = campaignProgressRequest.current;
     setCampaignGroundingBusy(true);
@@ -927,7 +928,7 @@ function App() {
         encodeURIComponent(workspaceId), {
           method: "POST",
           body: JSON.stringify(action === "start" ? {
-            maxSources: campaignProgress?.uniqueSourcedCandidates ?? 0,
+            maxSources: campaignGrounding?.sourceCount ?? 0,
             confirmPublicRequests: true,
           } : { confirmStop: true }),
         });
@@ -2145,17 +2146,15 @@ function App() {
                               Stop future source checks
                             </button>}
                           {campaignGrounding.status === "IDLE" &&
-                            campaignGrounding.enabled &&
-                            ["COMPLETED", "PARTIAL"].includes(campaignProgress.status) &&
-                            campaignProgress.uniqueSourcedCandidates > 0 &&
-                            campaignProgress.uniqueSourcedCandidates <= 250 && <>
+                            campaignGrounding.canApprove &&
+                            campaignGrounding.enabled && <>
                               <label className="campaign-contact-confirm">
                                 <input type="checkbox"
                                   checked={campaignGroundingConfirmed}
                                   onChange={event => setCampaignGroundingConfirmed(
                                     event.target.checked)}/>
                                 I authorize one Google redirect-header check for
-                                each of {campaignProgress.uniqueSourcedCandidates} saved
+                                each of {campaignGrounding.sourceCount} saved
                                 citations. This approval lasts 24 hours. A
                                 potentially dispatched request is not retried
                                 automatically after an uncertain outcome.
@@ -2170,9 +2169,19 @@ function App() {
                               </button>
                             </>}
                           {campaignGrounding.status === "IDLE" &&
-                            !campaignGrounding.enabled &&
-                            <p className="muted">Source-resolution agent is
-                              disabled on this server.</p>}
+                            !campaignGrounding.canApprove &&
+                            <p className="muted" role="status">
+                              Source resolution unavailable: {
+                                ({
+                                  SERVER_DISABLED: "the server feature is disabled",
+                                  DISCOVERY_NOT_TERMINAL: "the research campaign has not finished",
+                                  SOURCE_COUNT_OUT_OF_RANGE: "the campaign must contain 1–250 saved sources",
+                                  SOURCE_ALREADY_ATTEMPTED: "source resolution has already been attempted",
+                                  CITATION_REVIEW_REQUIRED: "one or more sources require review",
+                                  APPROVAL_ALREADY_USED: "the one-shot authorization was already used",
+                                } as Record<string, string>)[campaignGrounding.approvalBlockReason ?? ""] ??
+                                "the source snapshot requires review"
+                              }.</p>}
                           {campaignGrounding.status === "PAUSED" &&
                             <p role="status">Source resolution is paused.
                               Previously dispatched requests will not be
