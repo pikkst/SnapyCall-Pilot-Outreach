@@ -2437,7 +2437,7 @@ function App() {
                             No source-backed candidates yet: {campaignProgress.noGroundingTasks}
                             {" "}completed research task(s) returned no verifiable citations.
                             No name or email was accepted from those attempts.
-                          </p>
+                          </p>}
                         {campaignGrounding && <section
                           className="campaign-email-triage"
                           data-state={campaignGrounding.status}
