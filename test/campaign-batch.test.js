@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   runApprovedCampaignBatch, MAX_APPROVED_CAMPAIGN_BATCH_TASKS,
-  MIN_START_INTERVAL_MS,
+  MIN_START_INTERVAL_MS, ResearchPacingWait, MAX_PACING_WAITS_PER_TASK,
 } from "../src/campaign-batch.js";
 
 const ready = () => ({
@@ -158,4 +158,90 @@ test("last task finalizes PARTIAL and UI receives durable terminal state", async
   assert.deepEqual(outcome, {
     status: "NOT_READY", completed: 2, operationalState: "PARTIAL",
   });
+});
+
+test("server-confirmed no-dispatch 429 waits and continues the SAME approved run", async () => {
+  const clock = fastClock();
+  const calls = [];
+  const delays = [];
+  const result = await runApprovedCampaignBatch({
+    maxTasks: 2, now: clock.now, wait: clock.wait,
+    readState: async () => ready(),
+    execute: async () => {
+      calls.push(clock.now());
+      if (calls.length === 2) throw new ResearchPacingWait(28);
+    },
+    onWaiting: delay => delays.push(delay),
+  });
+  assert.deepEqual(result, { status: "RUN_LIMIT_REACHED", completed: 2 });
+  assert.equal(calls.length, 3, "One failed no-dispatch attempt, never extra paid work");
+  assert.ok(clock.delays.includes(28_000));
+  assert.ok(delays.includes(28_000));
+  assert.equal(calls[2] - calls[1], 28_000);
+});
+
+test("pacing wait rechecks budget before another dispatch", async () => {
+  const clock = fastClock();
+  let calls = 0;
+  let gated = false;
+  const outcome = await runApprovedCampaignBatch({
+    maxTasks: 2, now: clock.now,
+    wait: async ms => { await clock.wait(ms); if (ms === 19_000) gated = true; },
+    readState: async () => gated ? { ...ready(), budgetReady: false } : ready(),
+    execute: async () => {
+      calls++;
+      if (calls === 2) throw new ResearchPacingWait(19);
+    },
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(outcome, { status: "NOT_READY", completed: 1,
+    operationalState: "READY" });
+});
+
+test("stop during a nonbillable pacing wait prevents further requests", async () => {
+  const clock = fastClock();
+  let stop = false;
+  let calls = 0;
+  const out = await runApprovedCampaignBatch({
+    maxTasks: 2, now: clock.now,
+    readState: async () => ready(),
+    wait: async ms => {
+      await clock.wait(ms);
+      if (ms === 21_000) stop = true;
+    },
+    execute: async () => {
+      calls++;
+      if (calls === 2) throw new ResearchPacingWait(21);
+    },
+    shouldStop: () => stop,
+  });
+  assert.deepEqual(out, { status: "STOPPED", completed: 1 });
+  assert.equal(calls, 2);
+});
+
+test("repeated server pacing collisions stop at bounded cap", async () => {
+  const clock = fastClock();
+  let calls = 0;
+  const out = await runApprovedCampaignBatch({
+    maxTasks: 1, now: clock.now, wait: clock.wait,
+    readState: async () => ready(),
+    execute: async () => { calls++; throw new ResearchPacingWait(1); },
+  });
+  assert.deepEqual(out, { status: "WAITING", completed: 0,
+    retryAfterSeconds: 1 });
+  assert.equal(calls, MAX_PACING_WAITS_PER_TASK + 1);
+});
+
+test("network errors and unknown 429s still cannot be retried", async () => {
+  const clock = fastClock();
+  let calls = 0;
+  await assert.rejects(() => runApprovedCampaignBatch({
+    maxTasks: 2, now: clock.now, wait: clock.wait,
+    readState: async () => ready(),
+    execute: async () => { calls++; throw Error("429 without no-dispatch proof"); },
+  }), /429 without no-dispatch proof/);
+  assert.equal(calls, 1);
+  for (const value of [0, -2, 121, 1.5, "12", null, undefined]) {
+    assert.throws(() => new ResearchPacingWait(value), TypeError);
+  }
 });
