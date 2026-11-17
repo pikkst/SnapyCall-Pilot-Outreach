@@ -780,6 +780,49 @@ app.put("/api/research-limits", aiOwnerAuthenticated, requireOrigin, safe(async 
   });
   return res.json(saved);
 }));
+// Read-only recovery path for the one-shot diagnostic. A browser refresh,
+// disconnect or Render restart never gives permission to issue another call.
+app.get("/api/discovery/gemini3-one-shot", candidateReadScope,
+  safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      code: "WORKSPACE_REQUIRED", error: "Active workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity || !await requireWorkspaceMembership(prisma, {
+      workspaceId: req.candidateScope, userId: identity.id,
+    })) return res.status(403).json({ error: "Workspace membership required" });
+    if (identity.id !== env.AI_GEMINI3_SINGLE_TEST_OWNER_ID) {
+      return res.status(403).json({ code: "TEST_OWNER_MISMATCH" });
+    }
+    const [started, finished] = await Promise.all([
+      prisma.auditEvent.findFirst({
+        where: { actorId: identity.id, action: GEMINI3_TEST_ACTION },
+        orderBy: { createdAt: "desc" }, select: { createdAt: true },
+      }),
+      prisma.auditEvent.findFirst({
+        where: { actorId: identity.id, action: "ai.gemini3-one-shot.finished" },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true, metadata: true },
+      }),
+    ]);
+    if (!started) return res.json({ status: "NOT_RUN" });
+    if (!finished) return res.json({ status: "PENDING_RECONCILIATION",
+      error: "The single paid request may already have been dispatched. No replay." });
+    const m = finished.metadata;
+    return res.json({ status: "FINISHED", code: m?.outcomeCode ?? "UNKNOWN",
+      diagnostic: {
+        model: GEMINI3_TEST_MODEL, finished: m?.finished === true,
+        finishReason: typeof m?.finishReason === "string" ? m.finishReason : null,
+        inputTokens: m?.inputTokens ?? null, outputTokens: m?.outputTokens ?? null,
+        thinkingTokens: m?.thinkingTokens ?? null, searchQueries: m?.searchQueries ?? null,
+        groundingChunks: m?.groundingChunks ?? null, estimateUsd: m?.estimateUsd ?? null,
+        providerInvoiceConfirmed: false, currency: "USD",
+      },
+      appReservationCents: GEMINI3_TEST_RESERVE_CENTS,
+      appReservationIsNotProviderInvoice: true,
+      noContactsImported: true, noEmailSent: true,
+    });
+  }));
 // Explicit one-use diagnostic exception. This does NOT add Gemini 3 to
 // approvedResearchPrices or authorize normal campaign research. Google
 // Search query count is controlled by Google, not by our budget reservation.
