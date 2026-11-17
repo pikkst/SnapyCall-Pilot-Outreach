@@ -830,6 +830,8 @@ try {
       headers: { cookie: partnerCookie },
     })).json(), {
       monthlyLimitCents: null, currency: "USD", enforcedForPaidSearch: false,
+      provider: "gemini", model: "gemini-2.5-flash",
+      pricingStatus: "RESEARCH_DISABLED", worstCaseCents: 200,
       ledger: { monthUtc: new Date().toISOString().slice(0, 7) + "-01",
         reservedCents: 0, settledCents: 0, pendingReservations: 0,
         availableCents: null, billingSource: "application-estimate" },
@@ -853,6 +855,8 @@ try {
     assert.equal(budgetSaved.status, 200);
     assert.deepEqual(await budgetSaved.json(), {
       monthlyLimitCents: 500, currency: "USD", enforcedForPaidSearch: false,
+      provider: "gemini", model: "gemini-2.5-flash",
+      pricingStatus: "RESEARCH_DISABLED", worstCaseCents: 200,
       ledger: { monthUtc: new Date().toISOString().slice(0, 7) + "-01",
         reservedCents: 0, settledCents: 0, pendingReservations: 0,
         availableCents: 500, billingSource: "application-estimate" },

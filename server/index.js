@@ -16,6 +16,8 @@ import { requireRuntimeConfig, encryptKey, decryptKey, keyFingerprint, makeSessi
 import { sessionIdentityState, canUseAdminSession } from "./session-isolation.js";
 import { aiConfigSchema, generateDraft } from "./ai.js";
 import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchProviderExecutionError, publicResearchProviderFailure } from "./ai-research.js";
+import { GEMINI3_TEST_MODEL, GEMINI3_TEST_RESERVE_CENTS, GEMINI3_TEST_ACTION,
+  GEMINI3_TEST_CONFIRMATION, summarizeGemini3TestResponse } from "./gemini3-one-shot.js";
 import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
@@ -54,7 +56,7 @@ import { validateMonthlyBudgetCents, reserveOwnerSpend, settleOwnerSpend,
   readResearchReconciliationOverview } from "./research-budget.js";
 import { evaluateResearchReconciliationAlert } from "./research-reconciliation-alert.js";
 import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
-  calculateVerifiedSpendCents } from "./research-price-policy.js";
+  researchPriceReadiness, calculateVerifiedSpendCents } from "./research-price-policy.js";
 import { bootstrapAdmin, verifyAdmin } from "./admin-auth.js";
 import { googleOAuthConfig, createGoogleFlow, verifyGoogleFlow, exchangeGoogleCode,
   verifyGoogleIdToken, createPartnerSession, verifyPartnerSession } from "./google-auth.js";
@@ -696,18 +698,13 @@ async function ownerResearchBudgetReadiness(ownerId) {
       where: { ownerId }, select: { provider: true, model: true },
     }),
   ]);
-  let worstCaseCents = null;
-  if (env.AI_WEB_RESEARCH_ENABLED === "true" && setting) {
-    try {
-      worstCaseCents = requireResearchPriceEnvelope(setting).worstCaseCents;
-    } catch (error) {
-      if (!(error instanceof ResearchPricingUnavailable)) throw error;
-    }
-  }
-  const remainingCents = snapshot.ledger.availableCents;
-  return { ...snapshot,
-    enforcedForPaidSearch: worstCaseCents !== null &&
-      Number.isSafeInteger(remainingCents) && remainingCents >= worstCaseCents };
+  // Project the exact saved provider/model through the same reviewed tariff
+  // gate as claimResearchTask. An app budget or an external Google spend cap
+  // cannot authorize a tariff-less Google Search call.
+  return { ...snapshot, ...researchPriceReadiness({
+    setting, enabled: env.AI_WEB_RESEARCH_ENABLED === "true",
+    remainingCents: snapshot.ledger.availableCents,
+  }) };
 }
 app.get("/api/research-budget", aiOwnerAuthenticated, safe(async (req, res) => {
   const identity = await partnerIdentity(req);
@@ -783,6 +780,238 @@ app.put("/api/research-limits", aiOwnerAuthenticated, requireOrigin, safe(async 
   });
   return res.json(saved);
 }));
+// Read-only recovery path for the one-shot diagnostic. A browser refresh,
+// disconnect or Render restart never gives permission to issue another call.
+app.get("/api/discovery/gemini3-one-shot", candidateReadScope,
+  safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      code: "WORKSPACE_REQUIRED", error: "Active workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity || !await requireWorkspaceMembership(prisma, {
+      workspaceId: req.candidateScope, userId: identity.id,
+    })) return res.status(403).json({ error: "Workspace membership required" });
+    if (identity.id !== env.AI_GEMINI3_SINGLE_TEST_OWNER_ID) {
+      return res.status(403).json({ code: "TEST_OWNER_MISMATCH" });
+    }
+    const [started, finished] = await Promise.all([
+      prisma.auditEvent.findFirst({
+        where: { actorId: identity.id, action: GEMINI3_TEST_ACTION },
+        orderBy: { createdAt: "desc" }, select: { createdAt: true },
+      }),
+      prisma.auditEvent.findFirst({
+        where: { actorId: identity.id, action: "ai.gemini3-one-shot.finished" },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true, metadata: true },
+      }),
+    ]);
+    if (!started) return res.json({ status: "NOT_RUN" });
+    if (!finished) return res.json({ status: "PENDING_RECONCILIATION",
+      error: "The single paid request may already have been dispatched. No replay." });
+    const m = finished.metadata;
+    return res.json({ status: "FINISHED", code: m?.outcomeCode ?? "UNKNOWN",
+      diagnostic: {
+        model: GEMINI3_TEST_MODEL, finished: m?.finished === true,
+        finishReason: typeof m?.finishReason === "string" ? m.finishReason : null,
+        inputTokens: m?.inputTokens ?? null, outputTokens: m?.outputTokens ?? null,
+        thinkingTokens: m?.thinkingTokens ?? null, searchQueries: m?.searchQueries ?? null,
+        groundingChunks: m?.groundingChunks ?? null, estimateUsd: m?.estimateUsd ?? null,
+        providerInvoiceConfirmed: false, currency: "USD",
+      },
+      appReservationCents: GEMINI3_TEST_RESERVE_CENTS,
+      appReservationIsNotProviderInvoice: true,
+      noContactsImported: true, noEmailSent: true,
+    });
+  }));
+// Explicit one-use diagnostic exception. This does NOT add Gemini 3 to
+// approvedResearchPrices or authorize normal campaign research. Google
+// Search query count is controlled by Google, not by our budget reservation.
+app.post("/api/discovery/gemini3-one-shot", candidateReadScope, requireOrigin,
+  researchLimiter, safe(async (req, res) => {
+    if (env.AI_GEMINI3_SINGLE_TEST_ENABLED !== "true" ||
+        env.AI_WEB_RESEARCH_ENABLED !== "true") {
+      return res.status(503).json({ code: "GEMINI3_TEST_DISABLED",
+        error: "The one-use Gemini 3 experiment is not enabled" });
+    }
+    if (req.candidateScope === null) return res.status(403).json({
+      code: "WORKSPACE_REQUIRED", error: "Active partner workspace required",
+    });
+    if (!/^c[a-z0-9]{10,40}$/.test(env.AI_GEMINI3_SINGLE_TEST_OWNER_ID ?? "")) {
+      return res.status(503).json({ code: "TEST_OWNER_UNCONFIGURED",
+        error: "Single-test owner authorization is not configured" });
+    }
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    if (identity.id !== env.AI_GEMINI3_SINGLE_TEST_OWNER_ID) {
+      return res.status(403).json({ code: "GEMINI3_TEST_OWNER_MISMATCH",
+        error: "This one-time experiment is not authorized for this account" });
+    }
+    const input = z.object({
+      query: z.string().trim().min(12).max(350),
+      confirmation: z.literal(GEMINI3_TEST_CONFIRMATION),
+    }).strict().parse(req.body);
+    const setting = await prisma.aiSetting.findUnique({
+      where: { ownerId: identity.id },
+    });
+    if (!setting || setting.provider !== "gemini" ||
+        setting.model !== GEMINI3_TEST_MODEL) return res.status(409).json({
+      code: "GEMINI3_MODEL_REQUIRED",
+      error: "Save Gemini 3 Flash Preview in AI Settings before the single test",
+    });
+    let apiKey;
+    try { apiKey = decryptKey(setting.encryptedApiKey, env.AI_ENCRYPTION_KEY); }
+    catch { return res.status(409).json({ code: "RESEARCH_KEY_UNAVAILABLE",
+      error: "Stored Gemini API key unavailable; re-save in AI Settings" }); }
+    if (typeof apiKey !== "string" || apiKey.length < 8) {
+      return res.status(409).json({ code: "RESEARCH_KEY_UNAVAILABLE",
+        error: "Personal Gemini API key is required" });
+    }
+
+    let reservation;
+    try {
+      reservation = await prisma.$transaction(async tx => {
+        if (!await lockActiveWorkspaceMembership(tx, {
+          workspaceId: req.candidateScope, userId: identity.id,
+        })) return null;
+        const prefs = await lockedResearchPreferences(tx, identity.id);
+        const leaseId = await reserveResearchLease(tx, {
+          workspaceId: req.candidateScope, userId: identity.id,
+          maxConcurrent: prefs.maxConcurrent,
+        });
+        const reservationId = randomUUID();
+        // The budget row lock serializes the consumed marker across every
+        // workspace, browser tab and Render worker for this owner.
+        await reserveOwnerSpend(tx, {
+          ownerId: identity.id, workspaceId: req.candidateScope,
+          reservationId, worstCaseCents: GEMINI3_TEST_RESERVE_CENTS,
+        });
+        const used = await tx.auditEvent.count({
+          where: { actorId: identity.id, action: GEMINI3_TEST_ACTION },
+        });
+        if (used !== 0) {
+          // Throwing rolls back the provisional lease and money reservation.
+          throw Object.assign(new Error("Gemini 3 one-shot already consumed"), {
+            code: "GEMINI3_TEST_ALREADY_USED",
+          });
+        }
+        const quota = await reserveResearchAttempt(tx, {
+          workspaceId: req.candidateScope, userId: identity.id,
+          dailyLimit: prefs.dailyLimit,
+        });
+        await tx.auditEvent.create({ data: {
+          actorId: identity.id, action: GEMINI3_TEST_ACTION,
+          entityId: reservationId,
+          metadata: { workspaceId: req.candidateScope,
+            model: GEMINI3_TEST_MODEL, providerCallsAuthorized: 1,
+            conservativeAppReservationCents: GEMINI3_TEST_RESERVE_CENTS,
+            externalSpendHardCapped: false, noReplay: true },
+        } });
+        return { reservationId, leaseId, quota };
+      });
+    } catch (error) {
+      if (error?.code === "GEMINI3_TEST_ALREADY_USED") {
+        return res.status(409).json({ code: "GEMINI3_TEST_ALREADY_USED",
+          error: "The one-shot experiment is already consumed. No replay allowed." });
+      }
+      if (error instanceof ResearchPacingRequired) {
+        res.set("Retry-After", String(error.retryAfterSeconds));
+        return res.status(429).json({
+          code: "RESEARCH_PACING_WAIT", retryAfterSeconds: error.retryAfterSeconds,
+          error: "No provider call was started; the pacing gate is active",
+        });
+      }
+      if (error instanceof ResearchBudgetExceeded) return res.status(429).json({
+        code: "RESEARCH_BUDGET_EXCEEDED",
+        error: "Insufficient app budget for the one-shot diagnostic reservation",
+      });
+      if (error instanceof ResearchQuotaExceeded ||
+          error instanceof ResearchConcurrencyExceeded) return res.status(429).json({
+        code: "RESEARCH_LIMIT_REACHED",
+        error: "Daily research quota or active concurrency limit reached",
+      });
+      throw error;
+    }
+    if (!reservation) return res.status(403).json({ error: "Workspace revoked" });
+    let settled = false;
+    let summary = null;
+    let completed = false;
+    let outcomeCode = "UNCONFIRMED_UPSTREAM_OUTCOME";
+    try {
+      // A revoked membership must never use a still-valid BYOK key.
+      if (!await requireWorkspaceMembership(prisma, {
+        workspaceId: req.candidateScope, userId: identity.id,
+      })) {
+        outcomeCode = "WORKSPACE_REVOKED";
+        return res.status(403).json({ code: outcomeCode,
+          error: "Workspace access changed; diagnostic was not dispatched" });
+      }
+      // One trusted provider invocation. No retry/repair, no campaign tasks,
+      // no contact import, no email inspection and no message sending.
+      try {
+        const result = await researchCandidates({
+          query: input.query, limit: 10, provider: "gemini",
+          model: GEMINI3_TEST_MODEL, apiKey,
+        }, { post: async (url, headers, body, signal) => {
+          const response = await fetch(url, {
+            method: "POST", headers: {
+              "content-type": "application/json", ...headers,
+            }, body: JSON.stringify(body), signal,
+          });
+          if (!response.ok) throw new ResearchProviderHttpError(response.status);
+          const raw = await response.json();
+          summary = summarizeGemini3TestResponse(raw);
+          return raw;
+        } });
+        completed = true;
+        outcomeCode = "VALIDATED";
+        return res.json({ status: "COMPLETED", code: outcomeCode,
+          diagnostic: summary, sourcedCandidates: result.candidates.length,
+          noContactsImported: true, noEmailSent: true,
+          appReservationCents: GEMINI3_TEST_RESERVE_CENTS,
+          appReservationIsNotProviderInvoice: true });
+      } catch (error) {
+        outcomeCode = error?.code === "NO_VERIFIABLE_GROUNDING" ?
+          "NO_VERIFIABLE_GROUNDING" :
+          error?.code === "NO_USABLE_STRUCTURED_OUTPUT" ?
+          "NO_USABLE_STRUCTURED_OUTPUT" :
+          error instanceof ResearchProviderHttpError ?
+          "PROVIDER_HTTP_REJECTED" : "UNCONFIRMED_UPSTREAM_OUTCOME";
+        return res.status(200).json({
+          status: outcomeCode === "UNCONFIRMED_UPSTREAM_OUTCOME" ||
+            outcomeCode === "PROVIDER_HTTP_REJECTED" ?
+            "BILLING_UNCERTAIN" : "COMPLETED_WITH_NO_ACCEPTED_EVIDENCE",
+          code: outcomeCode, diagnostic: summary,
+          noContactsImported: true, noEmailSent: true,
+          providerInvoiceConfirmed: false,
+          appReservationCents: GEMINI3_TEST_RESERVE_CENTS,
+          appReservationIsNotProviderInvoice: true,
+        });
+      }
+    } finally {
+      try {
+        await prisma.$transaction(async tx => {
+          await settleOwnerSpend(tx, {
+            ownerId: identity.id, workspaceId: req.candidateScope,
+            reservationId: reservation.reservationId,
+            actualCents: !completed && outcomeCode === "WORKSPACE_REVOKED"
+              ? 0 : null,
+          });
+          await tx.auditEvent.create({ data: {
+            actorId: identity.id, action: "ai.gemini3-one-shot.finished",
+            entityId: reservation.reservationId,
+            metadata: { workspaceId: req.candidateScope, outcomeCode,
+              ...(summary ?? {}), conservativeAppReservationCents:
+              GEMINI3_TEST_RESERVE_CENTS, providerInvoiceConfirmed: false },
+          } });
+        });
+        settled = true;
+      } finally {
+        if (!settled) console.warn("[gemini3-test] Spend needs reconciliation");
+        await releaseResearchLease(prisma, reservation.leaseId,
+          req.candidateScope, identity.id);
+      }
+    }
+  }));
 app.post("/api/discovery/ai-research", candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
   // Explicit staged activation; no accidental spend or data disclosure at deploy.
   if (env.AI_WEB_RESEARCH_ENABLED !== "true") return res.status(503).json({

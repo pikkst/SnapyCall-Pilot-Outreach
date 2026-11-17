@@ -54,3 +54,28 @@ test("research UI never enables a paid request without server readiness", () => 
   assert.match(source,
     /await loadPersonalAiSettings\(\);[\s\S]{0,210}await loadResearchBudget\(\);/);
 });
+
+test("unpriced Gemini 3 is blocked even with budget and a configured personal key", () => {
+  const status = researchReadiness({
+    ...ready,
+    selectedProvider: "gemini", selectedModel: "gemini-3-flash-preview",
+    savedProvider: "gemini", savedModel: "gemini-3-flash-preview",
+    pricingStatus: "MODEL_PRICING_UNAVAILABLE",
+    enforcedForPaidSearch: false,
+  });
+  assert.equal(status.ready, false);
+  assert.equal(status.steps[2].state, "blocked");
+  assert.match(status.steps[2].description, /no approved app-enforced Search billing ceiling/);
+});
+
+test("editing model ID cannot borrow previously approved model's research readiness", () => {
+  const status = researchReadiness({
+    ...ready,
+    selectedProvider: "gemini", selectedModel: "gemini-3-flash-preview",
+    savedProvider: "gemini", savedModel: "gemini-2.5-flash",
+    pricingStatus: "READY", enforcedForPaidSearch: true,
+  });
+  assert.equal(status.ready, false);
+  assert.equal(status.steps[2].state, "blocked");
+  assert.match(status.steps[2].description, /Save this model selection/);
+});

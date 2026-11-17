@@ -123,6 +123,33 @@ export function requireResearchPriceEnvelope({ provider, model }) {
   return policy;
 }
 
+// Read-only model/budget readiness. Exactly the same exact-model pricing
+// registry governs this projection and the paid worker preflight. No key,
+// account credit, or browser-selected model may override a missing tariff.
+export function researchPriceReadiness({ setting, enabled, remainingCents }) {
+  const model = setting?.model ?? null;
+  const provider = setting?.provider ?? null;
+  if (!setting || !provider || !model) {
+    return { provider, model, pricingStatus: "AI_SETTINGS_REQUIRED",
+      worstCaseCents: null, enforcedForPaidSearch: false };
+  }
+  let price;
+  try {
+    price = requireResearchPriceEnvelope({ provider, model });
+  } catch (error) {
+    if (!(error instanceof ResearchPricingUnavailable)) throw error;
+    return { provider, model, pricingStatus: "MODEL_PRICING_UNAVAILABLE",
+      worstCaseCents: null, enforcedForPaidSearch: false };
+  }
+  const ready = Number.isSafeInteger(remainingCents) &&
+    remainingCents >= price.worstCaseCents;
+  return { provider, model,
+    pricingStatus: !enabled ? "RESEARCH_DISABLED"
+      : !ready ? "INSUFFICIENT_APP_BUDGET" : "READY",
+    worstCaseCents: price.worstCaseCents,
+    enforcedForPaidSearch: !!enabled && ready };
+}
+
 // Calculate only when a reviewed exact-model tariff and all billable units
 // are present in the server-side provider response. This routine must never
 // receive user-submitted usage or a client-supplied price contract.
