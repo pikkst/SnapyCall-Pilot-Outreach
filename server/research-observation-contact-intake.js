@@ -7,6 +7,7 @@ import { canonicalEvidenceUrl } from "../src/evidence.js";
 
 const ID = /^c[a-z0-9]{10,40}$/;
 const SHA = /^[a-f0-9]{64}$/;
+const GENERIC_MAILBOX = /^(?:info|contact|hello|office|team|support|business|booking|bookings|partners|partnerships)$/i;
 
 export async function acceptReviewedCampaignContact(db, {
   campaignId, observationId, workspaceId, ownerId,
@@ -31,6 +32,7 @@ export async function acceptReviewedCampaignContact(db, {
   }
   const normalized = normalizeVerificationAddress(finding.observedEmail);
   if (!normalized || normalized.email !== finding.observedEmail ||
+      GENERIC_MAILBOX.test(normalized.email.split("@")[0]) ||
       typeof finding.name !== "string" ||
       typeof finding.category !== "string" ||
       typeof finding.sourceUrl !== "string") {
