@@ -59,7 +59,6 @@ function fakeDb({ revoked = false, existing = null, changed = false,
         }
         throw new Error("Unexpected SQL: " + sql);
       },
-      researchCampaignObservation: { count: async () => shared },
       candidate: {
         findFirst: async () => existing,
         create: async ({ data }) => {
@@ -87,7 +86,9 @@ function fakeDb({ revoked = false, existing = null, changed = false,
         events.push("profile-evidence");
         assert.equal(data.kind, "PROFILE");
       } },
-      researchCampaignObservation: { updateMany: async ({ data }) => {
+      researchCampaignObservation: {
+        count: async () => shared,
+        updateMany: async ({ data }) => {
         events.push("observation-link");
         assert.equal(data.candidateId, created.id);
         return { count: 1 };
