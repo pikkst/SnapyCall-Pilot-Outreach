@@ -429,6 +429,7 @@ model ResearchCampaignRun {
   status String @default("APPROVED")
   lastCode String?
   approvedAt DateTime @default(now())
+  expiresAt DateTime
   updatedAt DateTime @updatedAt
   @@index([status, approvedAt])
   @@index([workspaceId, ownerId])
