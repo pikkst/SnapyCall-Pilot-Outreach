@@ -14,7 +14,7 @@ const entry = {
 };
 const page = {
   url: profile,
-  text: "Name: Ada Expert. Email: ada@experts.example.org",
+  text: "Name: Ada Expert Email: ada@experts.example.org",
 };
 const scope = { campaignId, observationId, workspaceId, ownerId };
 
