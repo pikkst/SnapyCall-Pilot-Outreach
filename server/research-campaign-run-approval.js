@@ -178,6 +178,7 @@ export async function finishApprovedRunTask(db, {
     const status = ["COMPLETED", "NO_READY_TASK"].includes(result?.status) &&
       terminal ? "COMPLETED" :
       result?.status === "COMPLETED" && run.startedTasks < run.maxTasks &&
+      run.expiresAt instanceof Date && run.expiresAt.getTime() > Date.now() &&
       run.committedWorstCaseCents + run.worstCasePerCallCents <=
         run.maxWorstCaseCents ? "RUNNING" : "PAUSED";
     const code = status === "COMPLETED" ? "CAMPAIGN_FINISHED" :
@@ -197,7 +198,8 @@ export async function pauseApprovedRun(db, {
   campaignId, workspaceId, ownerId, code,
 }) {
   const allow = new Set(["RUN_PREFLIGHT_BLOCKED", "RUN_EXECUTION_UNCERTAIN",
-    "RUN_NO_READY_TASK", "RUN_PRICE_OR_MODEL_CHANGED"]);
+    "RUN_NO_READY_TASK", "RUN_PRICE_OR_MODEL_CHANGED",
+    "RUN_APPROVAL_EXPIRED"]);
   const lastCode = allow.has(code) ? code : "RUN_EXECUTION_UNCERTAIN";
   await db.researchCampaignRun.updateMany({
     where: { campaignId, workspaceId, ownerId,
