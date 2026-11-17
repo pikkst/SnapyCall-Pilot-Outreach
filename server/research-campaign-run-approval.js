@@ -174,6 +174,7 @@ export async function finishApprovedRunTask(db, {
         !["RUNNING", "APPROVED"].includes(run.status)) {
       return { code: "RUN_NOT_ACTIVE" };
     }
+    const qualityStopped = campaigns[0].status === "QUALITY_STOP";
     const terminal = ["COMPLETED", "PARTIAL", "CANCELLED"].includes(campaigns[0].status);
     // The workspace dispatch gate rejected this tick before any monetary
     // reservation or upstream call. Preserve the original immutable approval
@@ -205,14 +206,16 @@ export async function finishApprovedRunTask(db, {
         retryWaiting = next !== null;
       }
     }
-    const status = ["COMPLETED", "NO_READY_TASK"].includes(result?.status) &&
+    const status = qualityStopped ? "PAUSED" :
+      ["COMPLETED", "NO_READY_TASK"].includes(result?.status) &&
       terminal ? "COMPLETED" :
       (result?.status === "COMPLETED" || retryWaiting || pacingWaiting) &&
       run.startedTasks < run.maxTasks &&
       run.expiresAt instanceof Date && run.expiresAt.getTime() > Date.now() &&
       run.committedWorstCaseCents + run.worstCasePerCallCents <=
         run.maxWorstCaseCents ? "RUNNING" : "PAUSED";
-    const code = status === "COMPLETED" ? "CAMPAIGN_FINISHED" :
+    const code = qualityStopped ? "QUALITY_STOP" :
+      status === "COMPLETED" ? "CAMPAIGN_FINISHED" :
       status === "RUNNING" ? (pacingWaiting ? "WAITING_RATE_LIMIT" :
         retryWaiting ? "WAITING_RETRY" : null) :
       result?.status === "COMPLETED" ? "RUN_LIMIT_REACHED" :
