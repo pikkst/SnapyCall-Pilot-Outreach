@@ -27,6 +27,7 @@ flowchart TD
 
 - `POST /api/research-campaigns/:id/email-triage/start` with `{maxPages,confirmPublicInspection:true}` is authenticated as the campaign owner and active workspace member, uses Origin protection + rate limiter, requires terminal discovery status `COMPLETED` or `PARTIAL`, and cannot re-authorize an already attempted campaign.
 - `AI_EMAIL_TRIAGE_ENABLED=true` enables the separate public-page inspection worker. It is OFF by default. Reading UI data does not trigger an inspection.
+- Preflight rejects batches containing even one opaque Gemini grounding redirect or otherwise non-direct source URL; it reports the total and currently inspectable counts without consuming the immutable approval. Source resolution remains a separately audited step, not a bypass in triage.
 - Max 250 observations per approval, 24-hour expiry, one active lease per campaign. The worker persists the claim before each HTTPS fetch; a crashed or expired claim blocks additional work pending review rather than automatically replaying external HTTP fetches.
 - `POST /api/research-campaigns/:id/email-triage/stop` blocks future claims; a currently dispatched request can still be in flight. User cannot restart a paused approval without a separate audited recovery flow (not implemented).
 - `GET /api/research-campaigns/:id/email-triage` returns counts and status; the existing owner-scoped observations read endpoint returns `emailTriageStatus`, safe reason, observed email and inspection timestamp. Never make them public.
