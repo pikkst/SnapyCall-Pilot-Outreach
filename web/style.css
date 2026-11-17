@@ -145,3 +145,20 @@ td button+button{margin-left:6px}
 .campaign-source-list li{border:1px solid #e1e8f2;border-radius:9px;padding:10px 12px;overflow-wrap:anywhere;background:white}
 .campaign-source-list small{display:block;color:#6d7c94;margin-top:4px}
 @media(max-width:600px){.campaign-source-actions{flex-direction:column}.campaign-source-actions button{width:100%}}
+
+/* Stages are driven by persisted server state. Motion is only for ACTIVE work. */
+.campaign-stage-timeline{margin:18px 0;border:1px solid #dce4f1;border-radius:12px;padding:16px;background:#fafcff}
+.campaign-stage-header{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.campaign-stage-header small{color:#65768d}
+.campaign-stage-steps{padding:0;margin:16px 0 0;list-style:none;display:grid;gap:8px}
+.campaign-stage-steps li{display:flex;gap:12px;padding:13px;border:1px solid #e1e8f2;border-radius:9px;background:white;min-width:0}
+.campaign-stage-steps li>div{flex:1;min-width:0}
+.campaign-stage-marker{flex:none;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#e9eef9;color:#34496d;font-weight:700;font-size:13px}
+.campaign-stage-steps strong{font-size:14px;display:inline-block;margin-right:10px}
+.campaign-stage-state{font-size:11px;text-transform:capitalize;font-weight:700;color:#80551b}
+.campaign-stage-steps p{margin:5px 0 0;font-size:12px;line-height:1.5;color:#61728d}
+.campaign-stage-steps li[data-stage-state="ACTIVE"]{border-color:#74b99a;background:#f5fdf8}
+.campaign-stage-steps li[data-stage-state="ACTIVE"] .campaign-stage-marker{background:#cbeeda;color:#195d3a}
+.campaign-stage-steps li[data-stage-state="FINISHED"] .campaign-stage-marker{background:#d6f2e2;color:#226746}
+.campaign-stage-steps li[data-stage-state="DISABLED"]{opacity:.72}
+@media(prefers-reduced-motion:no-preference){.campaign-stage-steps li[data-stage-state="ACTIVE"] .campaign-stage-marker{animation:campaign-active-pulse 1.65s ease-in-out infinite}@keyframes campaign-active-pulse{0%,100%{box-shadow:0 0 0 0 rgba(31,139,83,.12)}50%{box-shadow:0 0 0 8px rgba(31,139,83,.06)}}}
