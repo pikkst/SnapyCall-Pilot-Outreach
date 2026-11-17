@@ -92,8 +92,19 @@ export async function persistGroundingSourceHint(db, {
     if (row.citationUrl !== originalCitationUrl) {
       return { status: 409, code: "GROUNDING_CITATION_CHANGED" };
     }
-    // One-shot run claims are fencing tokens. Never finalize an unknown
-    // external request on a stale token, after expiry or after a user stop.
+    // A completed identical write is a read-only replay, not a new
+    // dispatch. Handle it before checking the cleared claim token.
+    if (row.groundingStatus !== "UNCHECKED") {
+      const same = row.groundingStatus === fields.groundingStatus &&
+        row.groundingResolvedUrl === fields.groundingResolvedUrl &&
+        row.groundingProvenance === fields.groundingProvenance &&
+        row.groundingCode === fields.groundingCode;
+      return same
+        ? { status: 200, code: "GROUNDING_EVIDENCE_ALREADY_SAVED" }
+        : { status: 409, code: "GROUNDING_EVIDENCE_IMMUTABLE" };
+    }
+    // A first commit requires the active fencing token. Expired or stopped
+    // claims cannot write results after an uncertain external request.
     const running = campaigns[0].groundingRunStatus === "RUNNING";
     if (row.groundingLeaseToken != null || running) {
       if (!running || typeof claimToken !== "string" ||
@@ -104,15 +115,6 @@ export async function persistGroundingSourceHint(db, {
       }
     } else if (claimToken !== null) {
       return { status: 409, code: "GROUNDING_LEASE_UNCONFIRMED" };
-    }
-    if (row.groundingStatus !== "UNCHECKED") {
-      const same = row.groundingStatus === fields.groundingStatus &&
-        row.groundingResolvedUrl === fields.groundingResolvedUrl &&
-        row.groundingProvenance === fields.groundingProvenance &&
-        row.groundingCode === fields.groundingCode;
-      return same
-        ? { status: 200, code: "GROUNDING_EVIDENCE_ALREADY_SAVED" }
-        : { status: 409, code: "GROUNDING_EVIDENCE_IMMUTABLE" };
     }
     const changed = await tx.researchCampaignObservation.updateMany({
       where: { id: observationId, campaignId,
