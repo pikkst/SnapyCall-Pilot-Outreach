@@ -132,8 +132,8 @@ export function calculateVerifiedSpendCents(policy, usage) {
       !usage || typeof usage !== "object") return null;
   // The adapter must explicitly certify that every chargeable usage unit
   // for this exact model/tool tariff was captured from provider metadata.
-  // Current adapters do not provide this certification, so they must always
-  // settle conservatively at the full reserved amount.
+  // Only the trusted adapter may certify the exact provider billing units.
+  // Missing or ambiguous provider usage always settles at the reserved ceiling.
   if (usage.billingEvidence?.source !== "provider" ||
       usage.billingEvidence?.complete !== true ||
       usage.billingEvidence?.provider !== policy.provider ||
@@ -146,18 +146,21 @@ export function calculateVerifiedSpendCents(policy, usage) {
   const limits = policy.usageLimits;
   // Tool billing differs across providers. Unsupported tariff shapes fail
   // closed; in particular Gemini 2.5 uses grounded prompts, not query counts.
-  if (!pricing || pricing.billingUnit !== "search_requests" ||
+  if (!pricing || !["search_requests", "grounded_prompts"].includes(pricing.billingUnit) ||
       !limits || !Number.isSafeInteger(policy.worstCaseCents) ||
       policy.worstCaseCents < 1) return null;
+  const isGroundedPrompt = pricing.billingUnit === "grounded_prompts";
+  const units = isGroundedPrompt ? usage.groundedPrompts : usage.searchRequests;
+  const maxUnits = isGroundedPrompt ? limits.maxGroundedPrompts : limits.maxSearchRequests;
   const fields = [
     [usage.inputTokens, limits.maxInputTokens],
     [usage.outputTokens, limits.maxOutputTokens],
-    [usage.searchRequests, limits.maxSearchRequests],
+    [units, maxUnits],
   ];
   if (fields.some(([count, bound]) =>
     !Number.isSafeInteger(count) || count < 0 ||
     !Number.isSafeInteger(bound) || bound < 0 || count > bound) ||
-    usage.searchRequests < 1) return null;
+    units < 1) return null;
   const rates = [
     pricing.inputCentsPerMillion,
     pricing.outputCentsPerMillion,
@@ -169,7 +172,7 @@ export function calculateVerifiedSpendCents(policy, usage) {
   const numerator =
     BigInt(usage.inputTokens) * BigInt(rates[0]) +
     BigInt(usage.outputTokens) * BigInt(rates[1]) +
-    BigInt(usage.searchRequests) * BigInt(rates[2]) * 1000n;
+    BigInt(units) * BigInt(rates[2]) * 1000n;
   const cents = (numerator + 999999n) / 1000000n;
   if (cents > BigInt(policy.worstCaseCents) ||
       cents > BigInt(Number.MAX_SAFE_INTEGER)) return null;
