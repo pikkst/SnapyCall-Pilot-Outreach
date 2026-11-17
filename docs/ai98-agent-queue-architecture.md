@@ -118,6 +118,38 @@ independent autonomous AI agent, extra provider request, or schema migration.
 The third strike stops execution; no implicit reset of a stopped campaign.
 A new campaign or approval after investigation must be explicitly requested.
 
+## Gemini 3 Flash selection (model migration)
+
+The default displayed model for new Gemini configurations is
+`gemini-3-flash-preview`. Existing BYOK users retain their saved model
+and encrypted key; changing the exact model is an explicit user action in
+**AI Settings**. A switch never creates a campaign, submits a paid provider
+call, rewrites previous task results, or reclassifies spend.
+
+The Gemini adapter sends `thinkingConfig.thinkingLevel="minimal"` only
+for Gemini 3 Flash Preview (2.5 retains `thinkingBudget=0`). The
+provider-grounding-to-candidate provenance contract is unchanged.
+
+**Critical cost boundary:** Google's published Gemini 3 Search Grounding
+tariff is per **individual Google search query**, not per grounded prompt
+as in Gemini 2.5. Google controls internal query expansion; current
+`generateContent` integration has no independently verified hard
+per-call search-query cap. Consequently, **Gemini 3 Flash Preview is
+selectable but NOT approved for paid research** in the exact-model
+server pricing registry. Never reuse the `gemini-2.5-flash` policy or
+assume 5,000 monthly free requests for a user's actual account. Research
+preflight returns the existing unavailable-pricing gate before any
+provider dispatch. A separate reviewed, enforceable query-cost bound
+or a redesigned bounded retrieval adapter is required before enabling
+paid Gemini 3 discovery. This is intentional protection, not a broken
+API-key setup.
+
+Google model and tariff references:
+- https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview
+- https://ai.google.dev/gemini-api/docs/pricing
+- https://ai.google.dev/gemini-api/docs/google-search
+- https://ai.google.dev/gemini-api/docs/thinking
+
 ## Target-100 strategy
 
 Do not generate 100 nearly identical prompts at once. Start with a bounded

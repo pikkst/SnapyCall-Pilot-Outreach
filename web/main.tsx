@@ -161,7 +161,7 @@ type Evidence = { id: string; kind: string; sourceUrl: string; note: string | nu
 type FeedEntry = { discoveryKey: string; name: string; headline: string; sourceUrl: string; feedUrl: string; proof: string };
 
 const defaultAiModels: Record<string, string> = {
-  gemini: "gemini-2.5-flash",
+  gemini: "gemini-3-flash-preview",
   openai: "gpt-4.1-mini",
   anthropic: "claude-sonnet-4-6",
 };
@@ -235,7 +235,7 @@ function App() {
   const [gmailStatus, setGmailStatus] = useState<GmailStatus | null>(null);
   const [gmailStatusError, setGmailStatusError] = useState(false);
   const [personalAi, setPersonalAi] = useState<AiSetting>({
-    provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false,
+    provider: "gemini", model: "gemini-3-flash-preview", keyConfigured: false,
   });
   const [personalApiKey, setPersonalApiKey] = useState("");
   const [researchLimits, setResearchLimits] = useState<ResearchLimits>({ dailyLimit: 2, maxCandidates: 10, maxConcurrent: 1 });
@@ -363,7 +363,7 @@ function App() {
   const [password, setPassword] = useState("");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [setting, setSetting] = useState<AiSetting>({ provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
+  const [setting, setSetting] = useState<AiSetting>({ provider: "gemini", model: "gemini-3-flash-preview", keyConfigured: false });
   const [apiKey, setApiKey] = useState("");
   const [feeds, setFeeds] = useState<string[]>([]);
   const [selectedFeed, setSelectedFeed] = useState("");
@@ -1715,7 +1715,7 @@ function App() {
       setGmailStatus(null);
       setGmailStatusError(false);
       setPersonalApiKey("");
-      setPersonalAi({ provider: "gemini", model: "gemini-2.5-flash", keyConfigured: false });
+      setPersonalAi({ provider: "gemini", model: "gemini-3-flash-preview", keyConfigured: false });
       setPersonalAiStatus("loading");
       setResearchLimits({ dailyLimit: 2, maxCandidates: 10, maxConcurrent: 1 });
       setResearchLimitsStatus("loading");
@@ -2131,8 +2131,9 @@ function App() {
                     <p className="muted">Paid public-web research with your selected
                     { " " + personalAi.provider + " " + personalAi.model } model.
                     Only explicitly priced models can run. Claude and OpenAI permit at most
-                    three built-in web searches per request; Gemini 2.5 is billed by
-                    grounded prompt, not by query count. Every call reserves a conservative
+                    three built-in web searches per request; Gemini 2.5 is billed
+                    per grounded prompt, while Gemini 3 uses search-query billing
+                    and needs a separate verified monetary ceiling. Every approved call reserves a conservative
                     amount from your owner-wide application USD budget. Review-only:
                     no candidates are imported or contacted. Failed requests may still be charged.</p>
                   <p className="muted">Safety rate limit: at most 2 research requests
@@ -3320,6 +3321,20 @@ function App() {
               </label>
               <label>Model <input required value={personalAi.model}
                 onChange={e => setPersonalAi({ ...personalAi, model: e.target.value })} /></label>
+              {personalAi.provider === "gemini" && personalAi.model === "gemini-2.5-flash" &&
+                <button type="button" className="secondary" disabled={busy}
+                  onClick={() => setPersonalAi({ ...personalAi, model: "gemini-3-flash-preview" })}>
+                  Switch to Gemini 3 Flash (preview)
+                </button>}
+              {personalAi.provider === "gemini" &&
+                personalAi.model === "gemini-3-flash-preview" &&
+                <p role="status" className="muted">
+                  Gemini 3 Flash supports Google Search, but its search queries
+                  are charged individually. This model is selectable and the
+                  existing API key is retained when saved; paid research remains
+                  blocked until a separately reviewed query-cost ceiling exists.
+                  Changing the model will not run AI or replay past tasks.
+                </p>}
               <label>Personal API key <input type="password" autoComplete="off"
                 value={personalApiKey} required={!personalAi.keyConfigured}
                 onChange={e => setPersonalApiKey(e.target.value)}
@@ -3377,8 +3392,10 @@ function App() {
           <h2>Monthly research budget</h2>
           <p className="muted">Required USD application spending limit for your personal API key across
             every workspace. Approved exact models are Claude Sonnet 4.6 (up to $4.00),
-            OpenAI GPT-4.1 mini (up to $1.50) and Gemini 2.5 Flash (up to $2.00)
-            per attempt; other models and tools remain blocked.
+            OpenAI GPT-4.1 mini (up to $1.50) and the existing Gemini
+            2.5 Flash policy (up to $2.00) per attempt. Gemini 3 Flash
+            has different search-query billing and is not yet approved for
+            paid discovery.
             The application ledger is conservative, not a provider invoice or external billing cap.</p>
           <p role="status">{researchBudget.enforcedForPaidSearch
             ? "Approved web research is enabled within your saved application budget."
@@ -3665,7 +3682,7 @@ function App() {
         <p className="muted">Choose your provider, enter the model ID and optionally save your API key. Calls are made server-side; the key is encrypted at rest and never returned to the browser.</p>
         <form onSubmit={saveSettings}>
           <label>Provider<select value={setting.provider} onChange={e => setSetting({ ...setting, provider: e.target.value, model: defaultAiModels[e.target.value] ?? setting.model })}><option value="gemini">Google Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Claude (Anthropic)</option></select></label>
-          <label>Model ID<input required minLength={2} maxLength={80} value={setting.model} onChange={e => setSetting({ ...setting, model: e.target.value })} placeholder="gemini-2.5-flash"/></label>
+          <label>Model ID<input required minLength={2} maxLength={80} value={setting.model} onChange={e => setSetting({ ...setting, model: e.target.value })} placeholder="gemini-3-flash-preview"/></label>
           <label>API key<input type="password" autoComplete="new-password" placeholder={setting.keyConfigured ? "Key saved • leave blank to keep" : "Paste provider API key"} value={apiKey} onChange={e => setApiKey(e.target.value)} /></label>
           <div className="key-status">{setting.keyConfigured ? "● Key configured (fingerprint: " + setting.fingerprint + ")" : "○ No API key configured"}</div>
           <button disabled={busy}>Save AI configuration</button>

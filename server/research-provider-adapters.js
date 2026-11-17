@@ -29,7 +29,7 @@ export class ResearchStructuredOutputUnavailableError extends Error {
 
 const models = {
   openai: /^gpt-[a-zA-Z0-9][a-zA-Z0-9._-]{1,75}$/,
-  gemini: /^gemini-(?:2\.5|3\.)[a-zA-Z0-9._-]{1,70}$/,
+  gemini: /^gemini-(?:2\.5|3(?:\.|-))[a-zA-Z0-9._-]{1,70}$/,
 };
 
 export function assertWebResearchModel(provider, model) {
@@ -105,12 +105,13 @@ export async function searchWithGemini({ query, limit, model, apiKey }, post, si
     {
       contents: [{ parts: [{ text: instructions(query, limit) }] }],
       tools: [{ google_search: {} }],
-      // Gemini 2.5 Flash defaults to dynamic thinking; thinking tokens count
-      // toward maxOutputTokens and can truncate a grounded JSON response.
-      // This deterministic extraction task does not require reasoning tokens.
+      // 2.5 and 3 use different thinking APIs. Sending thinkingBudget:0
+      // to Gemini 3 can cause rejected/empty responses. Gemini 3 Flash
+      // supports minimal thinking for bounded source extraction.
       generationConfig: {
         maxOutputTokens: 3200,
-        thinkingConfig: { thinkingBudget: 0 },
+        thinkingConfig: model === "gemini-3-flash-preview"
+          ? { thinkingLevel: "minimal" } : { thinkingBudget: 0 },
       },
     }, signal);
   const items = result?.candidates;
@@ -160,16 +161,17 @@ export async function searchWithGemini({ query, limit, model, apiKey }, post, si
   const thinkingTokens = usage(usageMetadata?.thoughtsTokenCount ?? 0);
   const totalTokens = usage(usageMetadata?.totalTokenCount);
   const cachedTokens = usage(usageMetadata?.cachedContentTokenCount ?? 0);
-  // Gemini 2.5 bills one grounded PROMPT, regardless of the number of
-  // webSearchQueries. Only a complete text-only token accounting can certify
-  // a lower-than-reserved settlement. Unexpected token classes fail closed.
+  // Gemini 2.5 bills one grounded PROMPT, but Gemini 3 bills per
+  // Google Search QUERY. Never certify the Gemini 2.5 pricing contract
+  // for Gemini 3; its paid dispatch must remain price-gated until the
+  // provider search-query exposure is bounded and reviewed.
   const billingComplete = inputTokens !== null && outputTokens !== null &&
     thinkingTokens === 0 && cachedTokens === 0 && totalTokens !== null &&
     totalTokens === inputTokens + outputTokens && inputTokens > 0;
   return envelope(extracted, "gemini", model, {
     inputTokens, outputTokens,
     searchRequests: metadata.webSearchQueries.length,
-    ...(billingComplete ? {
+    ...(model === "gemini-2.5-flash" && billingComplete ? {
       groundedPrompts: 1,
       billingEvidence: {
         source: "provider", complete: true, provider: "gemini",
