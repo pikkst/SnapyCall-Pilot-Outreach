@@ -117,6 +117,20 @@ paid Gemini calls, or authorizes outbound contact. Rollout still requires
 authenticated tenant and restart/no-replay E2E smoke and review of public
 page access policies before real inspection.
 
+### Grounding approval readiness (read-only)
+
+`GET /api/research-campaigns/:id/grounding` additionally reports the
+authoritative `sourceCount`, `canApprove` and a stable
+`approvalBlockReason`. The preflight checks the existing campaign status,
+feature gate, immutable approval state, bounded 1–250 persisted observations,
+previous attempts, and cited Google redirect URL shape. It does not call
+Gemini, perform a redirect HEAD, authorize inspection or create contacts.
+The browser uses this snapshot (not `uniqueSourcedCandidates` from discovery
+progress) for its explicit one-time request consent and displays a
+non-technical reason when approval is unavailable. The POST still repeats
+all checks under the membership/campaign lock, so a stale GET cannot authorize
+additional work.
+
 ### Trigger and constraints
 
 - `POST /api/research-campaigns/:id/email-triage/start` with `{maxPages,confirmPublicInspection:true}` is authenticated as the campaign owner and active workspace member, uses Origin protection + rate limiter, requires terminal discovery status `COMPLETED` or `PARTIAL`, and cannot re-authorize an already attempted campaign.
