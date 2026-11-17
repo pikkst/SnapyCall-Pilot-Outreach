@@ -2286,7 +2286,7 @@ function App() {
                             {" "}· Output tokens: {gemini3TestResult.diagnostic?.outputTokens ?? "unknown"}
                             {" "}· Thinking tokens: {gemini3TestResult.diagnostic?.thinkingTokens ?? "unknown"}</p>
                           <p>Published-rate estimate before free allowances:
-                            {" "}{gemini3TestResult.diagnostic?.estimateUsd === null
+                            {" "}{gemini3TestResult.diagnostic?.estimateUsd == null
                               ? "unknown" :
                               "$" + gemini3TestResult.diagnostic.estimateUsd.toFixed(4)}
                           </p>
