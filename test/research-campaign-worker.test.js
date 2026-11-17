@@ -11,7 +11,8 @@ const input = { campaignId, workspaceId, ownerId, encryptionKey: "test-only-encr
 
 function fakeDatabase({ queued = true, member = true,
   memberAtCommit = true, providerResult = "ok", failedCAS = false,
-  settlementUnavailable = false, certifiedUsage = null, approvedRun = false } = {}) {
+  settlementUnavailable = false, certifiedUsage = null, approvedRun = false,
+  failedZeroEvidenceCAS = false } = {}) {
   const events = [];
   let reservation;
   let membershipLocks = 0;
@@ -43,7 +44,8 @@ function fakeDatabase({ queued = true, member = true,
       update: async () => { events.push("task-claimed"); },
       updateMany: async ({ data }) => {
         events.push("task-" + data.status.toLowerCase());
-        return { count: failedCAS && data.status === "PAUSED" ? 0 : 1 };
+        return { count: (failedCAS && data.status === "PAUSED") ||
+          (failedZeroEvidenceCAS && data.status === "COMPLETED") ? 0 : 1 };
       },
     },
     researchCampaign: {
@@ -240,24 +242,54 @@ test("failed settlement never claims successful or safely paused execution", asy
   assert.equal(getReservation().status, "RESERVED");
 });
 
-test("paid but uncited Gemini response pauses, audits reason and never repeats", async () => {
+test("terminal uncited Gemini response completes as zero evidence, charges conservatively and never repeats", async () => {
   const { db, events, search, getReservation } =
     fakeDatabase({ providerResult: "no-grounding" });
   const output = await runOneCampaignTask(db, input, {
     search, decrypt: () => "test-only-provider-key", now: () => now,
   });
-  assert.deepEqual({
-    status: output.status, code: output.code,
-    diagnosticCode: output.diagnosticCode, attempted: output.attempted,
-  }, {
-    status: "PAUSED", code: "BILLING_UNCERTAIN",
-    diagnosticCode: "NO_VERIFIABLE_GROUNDING", attempted: true,
-  });
+  assert.equal(output.status, "COMPLETED");
+  assert.equal(output.code, "NO_VERIFIABLE_GROUNDING");
+  assert.equal(output.observed, 0);
+  assert.equal(output.uniqueAdded, 0);
+  assert.equal(output.attempted, true);
+  assert.equal(output.sendingEnabled, false);
   assert.equal(getReservation().chargedCents, 200);
+  assert.equal(getReservation().status, "SETTLED");
   assert.equal(events.filter(x => x === "provider-called").length, 1);
   assert.equal(events.filter(x => x === "diagnostic-audited").length, 1);
+  assert.ok(events.includes("task-completed"));
+  assert.ok(!events.includes("task-paused"));
+  assert.ok(!events.includes("evidence-saved"));
+  assert.ok(events.indexOf("money-settled") < events.indexOf("task-completed"));
+});
+
+test("uncited terminal response with failed evidence transaction remains PAUSED, not a false success", async () => {
+  const { db, events, search, getReservation } =
+    fakeDatabase({ providerResult: "no-grounding", failedZeroEvidenceCAS: true });
+  const output = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(output.status, "PAUSED");
+  assert.equal(output.code, "BILLING_UNCERTAIN");
+  assert.equal(output.diagnosticCode, "NO_VERIFIABLE_GROUNDING");
+  assert.equal(getReservation().chargedCents, 200);
   assert.ok(events.includes("task-paused"));
   assert.ok(!events.includes("evidence-saved"));
+  assert.equal(events.filter(x => x === "provider-called").length, 1);
+});
+
+test("uncited terminal response with unavailable spend settlement cannot be finalized", async () => {
+  const { db, events, search, getReservation } =
+    fakeDatabase({ providerResult: "no-grounding", settlementUnavailable: true });
+  const output = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(output.status, "RECONCILIATION_REQUIRED");
+  assert.equal(output.code, "RESEARCH_SPEND_RECONCILIATION_REQUIRED");
+  assert.equal(getReservation().status, "RESERVED");
+  assert.ok(events.includes("task-paused"));
+  assert.ok(!events.includes("task-completed"));
 });
 
 test("worker settles certified Gemini grounded-prompt price once, not full reserve", async () => {
