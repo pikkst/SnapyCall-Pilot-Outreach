@@ -52,6 +52,11 @@ test("task completion and evidence writing share a transaction and dedupe", asyn
     researchCampaign: { findFirst: async () => ({ targetCount: 100 }) },
     researchCampaignTask: {
       count: async input => input.where.status === "QUEUED" ? 1 : 0,
+      findUnique: async () => ({ taskIndex: 1 }),
+      findMany: async () => [
+        { taskIndex: 1, status: "COMPLETED", observedCount: 2 },
+        { taskIndex: 0, status: "COMPLETED", observedCount: 0 },
+      ],
       updateMany: async input => {
         calls.push(["fence", input.where.leaseToken, input.data.status]);
         return { count: 1 };
@@ -244,4 +249,95 @@ test("campaign progress reports malformed terminal output separately from missin
   assert.equal(result.uniqueSourcedCandidates, 0);
   assert.equal(result.tasks.paused, 0);
   assert.equal(result.contactVerification, "NOT_PERFORMED");
+});
+
+test("fenced third consecutive unusable result atomically stops new paid claims", async () => {
+  const updates = [];
+  const audit = [];
+  const tx = {
+    $queryRaw: async () => [{ id: "campaign-1" }],
+    researchCampaignTask: {
+      updateMany: async args => { updates.push(["task", args.data.status]); return { count: 1 }; },
+      findUnique: async () => ({ taskIndex: 2 }),
+      findMany: async args => {
+        assert.equal(args.where.taskIndex.lte, 2);
+        return [
+          { taskIndex: 2, status: "COMPLETED", observedCount: 0 },
+          { taskIndex: 1, status: "COMPLETED", observedCount: 0 },
+          { taskIndex: 0, status: "COMPLETED", observedCount: 0 },
+        ];
+      },
+      count: async () => 0,
+    },
+    researchCampaign: {
+      findFirst: async () => ({ targetCount: 100 }),
+      updateMany: async args => { updates.push(["campaign", args.data.status]); return { count: 1 }; },
+    },
+    researchCampaignObservation: { count: async () => 0 },
+    auditEvent: { create: async args => { audit.push(args.data); } },
+  };
+  const claim = { campaignId: "campaign-1", taskId: "task-3",
+    workspaceId: "workspace-1", ownerId: "owner-1",
+    leaseToken: "fenced-lease-3", limit: 10 };
+  const result = await commitCampaignResearchResult(
+    { $transaction: callback => callback(tx) }, claim,
+    { candidates: [], sources: [] }, new Date(),
+    { completionCode: "NO_USABLE_STRUCTURED_OUTPUT" });
+  assert.equal(result.campaignStatus, "QUALITY_STOP");
+  assert.deepEqual(updates, [["task", "COMPLETED"], ["campaign", "QUALITY_STOP"]]);
+  assert.equal(audit[0].metadata.qualityFailureStreak, 3);
+  assert.equal(audit[0].metadata.automaticProviderRetry, false);
+  assert.equal(result.observed, 0);
+  assert.equal(result.uniqueAdded, 0);
+});
+
+test("successful cited task resets sequence and permits following authorized work", async () => {
+  const updates = [];
+  const tx = {
+    $queryRaw: async () => [{ id: "campaign-1" }],
+    researchCampaignTask: {
+      updateMany: async () => ({ count: 1 }),
+      findUnique: async () => ({ taskIndex: 2 }),
+      findMany: async () => [
+        { taskIndex: 2, status: "COMPLETED", observedCount: 2 },
+        { taskIndex: 1, status: "COMPLETED", observedCount: 0 },
+        { taskIndex: 0, status: "COMPLETED", observedCount: 0 },
+      ],
+      count: async args => args.where.status === "QUEUED" ? 1 : 0,
+    },
+    researchCampaign: {
+      findFirst: async () => ({ targetCount: 100 }),
+      updateMany: async args => { updates.push(args); return { count: 1 }; },
+    },
+    researchCampaignObservation: {
+      createMany: async () => ({ count: 2 }),
+      count: async () => 2,
+    },
+  };
+  const result = await commitCampaignResearchResult(
+    { $transaction: callback => callback(tx) },
+    { campaignId: "campaign-1", taskId: "task-3", workspaceId: "workspace-1",
+      ownerId: "owner-1", leaseToken: "fenced-lease-3", limit: 10 },
+    preview);
+  assert.equal(result.observed, 2);
+  assert.equal(result.campaignStatus, undefined);
+  assert.deepEqual(updates, []);
+});
+
+test("quality STOP is distinguishable from billing reconciliation in progress", () => {
+  const task = i => ({ taskIndex: i, status: "COMPLETED",
+    observedCount: 0, resultLimit: 10,
+    lastErrorCode: "NO_USABLE_STRUCTURED_OUTPUT" });
+  const view = summarizeCampaignProgress({
+    id: "campaign-1", status: "QUALITY_STOP", targetCount: 100,
+    _count: { observations: 0 },
+    tasks: [task(0), task(1), task(2),
+      { taskIndex: 3, status: "QUEUED", observedCount: 0, resultLimit: 10 }],
+  });
+  assert.equal(view.operationalState, "QUALITY_STOP");
+  assert.equal(view.needsReconciliation, false);
+  assert.equal(view.qualityFailureStreak, 3);
+  assert.equal(view.qualityStop, true);
+  assert.equal(view.tasks.queued, 1);
+  assert.equal(view.contactVerification, "NOT_PERFORMED");
 });

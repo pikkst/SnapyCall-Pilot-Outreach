@@ -19,6 +19,12 @@ function mock({ unique = 100, target = 100, unsettled = 0, queued = 5,
     $queryRaw: async () => [{ id: claim.campaignId }],
     researchCampaignTask: {
       count: async ({ where }) => where.status === "QUEUED" ? queued : unsettled,
+      findUnique: async () => ({ taskIndex: 2 }),
+      findMany: async () => [
+        { taskIndex: 2, status: "COMPLETED", observedCount: 1 },
+        { taskIndex: 1, status: "COMPLETED", observedCount: 0 },
+        { taskIndex: 0, status: "COMPLETED", observedCount: 0 },
+      ],
       updateMany: async ({ data }) => {
         events.push("task-" + data.status);
         return { count: fence ? 1 : 0 };

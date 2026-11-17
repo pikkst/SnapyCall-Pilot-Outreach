@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { publicCitationUrl } from "./research-evidence.js";
 import { completeResearchTask } from "./research-campaign-leases.js";
+import { consecutiveQualityFailures, shouldStopForQuality } from "./research-quality-gate.js";
 
 const observationSchema = z.object({
   name: z.string().trim().min(2).max(160),
@@ -107,7 +108,25 @@ export async function commitCampaignResearchResult(db, claim, preview,
         status: { in: ["RUNNING", "PAUSED", "FAILED"] } },
     });
     let terminalStatus = null;
+    let qualityFailureStreak = 0;
     if (unsettled === 0) {
+      // Reuse persisted outcomes instead of a second counter. This query
+      // executes under the existing campaign row lock, after the fenced
+      // task completion, so another paid claim cannot race the STOP.
+      const currentTask = await tx.researchCampaignTask.findUnique({
+        where: { id: claim.taskId }, select: { taskIndex: true },
+      });
+      if (!currentTask || !Number.isInteger(currentTask.taskIndex)) {
+        throw new CampaignLeaseConflict();
+      }
+      const recentTasks = await tx.researchCampaignTask.findMany({
+        where: { campaignId: claim.campaignId,
+          taskIndex: { lte: currentTask.taskIndex } },
+        select: { taskIndex: true, status: true, observedCount: true },
+        orderBy: { taskIndex: "desc" },
+        take: 3,
+      });
+      qualityFailureStreak = consecutiveQualityFailures(recentTasks);
       const unique = await tx.researchCampaignObservation.count({
         where: { campaignId: claim.campaignId },
       });
@@ -118,6 +137,11 @@ export async function commitCampaignResearchResult(db, claim, preview,
           data: { status: "CANCELLED" },
         });
         terminalStatus = "COMPLETED";
+      } else if (shouldStopForQuality(recentTasks)) {
+        // Do not cancel queued work: preserve the original approved plan,
+        // evidence and cost ledger for review. The campaign status blocks
+        // all new paid claims and distinguishes quality STOP from billing.
+        terminalStatus = "QUALITY_STOP";
       } else {
         const queued = await tx.researchCampaignTask.count({
           where: { campaignId: claim.campaignId, status: "QUEUED" },
@@ -136,6 +160,9 @@ export async function commitCampaignResearchResult(db, claim, preview,
         actorId: claim.ownerId, action: "research.campaign.finalized",
         entityId: claim.campaignId, metadata: {
           workspaceId: claim.workspaceId, status: terminalStatus,
+          ...(terminalStatus === "QUALITY_STOP"
+            ? { qualityFailureStreak, reason: "THREE_CONSECUTIVE_ZERO_EVIDENCE_RESULTS",
+                automaticProviderRetry: false } : {}),
           contactVerification: "NOT_PERFORMED", sendingEnabled: false,
         },
       } });
@@ -173,6 +200,14 @@ export function deriveCampaignOperationalState(campaign, now = new Date()) {
   const targetReached = campaign._count.observations >= campaign.targetCount;
   // A persisted cancelled campaign is final even if old task leases
   // still need monetary reconciliation; surface both independently.
+  if (campaign.status === "QUALITY_STOP") {
+    return { operationalState: unresolved.length || running.length
+      ? "RECOVERY_REQUIRED" : "QUALITY_STOP",
+      action: unresolved.length || running.length ? "RECONCILE_SPEND"
+        : "REVIEW_RESEARCH_QUALITY",
+      expiredLeases: expired.length,
+      needsReconciliation: !!(unresolved.length || running.length) };
+  }
   if (campaign.status === "CANCELLED") {
     return { operationalState: "CANCELLED",
       action: expired.length || unresolved.length ? "RECONCILE_SPEND" : "NONE",
@@ -247,6 +282,9 @@ export function summarizeCampaignProgress(campaign) {
       task.lastErrorCode === "NO_VERIFIABLE_GROUNDING").length,
     invalidOutputTasks: campaign.tasks.filter(task => task.status === "COMPLETED" &&
       task.lastErrorCode === "NO_USABLE_STRUCTURED_OUTPUT").length,
+    qualityFailureStreak: consecutiveQualityFailures(
+      campaign.tasks.filter(task => Number.isInteger(task.taskIndex))),
+    qualityStop: campaign.status === "QUALITY_STOP",
     pausedTaskReview: campaign.tasks.filter(task =>
       task.status === "PAUSED" && Number.isInteger(task.taskIndex) &&
       task.lastErrorCode === "BILLING_UNCERTAIN").map(task => ({
