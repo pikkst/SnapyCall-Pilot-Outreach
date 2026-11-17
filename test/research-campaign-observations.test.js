@@ -225,3 +225,23 @@ test("persisted PAUSED campaign cannot be offered as READY", () => {
   assert.equal(view.operationalState, "PAUSED_REVIEW");
   assert.equal(view.needsReconciliation, true);
 });
+
+test("campaign progress reports malformed terminal output separately from missing grounding", () => {
+  const result = summarizeCampaignProgress({
+    id: "campaign-1", status: "RUNNING", targetCount: 100,
+    _count: { observations: 0 },
+    tasks: [
+      { status: "COMPLETED", observedCount: 0, resultLimit: 10,
+        lastErrorCode: "NO_VERIFIABLE_GROUNDING" },
+      { status: "COMPLETED", observedCount: 0, resultLimit: 10,
+        lastErrorCode: "NO_USABLE_STRUCTURED_OUTPUT" },
+      { status: "QUEUED", observedCount: 0, resultLimit: 10,
+        lastErrorCode: null },
+    ],
+  });
+  assert.equal(result.noGroundingTasks, 1);
+  assert.equal(result.invalidOutputTasks, 1);
+  assert.equal(result.uniqueSourcedCandidates, 0);
+  assert.equal(result.tasks.paused, 0);
+  assert.equal(result.contactVerification, "NOT_PERFORMED");
+});
