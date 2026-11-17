@@ -61,3 +61,13 @@ test("switching modes retains search criteria without creating or paying for wor
   assert.ok(selector);
   assert.doesNotMatch(selector, /executeManualCampaignTask\(|runResearch\(|createManualTestCampaign\(/);
 });
+
+test("settings prioritize AI adapter and budget before optional Gmail", () => {
+  const ai = ui.indexOf('aria-label="Personal AI configuration"');
+  const limits = ui.indexOf('aria-label="Personal AI research limits"');
+  const budget = ui.indexOf('aria-label="Personal AI monthly budget"');
+  const gmail = ui.indexOf('aria-label="Personal Gmail sending authorization"');
+  assert.ok(ai >= 0 && ai < limits && limits < budget && budget < gmail);
+  assert.match(ui, /Google Forms and Sheets consent is read-only/);
+  assert.match(ui, /Sending remains disabled pending campaign approval/);
+});
