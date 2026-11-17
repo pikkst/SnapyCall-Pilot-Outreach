@@ -12,7 +12,38 @@ async function get(path) {
   return response;
 }
 
-const health = await get("/api/health");
+// Render Free may sleep between CI runs. Only the initial health request
+// tolerates a bounded cold start; every HTTP status/assertion and subsequent
+// auth/readiness check retains its strict original behavior.
+async function getHealthAfterColdStart({
+  deadlineMs = 90_000, retryDelayMs = 2000,
+  request = get, now = () => Date.now(),
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+} = {}) {
+  const deadline = now() + deadlineMs;
+  let attempts = 0;
+  while (true) {
+    attempts++;
+    try {
+      const response = await request("/api/health");
+      if (attempts > 1) console.log("Staging woke after " + attempts + " health attempts");
+      return response;
+    } catch (error) {
+      // Do not retry server-returned HTTP failures, malformed responses or
+      // authorization failures. Retry only transient network/cold-start errors.
+      if (error?.name !== "TimeoutError" &&
+          !(error instanceof TypeError && error.message === "fetch failed")) throw error;
+      const remaining = deadline - now();
+      if (remaining <= retryDelayMs) {
+        throw new Error("STAGING_COLD_START_UNAVAILABLE after " +
+          attempts + " health attempts", { cause: error });
+      }
+      await sleep(Math.min(retryDelayMs, remaining));
+    }
+  }
+}
+
+const health = await getHealthAfterColdStart();
 assert.equal(health.status, 200);
 assert.deepEqual(await health.json(), { status: "ok" });
 console.log("PASS /api/health");
