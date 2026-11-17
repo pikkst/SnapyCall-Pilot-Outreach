@@ -792,6 +792,35 @@ function App() {
     }
   }
 
+  async function stopCampaignAutonomousRun(workspaceId: string, campaignId: string) {
+    if (campaignRunApprovalBusy || activeWorkspaceId !== workspaceId ||
+        campaignProgressId !== campaignId ||
+        !["APPROVED", "RUNNING"].includes(campaignRunApproval?.run?.status ?? "")) return;
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    setCampaignRunApprovalBusy(true);
+    try {
+      const result = await api<{ run: ApprovedCampaignRun }>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/approved-run/stop?workspaceId=" + encodeURIComponent(workspaceId), {
+          method: "POST", body: JSON.stringify({ confirmStop: true }),
+        });
+      if (generation !== workspaceRequest.current ||
+          request !== campaignProgressRequest.current) return;
+      setCampaignRunApproval(current => current
+        ? { ...current, run: result.run } : null);
+      setCampaignRunApprovalNotice("Run stopped. An already dispatched provider call may still be billed; it will not be replayed.");
+    } catch (error) {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setCampaignRunApprovalNotice(error instanceof Error
+          ? error.message : "Run could not be stopped. Check its status.");
+      }
+    } finally {
+      if (generation === workspaceRequest.current) setCampaignRunApprovalBusy(false);
+    }
+  }
+
   async function approveCampaignAutonomousRun(workspaceId: string, campaignId: string) {
     const price = campaignRunApproval?.priceEnvelope;
     if (!price || !campaignRunApproval?.autonomousRunEnabled ||
@@ -1966,6 +1995,12 @@ function App() {
                             {" / $"}{(campaignRunApproval.run.maxWorstCaseCents / 100).toFixed(2)}</p>
                           {campaignRunApproval.run.lastCode &&
                             <p role="status">Attention: {campaignRunApproval.run.lastCode.replaceAll("_", " ")}</p>}
+                          {["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
+                            <button type="button" className="secondary"
+                              disabled={campaignRunApprovalBusy}
+                              onClick={() => void stopCampaignAutonomousRun(p.id, campaignProgress.id)}>
+                              {campaignRunApprovalBusy ? "Stopping…" : "Stop future research requests"}
+                            </button>}
                           <p className="muted">This is a conservative application budget,
                             not a verified provider invoice. A PAUSED run does not
                             automatically replay uncertain paid calls.</p>
