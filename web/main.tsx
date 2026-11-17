@@ -14,7 +14,7 @@ type CampaignProgress = {
   id: string; status: string; operationalState: string; action: string;
   targetCount: number; uniqueSourcedCandidates: number;
   rawCandidateObservations: number; duplicateObservations: number;
-  noGroundingTasks: number; invalidOutputTasks: number;
+  noGroundingTasks: number; invalidOutputTasks: number; qualityFailureStreak: number; qualityStop: boolean;
   plannedTasks: number; expiredLeases: number; needsReconciliation: boolean;
   pausedTaskReview: Array<{taskIndex: number;lastErrorCode: "BILLING_UNCERTAIN"}>;
   tasks: { queued: number; running: number; completed: number;
@@ -751,6 +751,8 @@ function App() {
           ? "100 cited candidates reached."
           : result.operationalState === "PARTIAL"
           ? "All planned tasks finished below target. Review results."
+          : result.operationalState === "QUALITY_STOP"
+          ? "Quality gate stopped research after three consecutive unusable responses. No more paid requests are authorized for this campaign."
           : result.operationalState === "PAUSED_REVIEW"
           ? "Provider response or billing needs manual review. No automatic retry."
           : "Campaign or budget requires review before continuing.";
@@ -2437,6 +2439,19 @@ function App() {
                           value={Math.min(campaignProgress.uniqueSourcedCandidates,
                             campaignProgress.targetCount)}/>
                         <p>Operational status: <strong>{campaignProgress.operationalState}</strong></p>
+                        <p role="status" className="muted">
+                          Response quality checks: {Math.min(3, campaignProgress.qualityFailureStreak)} / 3
+                          consecutive zero-evidence completed tasks.
+                          A valid cited result resets this counter.
+                        </p>
+                        {campaignProgress.operationalState === "QUALITY_STOP" &&
+                          <p role="alert" className="campaign-blocker">
+                            Research stopped after three consecutive responses
+                            with no verifiable candidates. No more paid AI
+                            calls will start for this campaign. Review the
+                            criteria and source quality before planning a new
+                            campaign with separate approval.
+                          </p>}
                         {campaignProgress.operationalState === "PAUSED_REVIEW" &&
                           <p role="alert" className="campaign-blocker">
                             Research is paused. A possibly billable task needs
