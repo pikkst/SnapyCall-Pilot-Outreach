@@ -52,6 +52,12 @@ export async function approveGroundingResolution(db, {
       return { status: 409, code: "GROUNDING_SOURCE_CAP_EXCEEDED",
         availableObservations: observations.length };
     }
+    // Freeze the exact source count at approval. No newly inserted
+    // observation may silently join an already authorized batch.
+    if (observations.length !== maxSources) {
+      return { status: 409, code: "GROUNDING_APPROVAL_COUNT_MISMATCH",
+        availableObservations: observations.length };
+    }
     if (observations.some(item => item.groundingStatus !== "UNCHECKED" ||
         item.groundingLeaseToken != null)) {
       return { status: 409, code: "GROUNDING_ALREADY_ATTEMPTED" };
@@ -104,6 +110,15 @@ export async function claimGroundingObservation(db, scope,
         where: { id: scope.campaignId }, data: { groundingRunStatus: "PAUSED" },
       });
       return { status: "EXPIRED" };
+    }
+    const sourceCount = await tx.researchCampaignObservation.count({
+      where: { campaignId: scope.campaignId },
+    });
+    if (sourceCount !== campaign.groundingRunMaxSources) {
+      await tx.researchCampaign.update({
+        where: { id: scope.campaignId }, data: { groundingRunStatus: "PAUSED" },
+      });
+      return { status: "SOURCE_SNAPSHOT_CHANGED" };
     }
     const inFlight = await tx.researchCampaignObservation.findFirst({
       where: { campaignId: scope.campaignId, groundingLeaseToken: { not: null } },
