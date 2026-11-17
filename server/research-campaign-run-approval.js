@@ -167,7 +167,8 @@ export async function finishApprovedRunTask(db, {
       return { code: "RUN_NOT_ACTIVE" };
     }
     const terminal = ["COMPLETED", "PARTIAL", "CANCELLED"].includes(campaigns[0].status);
-    const status = result?.status === "COMPLETED" && terminal ? "COMPLETED" :
+    const status = ["COMPLETED", "NO_READY_TASK"].includes(result?.status) &&
+      terminal ? "COMPLETED" :
       result?.status === "COMPLETED" && run.startedTasks < run.maxTasks &&
       run.committedWorstCaseCents + run.worstCasePerCallCents <=
         run.maxWorstCaseCents ? "RUNNING" : "PAUSED";
@@ -179,5 +180,20 @@ export async function finishApprovedRunTask(db, {
       where: { id: run.id }, data: { status, lastCode: code },
     });
     return { code: status, lastCode: code };
+  });
+}
+
+// Catch paths must preserve the no-replay invariant even when the provider
+// may have billed and the transport outcome is unavailable.
+export async function pauseApprovedRun(db, {
+  campaignId, workspaceId, ownerId, code,
+}) {
+  const allow = new Set(["RUN_PREFLIGHT_BLOCKED", "RUN_EXECUTION_UNCERTAIN",
+    "RUN_NO_READY_TASK", "RUN_PRICE_OR_MODEL_CHANGED"]);
+  const lastCode = allow.has(code) ? code : "RUN_EXECUTION_UNCERTAIN";
+  await db.researchCampaignRun.updateMany({
+    where: { campaignId, workspaceId, ownerId,
+      status: { in: ["APPROVED", "RUNNING"] } },
+    data: { status: "PAUSED", lastCode },
   });
 }
