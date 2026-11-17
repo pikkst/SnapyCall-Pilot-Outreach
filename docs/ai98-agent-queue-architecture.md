@@ -150,6 +150,55 @@ Google model and tariff references:
 - https://ai.google.dev/gemini-api/docs/google-search
 - https://ai.google.dev/gemini-api/docs/thinking
 
+## Gemini 3 bounded-retrieval architecture — required before paid enablement
+
+The existing `gemini-3-flash-preview` Google Search tool can perform an
+unbounded, provider-decided number of billable web-search queries within a
+single model invocation. The reported `groundingMetadata.webSearchQueries`
+is **post-call** telemetry, not a pre-dispatch guard. Capping output tokens,
+asking the prompt to search at most N times, or using an optional Google AI
+Studio project spend cap does **not** enforce per-request query cost. Google
+documents possible ~10 minute latency and project cap overages.
+
+**Production design (not implemented):**
+
+1. Use an independently priced, capped public search connector or sanctioned
+   source feed to fetch at most N evidence records per task; attach immutable
+   `sourceProvider`, `sourceId`, canonical URL, title, timestamp, and
+   immutable evidence digest. Each provider adapter must enforce **its own**
+   documented maximum query count *before request dispatch*, not merely
+   inspect provider response counts afterward.
+2. Reuse `ResearchCampaignTask` and `ResearchRunLease`: under the same
+   owner, campaign, workspace and budget locks, atomically reserve a known
+   worst-case spend ceiling for the bounded retrieval and the downstream
+   no-tools Gemini text extraction. No separate unlocked parallel queue.
+3. Run `gemini-3-flash-preview` **without** `google_search`, using only
+   the retrieved, bounded text excerpts as untrusted task input. Preflight a
+   model-specific text-only tariff and both input and output token ceilings.
+   Do not call the model again to repair missing provenance or malformed
+   output unless separately authorized as a new, uniquely priced task.
+4. The LLM may nominate names, domains and categories, but **cannot**
+   manufacture citation provenance. Accept candidate sources only where
+   their IDs/URLs match the immutable retrieval manifest and independently
+   verify a named person. Unresolved URLs, unknown titles, generic company
+   contacts and source-less model suggestions remain review-only or rejected.
+5. Persist the receipt, token usage, provider cost estimate, evidence digest
+   and acceptance/rejection outcome on the existing campaign/observation
+   contract; settle conservatively. Preserve no-replay and quarantine for any
+   uncertain billable operation. Extend existing QUALITY_STOP logic to
+   source-quality yield before authorizing further discovery batches.
+6. Before any release, prove multi-tab/multi-workspace concurrency,
+   reservation idempotency, source/owner isolation, false-URL rejection,
+   source freshness, deterministic digest repeatability, retry safety,
+   spend reconciliation and authenticated partner UI.
+
+Until all boundaries are verified and a tariff approved, `GET
+/api/research-budget` reports `MODEL_PRICING_UNAVAILABLE` for the exact
+Gemini 3 model. The owner UI makes that blocker explicit and preserves the
+ability to choose an already approved model. **Do not enable Gemini 3
+paid discovery by increasing the generic budget or using a loose
+post-hoc Google query count.**
+
 ## Target-100 strategy
 
 Do not generate 100 nearly identical prompts at once. Start with a bounded
