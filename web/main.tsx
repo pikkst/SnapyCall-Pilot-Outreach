@@ -40,6 +40,17 @@ type ManualCampaignSource = {
 type CampaignSourcesResponse = {
   sources: ManualCampaignSource[]; inspected: false; providerCallsAuthorized: false;
 };
+type ApprovedCampaignRun = {
+  id: string; status: string; maxTasks: number; startedTasks: number;
+  maxWorstCaseCents: number; committedWorstCaseCents: number;
+  lastCode: string | null; sendingEnabled: false;
+};
+type CampaignRunApprovalState = {
+  run: ApprovedCampaignRun | null; autonomousRunEnabled: boolean;
+  priceEnvelope: null | { provider: string; model: string;
+    worstCasePerCallCents: number; priceVersion: string };
+  sendingEnabled: false;
+};
 type PartnerTab = "dashboard" | "candidates" | "discovery" | "drafts" | "profile" | "settings";
 type PartnerSession = { authenticated: boolean; conflict?: boolean; userId?: string; displayName?: string | null; partners?: Array<{ id: string; name: string; role: string }> };
 type GoogleConnection = { partnerId: string; scope: string; updatedAt: string };
@@ -245,6 +256,13 @@ function App() {
   const campaignCreateIdempotency = useRef<string | null>(null);
   const [campaignProgressId, setCampaignProgressId] = useState<string | null>(null);
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress | null>(null);
+  const [campaignRunApproval, setCampaignRunApproval] =
+    useState<CampaignRunApprovalState | null>(null);
+  const [campaignRunApprovalBusy, setCampaignRunApprovalBusy] = useState(false);
+  const [campaignRunApprovalNotice, setCampaignRunApprovalNotice] = useState("");
+  const [campaignMaxTasks, setCampaignMaxTasks] = useState(10);
+  const [campaignNoReplayConfirmed, setCampaignNoReplayConfirmed] = useState(false);
+
   const [campaignProgressLastSeen, setCampaignProgressLastSeen] = useState<number | null>(null);
   const [campaignProgressLiveWarning, setCampaignProgressLiveWarning] = useState(false);
   const [manualSourceDraft, setManualSourceDraft] = useState("");
@@ -448,6 +466,7 @@ function App() {
           setCampaignProgress(progress);
           setCampaignProgressLastSeen(Date.now());
           setCampaignProgressLiveWarning(false);
+          void loadCampaignRunApproval(activeWorkspaceId, campaignProgressId);
         }
       } catch {
         if (!disposed && generation === workspaceRequest.current &&
@@ -754,6 +773,65 @@ function App() {
     }
   }
 
+  async function loadCampaignRunApproval(workspaceId: string, campaignId: string) {
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    try {
+      const result = await api<CampaignRunApprovalState>("/research-campaigns/" +
+        encodeURIComponent(campaignId) + "/approved-run?workspaceId=" +
+        encodeURIComponent(workspaceId));
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setCampaignRunApproval(result);
+      }
+    } catch {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setCampaignRunApproval(null);
+      }
+    }
+  }
+
+  async function approveCampaignAutonomousRun(workspaceId: string, campaignId: string) {
+    const price = campaignRunApproval?.priceEnvelope;
+    if (!price || !campaignRunApproval?.autonomousRunEnabled ||
+        !campaignNoReplayConfirmed || campaignRunApprovalBusy ||
+        activeWorkspaceId !== workspaceId || campaignProgressId !== campaignId) return;
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    setCampaignRunApprovalBusy(true);
+    setCampaignRunApprovalNotice("");
+    try {
+      const result = await api<{ run: ApprovedCampaignRun }>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/approve-run?workspaceId=" + encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify({
+            maxTasks: campaignMaxTasks,
+            maxWorstCaseCents: campaignMaxTasks * price.worstCasePerCallCents,
+            confirmConservativeBudget: true,
+            confirmNoAutomaticRetry: true,
+          }),
+        });
+      if (generation !== workspaceRequest.current ||
+          request !== campaignProgressRequest.current) return;
+      setCampaignRunApproval(current => current
+        ? { ...current, run: result.run } : null);
+      setCampaignRunApprovalNotice("Campaign execution approved. The server " +
+        "will run within your saved ceiling while the worker is available. " +
+        "A provider/billing uncertainty stops the run without retry.");
+      setCampaignNoReplayConfirmed(false);
+    } catch (error) {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setCampaignRunApprovalNotice(error instanceof Error
+          ? error.message : "Campaign approval failed.");
+      }
+    } finally {
+      if (generation === workspaceRequest.current) setCampaignRunApprovalBusy(false);
+    }
+  }
+
   async function openCampaignProgress(workspaceId: string, campaignId: string) {
     if (activeWorkspaceId !== workspaceId) return;
     // Acknowledgement is task/snapshot-specific, never sticky across
@@ -778,6 +856,11 @@ function App() {
     setManualSourceNotice("");
     setCampaignProgressLastSeen(null);
     setCampaignProgressLiveWarning(false);
+    setCampaignRunApproval(null);
+    setCampaignRunApprovalNotice("");
+    setCampaignRunApprovalBusy(false);
+    setCampaignNoReplayConfirmed(false);
+    setCampaignMaxTasks(10);
     setCampaignProgressId(campaignId);
     setCampaignProgress(null);
     setCampaignProgressStatus("loading");
@@ -792,6 +875,7 @@ function App() {
       setCampaignProgressLastSeen(Date.now());
       setCampaignProgressLiveWarning(false);
       setCampaignProgressStatus("ready");
+      void loadCampaignRunApproval(workspaceId, campaignId);
     } catch {
       if (workspaceRequest.current !== workspaceGeneration ||
           campaignProgressRequest.current !== request) return;
@@ -1871,6 +1955,64 @@ function App() {
                               </li>)}
                           </ol>
                         </section>
+                        {campaignRunApproval?.run && <section
+                          className="campaign-approved-run" aria-label="Approved campaign automation">
+                          <strong>Approved single-run budget</strong>
+                          <p>Status: <strong>{campaignRunApproval.run.status}</strong>
+                            {" · "}{campaignRunApproval.run.startedTasks} /
+                            {campaignRunApproval.run.maxTasks} requests started
+                            {" · "}Conservative ceiling committed:
+                            {" $"}{(campaignRunApproval.run.committedWorstCaseCents / 100).toFixed(2)}
+                            {" / $"}{(campaignRunApproval.run.maxWorstCaseCents / 100).toFixed(2)}</p>
+                          {campaignRunApproval.run.lastCode &&
+                            <p role="status">Attention: {campaignRunApproval.run.lastCode.replaceAll("_", " ")}</p>}
+                          <p className="muted">This is a conservative application budget,
+                            not a verified provider invoice. A PAUSED run does not
+                            automatically replay uncertain paid calls.</p>
+                        </section>}
+                        {campaignRunApproval?.autonomousRunEnabled &&
+                          campaignRunApproval.priceEnvelope &&
+                          !campaignRunApproval.run &&
+                          campaignProgress.tasks.completed === 0 &&
+                          campaignProgress.tasks.running === 0 &&
+                          campaignProgress.uniqueSourcedCandidates === 0 &&
+                          <section className="campaign-approved-run"
+                            aria-label="Approve a one-launch campaign">
+                            <strong>Start one server-managed campaign run</strong>
+                            <p className="muted">Provider: {campaignRunApproval.priceEnvelope.provider}
+                              {" · "}{campaignRunApproval.priceEnvelope.model}.
+                              The worst-case reserve is
+                              {" $"}{(campaignRunApproval.priceEnvelope.worstCasePerCallCents / 100).toFixed(2)}
+                              per attempt. The worker stops at your approved limit,
+                              any uncertain billing response, or an expired lease.
+                              This does not search emails or send outreach.</p>
+                            <label>Maximum paid research requests
+                              <input type="number" min={1} max={24} step={1}
+                                value={campaignMaxTasks}
+                                disabled={campaignRunApprovalBusy}
+                                onChange={event => setCampaignMaxTasks(
+                                  Math.max(1, Math.min(24, Math.trunc(
+                                    Number(event.target.value) || 1))))}/>
+                            </label>
+                            <p>Maximum conservative approved spend:
+                              <strong>{" $"}{(campaignMaxTasks *
+                                campaignRunApproval.priceEnvelope.worstCasePerCallCents / 100).toFixed(2)}</strong></p>
+                            <label className="campaign-contact-confirm">
+                              <input type="checkbox" checked={campaignNoReplayConfirmed}
+                                onChange={event => setCampaignNoReplayConfirmed(event.target.checked)}/>
+                              I approve this maximum reserve. I understand that uncertain
+                              provider charges may consume the full reserve and will not
+                              be automatically retried or refunded.
+                            </label>
+                            <button type="button"
+                              disabled={!campaignNoReplayConfirmed || campaignRunApprovalBusy}
+                              onClick={() => void approveCampaignAutonomousRun(
+                                p.id, campaignProgress.id)}>
+                              {campaignRunApprovalBusy ? "Saving approval…" : "Approve single run"}
+                            </button>
+                          </section>}
+                        {campaignRunApprovalNotice && <p role="status">
+                          {campaignRunApprovalNotice}</p>}
                         <p className="muted">Tasks: {campaignProgress.tasks.completed} complete ·
                           {campaignProgress.tasks.queued} queued ·
                           {campaignProgress.tasks.running} running ·
@@ -2138,6 +2280,10 @@ function App() {
                           setManualSourceNotice("");
                           setCampaignProgressLastSeen(null);
                           setCampaignProgressLiveWarning(false);
+                          setCampaignRunApproval(null);
+                          setCampaignRunApprovalNotice("");
+                          setCampaignRunApprovalBusy(false);
+                          setCampaignNoReplayConfirmed(false);
                           setCampaignProgressId(null);
                           setCampaignProgress(null);
                           setCampaignProgressStatus("idle");
