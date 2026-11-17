@@ -15,6 +15,7 @@ CREATE TABLE "ResearchCampaignRun" (
   "status" TEXT NOT NULL DEFAULT 'APPROVED',
   "lastCode" TEXT,
   "approvedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "expiresAt" TIMESTAMP(3) NOT NULL,
   "updatedAt" TIMESTAMP(3) NOT NULL,
   CONSTRAINT "ResearchCampaignRun_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "ResearchCampaignRun_maxTasks_check" CHECK ("maxTasks" BETWEEN 1 AND 24),
