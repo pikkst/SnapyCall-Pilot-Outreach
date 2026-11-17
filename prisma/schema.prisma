@@ -276,6 +276,7 @@ model ResearchCampaign {
   tasks ResearchCampaignTask[]
   observations ResearchCampaignObservation[]
   manualSources ResearchCampaignSource[]
+  approvedRun ResearchCampaignRun?
   @@unique([workspaceId, ownerId, idempotencyKey])
   @@index([workspaceId, createdAt])
   @@index([status, createdAt])
@@ -407,4 +408,28 @@ model ResearchCampaignSource {
   createdAt DateTime @default(now())
   @@unique([campaignId, normalizedUrlHash])
   @@index([campaignId, status, createdAt])
+}
+
+model ResearchCampaignRun {
+  id String @id @default(cuid())
+  campaignId String @unique
+  campaign ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  workspaceId String
+  ownerId String
+  // Immutable approval limits. No browser-provided provider pricing.
+  provider String
+  model String
+  priceVersion String
+  worstCasePerCallCents Int
+  maxTasks Int
+  maxWorstCaseCents Int
+  // Monotonic conservative commitments: never decrease on provider error.
+  startedTasks Int @default(0)
+  committedWorstCaseCents Int @default(0)
+  status String @default("APPROVED")
+  lastCode String?
+  approvedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([status, approvedAt])
+  @@index([workspaceId, ownerId])
 }
