@@ -2595,6 +2595,13 @@ function App() {
                           <p>Approval expires:
                             {" "}{new Date(campaignRunApproval.run.expiresAt).toLocaleString()}.
                             Later calls are forbidden after this time.</p>
+                          {campaignRunApproval.run.lastCode === "WAITING_RATE_LIMIT" &&
+                            <p role="status" className="muted">
+                              AI discovery is safely paced across this workspace.
+                              The existing approval remains active; no provider
+                              request, new budget reservation or retry was issued
+                              during this wait. The server checks again automatically.
+                            </p>}
                           {campaignRunApproval.run.lastCode === "WAITING_RETRY" &&
                             <p role="status" className="muted">
                               Waiting for the next eligible task. The existing
@@ -2602,7 +2609,8 @@ function App() {
                               during this wait. Progress updates automatically.
                             </p>}
                           {campaignRunApproval.run.lastCode &&
-                            campaignRunApproval.run.lastCode !== "WAITING_RETRY" &&
+                            !["WAITING_RETRY", "WAITING_RATE_LIMIT"].includes(
+                              campaignRunApproval.run.lastCode) &&
                             <p role="alert">Attention: {campaignRunApproval.run.lastCode.replaceAll("_", " ")}</p>}
                           {["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
                             <button type="button" className="secondary"
