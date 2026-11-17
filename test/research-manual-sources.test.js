@@ -36,8 +36,9 @@ test("transaction serializes owner-scoped source inserts and never calls a provi
       createMany: async ({ data, skipDuplicates }) => {
         actions.push("insert");
         assert.equal(skipDuplicates, true);
-        assert.deepEqual(data, [{ campaignId: "campaign",
-          normalizedUrl: "https://example.org/ada" }]);
+        assert.deepEqual(data.map(({ normalizedUrlHash: _hash, ...rest }) => rest),
+          [{ campaignId: "campaign", normalizedUrl: "https://example.org/ada" }]);
+        assert.match(data[0].normalizedUrlHash, /^[a-f0-9]{64}$/);
         return { count: 1 };
       },
     },
