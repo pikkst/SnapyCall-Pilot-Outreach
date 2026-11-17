@@ -94,7 +94,12 @@ test("terminal no-grounding completion is fenced and stores a zero-evidence diag
   assert.equal(input.data.status, "COMPLETED");
   assert.equal(input.data.lastErrorCode, "NO_VERIFIABLE_GROUNDING");
   assert.equal(input.data.observedCount, 0);
+  assert.equal(await completeResearchTask(tx, claim, {
+    observedCount: 0, completionCode: "NO_USABLE_STRUCTURED_OUTPUT", now,
+  }), true);
+  assert.equal(input.data.lastErrorCode, "NO_USABLE_STRUCTURED_OUTPUT");
   for (const invalid of [
+    { observedCount: 1, completionCode: "NO_USABLE_STRUCTURED_OUTPUT" },
     { observedCount: 1, completionCode: "NO_VERIFIABLE_GROUNDING" },
     { observedCount: 0, completionCode: "BILLING_UNCERTAIN" },
   ]) {

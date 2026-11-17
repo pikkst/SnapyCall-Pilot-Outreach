@@ -14,7 +14,7 @@ type CampaignProgress = {
   id: string; status: string; operationalState: string; action: string;
   targetCount: number; uniqueSourcedCandidates: number;
   rawCandidateObservations: number; duplicateObservations: number;
-  noGroundingTasks: number;
+  noGroundingTasks: number; invalidOutputTasks: number;
   plannedTasks: number; expiredLeases: number; needsReconciliation: boolean;
   pausedTaskReview: Array<{taskIndex: number;lastErrorCode: "BILLING_UNCERTAIN"}>;
   tasks: { queued: number; running: number; completed: number;
@@ -2442,6 +2442,13 @@ function App() {
                             Research is paused. A possibly billable task needs
                             manual reconciliation. The remaining queued tasks
                             are NOT running. Do not reattempt this paid request.
+                          </p>}
+                        {campaignProgress.invalidOutputTasks > 0 &&
+                          <p role="status" className="muted">
+                            {campaignProgress.invalidOutputTasks} completed AI search task(s)
+                            returned unusable structured candidate data.
+                            Those paid attempts were conservatively accounted for,
+                            not retried, and accepted no unverified people or emails.
                           </p>}
                         {campaignProgress.uniqueSourcedCandidates === 0 &&
                           campaignProgress.noGroundingTasks > 0 &&

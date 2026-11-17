@@ -120,7 +120,9 @@ function fakeDatabase({ queued = true, member = true,
       assert.equal(data.action, "research.campaign.evidence.rejected");
       assert.deepEqual(data.metadata, {
         workspaceId, campaignId, phase: "EVIDENCE_VALIDATION",
-        code: "NO_VERIFIABLE_GROUNDING", provider: "gemini",
+        code: providerResult === "invalid-output" ?
+          "NO_USABLE_STRUCTURED_OUTPUT" : "NO_VERIFIABLE_GROUNDING",
+        provider: "gemini",
         billedCallPossible: true, automaticRetryAllowed: false,
       });
     } },
@@ -136,6 +138,11 @@ function fakeDatabase({ queued = true, member = true,
     if (providerResult === "no-grounding") {
       throw Object.assign(new Error("Sanitized no-grounding failure"), {
         code: "NO_VERIFIABLE_GROUNDING", phase: "EVIDENCE_VALIDATION",
+      });
+    }
+    if (providerResult === "invalid-output") {
+      throw Object.assign(new Error("Sanitized unusable candidate output"), {
+        code: "NO_USABLE_STRUCTURED_OUTPUT", phase: "EVIDENCE_VALIDATION",
       });
     }
     const url = "https://example.org/people/ada";
@@ -372,4 +379,49 @@ test("authorized executor consumes run allowance before a provider call", async 
     events.indexOf("money-reserved"));
   assert.ok(events.indexOf("money-reserved") <
     events.indexOf("provider-called"));
+});
+
+test("trusted STOP-terminal malformed candidate output is conservatively settled and completed once", async () => {
+  const { db, events, search, getReservation } =
+    fakeDatabase({ providerResult: "invalid-output" });
+  const result = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(result.code, "NO_USABLE_STRUCTURED_OUTPUT");
+  assert.equal(result.observed, 0);
+  assert.equal(result.uniqueAdded, 0);
+  assert.equal(result.sendingEnabled, false);
+  assert.equal(getReservation().chargedCents, 200);
+  assert.equal(getReservation().status, "SETTLED");
+  assert.equal(events.filter(e => e === "provider-called").length, 1);
+  assert.equal(events.filter(e => e === "diagnostic-audited").length, 1);
+  assert.ok(events.includes("task-completed"));
+  assert.ok(!events.includes("task-paused"));
+  assert.ok(!events.includes("evidence-saved"));
+});
+
+test("unusable terminal output cannot claim completion on stale lease", async () => {
+  const { db, search, events, getReservation } =
+    fakeDatabase({ providerResult: "invalid-output", failedZeroEvidenceCAS: true });
+  const result = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(result.status, "PAUSED");
+  assert.equal(result.code, "BILLING_UNCERTAIN");
+  assert.equal(result.diagnosticCode, "NO_USABLE_STRUCTURED_OUTPUT");
+  assert.equal(getReservation().chargedCents, 200);
+  assert.ok(events.includes("task-paused"));
+});
+
+test("unusable terminal output does not finalize without completed spend settlement", async () => {
+  const { db, search, events, getReservation } =
+    fakeDatabase({ providerResult: "invalid-output", settlementUnavailable: true });
+  const result = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(result.status, "RECONCILIATION_REQUIRED");
+  assert.equal(result.code, "RESEARCH_SPEND_RECONCILIATION_REQUIRED");
+  assert.equal(getReservation().status, "RESERVED");
+  assert.ok(!events.includes("task-completed"));
 });

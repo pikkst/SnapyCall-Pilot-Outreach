@@ -150,13 +150,12 @@ export async function runOneCampaignTask(db, {
         ...write, sendingEnabled: false };
     }
   } catch (error) {
-    const providerCompletedWithoutGrounding = invoked &&
+    const verifiedTerminalEvidenceFailure = invoked &&
       setting.provider === "gemini" &&
-      error?.code === "NO_VERIFIABLE_GROUNDING" &&
+      ["NO_VERIFIABLE_GROUNDING", "NO_USABLE_STRUCTURED_OUTPUT"].includes(error?.code) &&
       error?.phase === "EVIDENCE_VALIDATION";
-    if (providerCompletedWithoutGrounding) {
-      diagnostic = { code: "NO_VERIFIABLE_GROUNDING",
-        phase: "EVIDENCE_VALIDATION" };
+    if (verifiedTerminalEvidenceFailure) {
+      diagnostic = { code: error.code, phase: "EVIDENCE_VALIDATION" };
       // A terminal provider response with absent citations is a valid
       // zero-evidence result, not a transport outcome to retry. Retain the
       // complete conservative cost because no certified usage survived.
@@ -166,14 +165,14 @@ export async function runOneCampaignTask(db, {
         if (!settled) await settle(null);
         const write = await commitCampaignResearchResult(db, claim,
           { candidates: [], sources: [] }, now(), {
-            completionCode: "NO_VERIFIABLE_GROUNDING",
+            completionCode: diagnostic.code,
             beforeCommit: tx => lockActiveWorkspaceMembership(tx, {
               workspaceId, userId: ownerId,
             }),
           });
         outcome = { status: "COMPLETED", attempted: true,
           taskId: claim.taskId, ...write,
-          code: "NO_VERIFIABLE_GROUNDING", sendingEnabled: false };
+          code: diagnostic.code, sendingEnabled: false };
         // Diagnostic telemetry is best-effort and cannot undo a committed
         // zero-evidence result or cause the paid call to be replayed.
         try {

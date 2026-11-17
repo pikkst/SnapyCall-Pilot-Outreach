@@ -227,3 +227,47 @@ test("Gemini certifies one priced grounded prompt only with complete provider to
     assert.equal(unverified.usage.groundedPrompts, undefined);
   }
 });
+
+test("STOP-terminal grounded Gemini output with malformed JSON is classified as no usable candidates", async () => {
+  const { ResearchStructuredOutputUnavailableError } =
+    await import("../server/research-provider-adapters.js");
+  const args = { provider: "gemini", model: "gemini-2.5-flash",
+    apiKey: "test-user-key", query };
+  for (const text of [
+    "Here are several people with profiles, but I cannot produce JSON.",
+    JSON.stringify({ candidates: "not an array" }),
+  ]) {
+    let attempts = 0;
+    await assert.rejects(() => researchCandidates(args, {
+      post: async () => {
+        attempts++;
+        return { candidates: [{ finishReason: "STOP",
+          content: { parts: [{ text }] },
+          groundingMetadata: { webSearchQueries: ["public experts"],
+            groundingChunks: [{ web: { uri: source, title: "Public profile" } }] },
+        }] };
+      },
+    }), error => error instanceof ResearchStructuredOutputUnavailableError &&
+      error.code === "NO_USABLE_STRUCTURED_OUTPUT" &&
+      error.phase === "EVIDENCE_VALIDATION");
+    assert.equal(attempts, 1);
+  }
+});
+
+test("truncated Gemini output or invalid provider envelope never qualifies as safe terminal completion", async () => {
+  const args = { provider: "gemini", model: "gemini-2.5-flash",
+    apiKey: "test-user-key", query };
+  const make = finishReason => ({ candidates: [{
+    finishReason,
+    content: { parts: [{ text: "not JSON" }] },
+    groundingMetadata: { webSearchQueries: ["public expert"],
+      groundingChunks: [{ web: { uri: source } }] },
+  }] });
+  await assert.rejects(() => researchCandidates(args, {
+    post: async () => make("MAX_TOKENS"),
+  }), error => error.code !== "NO_USABLE_STRUCTURED_OUTPUT");
+  await assert.rejects(() => researchCandidates(args, {
+    post: async () => ({ candidates: [{ ...make("STOP").candidates[0],
+      groundingMetadata: null }] }),
+  }), error => error.code === "NO_VERIFIABLE_GROUNDING");
+});

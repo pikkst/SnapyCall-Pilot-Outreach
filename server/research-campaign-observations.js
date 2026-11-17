@@ -57,7 +57,7 @@ export function normalizeCampaignObservations(preview, limit) {
 export async function commitCampaignResearchResult(db, claim, preview,
   now = new Date(), { beforeCommit = null, completionCode = null } = {}) {
   const observations = normalizeCampaignObservations(preview, claim.limit);
-  if (completionCode !== null && (completionCode !== "NO_VERIFIABLE_GROUNDING" ||
+  if (completionCode !== null && (!["NO_VERIFIABLE_GROUNDING", "NO_USABLE_STRUCTURED_OUTPUT"].includes(completionCode) ||
       observations.length !== 0)) {
     throw new TypeError("Zero-evidence completion must have no observations");
   }
@@ -245,6 +245,8 @@ export function summarizeCampaignProgress(campaign) {
     plannedTasks: campaign.tasks.length, tasks: byStatus,
     noGroundingTasks: campaign.tasks.filter(task => task.status === "COMPLETED" &&
       task.lastErrorCode === "NO_VERIFIABLE_GROUNDING").length,
+    invalidOutputTasks: campaign.tasks.filter(task => task.status === "COMPLETED" &&
+      task.lastErrorCode === "NO_USABLE_STRUCTURED_OUTPUT").length,
     pausedTaskReview: campaign.tasks.filter(task =>
       task.status === "PAUSED" && Number.isInteger(task.taskIndex) &&
       task.lastErrorCode === "BILLING_UNCERTAIN").map(task => ({
