@@ -19,7 +19,8 @@ import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchP
 import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
-import { approveCampaignRun, publicRunStatus, ApprovedRunBlocked }
+import { approveCampaignRun, stopApprovedCampaignRun,
+  publicRunStatus, ApprovedRunBlocked }
   from "./research-campaign-run-approval.js";
 import { startApprovedCampaignWorker } from "./research-approved-runner.js";
 import { normalizeManualResearchSources, enqueueManualResearchSources } from "./research-manual-sources.js";
@@ -1540,6 +1541,22 @@ app.post("/api/research-campaigns/:id/approve-run",
     const result = await approveCampaignRun(prisma, {
       campaignId: req.params.id, workspaceId: req.candidateScope,
       ownerId: identity.id, input: req.body,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
+app.post("/api/research-campaigns/:id/approved-run/stop",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    z.object({ confirmStop: z.literal(true) }).strict().parse(req.body ?? {});
+    const result = await stopApprovedCampaignRun(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id,
     });
     res.set("Cache-Control", "no-store");
     return res.status(result.status).json(result);
