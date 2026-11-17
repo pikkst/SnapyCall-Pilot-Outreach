@@ -1599,7 +1599,9 @@ app.get("/api/research-campaigns/:id/approved-run",
     res.set("Cache-Control", "no-store");
     return res.json({ run: run ? publicRunStatus(run) : null,
       priceEnvelope,
-      autonomousRunEnabled: env.AI_AGENT_AUTORUN_ENABLED === "true",
+      autonomousRunEnabled: env.AI_AGENT_AUTORUN_ENABLED === "true" &&
+        env.AI_AGENT_RESEARCH_ENABLED === "true" &&
+        env.AI_AGENT_EXECUTOR_ENABLED === "true",
       sendingEnabled: false });
   }));
 
