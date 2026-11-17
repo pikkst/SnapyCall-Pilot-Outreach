@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { ResearchPacingRequired } from "../server/research-quota.js";
 import {
   validateResearchSliceInput, runBoundedCampaignSlice,
 } from "../server/research-campaign-slice.js";
@@ -95,4 +96,25 @@ test("stops on revoked membership, PAUSED and failed lease reconciliation", asyn
     assert.equal(result.code, outcome.code);
     assert.equal(result.completedTasks, 0);
   }
+});
+
+test("workspace pacing preserves earlier completed slice work without retry or charge", async () => {
+  let calls = 0;
+  const outcome = await runBoundedCampaignSlice({ maxTasks: 3 }, {
+    runTask: async () => {
+      calls++;
+      if (calls === 2) throw new ResearchPacingRequired(31_000);
+      return { status: "COMPLETED", taskId: "already-committed",
+        attempted: true, uniqueAdded: 4, duplicates: 0 };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(outcome.status, "WAITING");
+  assert.equal(outcome.code, "RESEARCH_PACING_WAIT");
+  assert.equal(outcome.retryAfterSeconds, 31);
+  assert.equal(outcome.attempted, false);
+  assert.equal(outcome.attemptedTasks, 1);
+  assert.equal(outcome.completedTasks, 1);
+  assert.deepEqual(outcome.taskResults.map(x => x.taskId), ["already-committed"]);
+  assert.equal(outcome.sendingEnabled, false);
 });
