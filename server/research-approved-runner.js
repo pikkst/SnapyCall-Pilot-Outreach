@@ -42,8 +42,8 @@ export async function tickApprovedCampaignRun(db, {
     // task in this tick and reconciliation is required on the next boot.
     await pause(db, {
       ...scope, code: error instanceof ApprovedRunBlocked &&
-        error.code === "RUN_PRICE_OR_MODEL_CHANGED"
-        ? "RUN_PRICE_OR_MODEL_CHANGED"
+        ["RUN_PRICE_OR_MODEL_CHANGED", "RUN_APPROVAL_EXPIRED"].includes(error.code)
+        ? error.code
         : "RUN_EXECUTION_UNCERTAIN",
     });
     return { status: "PAUSED", code: "RUN_EXECUTION_UNCERTAIN" };
