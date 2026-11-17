@@ -95,6 +95,11 @@ public page reader and explicit named-person email classifier complete.
 
 The public page destination is checked for collisions across **both**
 ordinary citation URLs and other resolved hints within the same campaign.
+The approval preflight also rejects repeated effective destination URLs
+before consuming an immutable email-triage authorization, even if each
+provider citation is different. Such results require source review instead
+of assuming a shared directory is a person-specific profile.
+
 A second source-boundary check after external fetch prevents disclosing
 person-associated email from a stale observation. Triage approval uses the
 same source selection; a mixed unresolved/untrusted batch remains blocked
