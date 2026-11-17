@@ -123,3 +123,9 @@ td button+button{margin-left:6px}
 .campaign-unverified{font-size:11px;font-weight:700;color:#80551b;background:#fff0d4;border-radius:20px;padding:4px 8px}
 @media(max-width:850px){.campaign-observation-list{grid-template-columns:1fr}.campaign-observations-heading{flex-direction:column}}
 @media(prefers-reduced-motion:no-preference){.campaign-observation-list li{animation:campaign-observation-enter .25s ease-out both}@keyframes campaign-observation-enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}}
+
+/* An email observation is evidence for review, not a saved contact or sending consent. */
+.campaign-email-check{margin-top:12px;border-top:1px solid #e0e8f2;padding-top:10px}
+.campaign-email-check button{white-space:normal}
+.campaign-email-check p{margin:8px 0 0;overflow-wrap:anywhere;line-height:1.5}
+@media(max-width:600px){.campaign-email-check button{width:100%}}
