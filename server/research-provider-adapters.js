@@ -531,6 +531,14 @@ export function fitGemini3RetrievalEvidence({
       manifest.records.length < 1 || manifest.records.length > 20) {
     throw new TypeError("Trusted bounded retrieval manifest required");
   }
+  // Verify the exact original provider manifest before deriving a compact
+  // child; never bless a forged URL by simply recalculating its hash.
+  const verified = normalizeBoundedRetrievalEvidence({
+    text: '{"candidates":[]}', manifest, limit,
+  });
+  if (verified.manifestDigest !== manifest.digest) {
+    throw new TypeError("Untrusted source manifest");
+  }
   // Prefer source coverage to longer excerpts. On unusually large escaped or
   // Unicode text, shrink excerpts and finally source count; never expand.
   for (let count = manifest.records.length; count >= 1; count--) {
