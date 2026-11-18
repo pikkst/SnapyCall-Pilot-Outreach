@@ -118,6 +118,9 @@ export async function approveCampaignRun(db, {
       const requestedCalls = limits.maxTasks + fullRun.maxSourceCalls;
       if (requestedCalls > dailyQuota.remaining) {
         return { status: 409, code: "DAILY_QUOTA_INSUFFICIENT",
+          error: "This run exceeds today's remaining daily research quota. " +
+            "Reduce searches, increase your personal limit if possible, " +
+            "or wait until the next UTC reset.",
           requestedCalls, dailyQuota };
       }
     }
