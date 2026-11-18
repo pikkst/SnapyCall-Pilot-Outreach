@@ -388,3 +388,172 @@ test("Gemini text-only response rejects generated search metadata and incomplete
     query, limit: 3, manifest: { ...manifest, digest: "0".repeat(64) },
   }), TypeError);
 });
+
+
+test("bounded Tavily request disables generation, raw fetch and automatic expansion", async () => {
+  const { buildBoundedTavilySearchRequest } =
+    await import("../server/research-provider-adapters.js");
+  const request = buildBoundedTavilySearchRequest({
+    query, maxResults: 3,
+  });
+  assert.deepEqual(request, {
+    query, search_depth: "basic", topic: "general", max_results: 3,
+    include_answer: false, include_raw_content: false, include_images: false,
+    auto_parameters: false, include_usage: true,
+  });
+  assert.equal(Object.isFrozen(request), true);
+  for (const input of [
+    { query: "short", maxResults: 2 },
+    { query, maxResults: 21 },
+    { query, maxResults: 0 },
+    { query, maxResults: "3" },
+  ]) assert.throws(() => buildBoundedTavilySearchRequest(input), TypeError);
+});
+
+test("bounded Tavily normalization yields only provider-returned HTTPS evidence", async () => {
+  const { normalizeBoundedTavilySearch, buildGemini3TextOnlyPayload } =
+    await import("../server/research-provider-adapters.js");
+  const observedAt = "2026-11-18T00:00:00.000Z";
+  const result = normalizeBoundedTavilySearch({
+    maxResults: 3, observedAt,
+    response: {
+      results: [
+        { url: "https://consultants.example.org/experts/verified#bio",
+          title: "Expert profile",
+          content: "Verified Professional provides AI automation services." },
+        { url: "https://consultants.example.org/experts/verified",
+          title: "Duplicate result", content: "Duplicate snippet." },
+        { url: "https://127.0.0.1/private",
+          title: "Unsafe source", content: "Do not use." },
+      ],
+      usage: { credits: 1 },
+    },
+  });
+  assert.equal(result.status, "EVIDENCE_AVAILABLE");
+  assert.equal(result.manifest.records.length, 1);
+  assert.equal(result.manifest.records[0].sourceProvider, "tavily");
+  assert.equal(result.manifest.records[0].url,
+    "https://consultants.example.org/experts/verified");
+  assert.equal(result.manifest.records[0].sourceId.length, 64);
+  assert.equal(result.reportedCredits, 1);
+  assert.equal(result.billableCallPossible, true);
+  const prompt = buildGemini3TextOnlyPayload({
+    query, limit: 3, manifest: result.manifest,
+  });
+  assert.equal(Object.hasOwn(prompt, "tools"), false);
+});
+
+test("empty or unsafe Tavily response never produces a manifest for Gemini", async () => {
+  const { normalizeBoundedTavilySearch } =
+    await import("../server/research-provider-adapters.js");
+  for (const results of [
+    [], [{ url: "http://example.org", title: "Invalid",
+      content: "Unsafe URL." }],
+    [{ url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/unsafe",
+      title: "Opaque", content: "Unresolved Google link." }],
+  ]) {
+    const output = normalizeBoundedTavilySearch({
+      response: { results }, maxResults: 2,
+      observedAt: "2026-11-18T00:00:00.000Z",
+    });
+    // A remote request may have been charged even if it produced no evidence.
+    assert.equal(output.status, "NO_USABLE_EVIDENCE");
+    assert.equal(output.manifest, null);
+    assert.equal(output.billableCallPossible, true);
+    assert.equal(output.reportedCredits, null);
+  }
+});
+
+test("oversized or invalid Tavily envelope fails before accepting any results", async () => {
+  const { normalizeBoundedTavilySearch } =
+    await import("../server/research-provider-adapters.js");
+  const entry = {
+    url: "https://consultants.example.org/a",
+    title: "Professional", content: "Professional profile description",
+  };
+  for (const [response, maxResults] of [
+    [{ results: [entry, entry] }, 1],
+    [{ results: "invalid" }, 2],
+    [null, 2],
+    [{ results: [entry] }, 21],
+  ]) assert.throws(() => normalizeBoundedTavilySearch({
+    response, maxResults, observedAt: "2026-11-18T00:00:00.000Z",
+  }), TypeError);
+  const result = normalizeBoundedTavilySearch({
+    response: { results: [entry], usage: { credits: "1" } },
+    maxResults: 1, observedAt: "2026-11-18T00:00:00.000Z",
+  });
+  assert.equal(result.reportedCredits, null);
+});
+
+
+test("bounded research stages compose without external calls or contact promotion", async () => {
+  const { buildBoundedTavilySearchRequest, normalizeBoundedTavilySearch,
+    buildGemini3TextOnlyPayload, parseGemini3TextOnlyResponse } =
+    await import("../server/research-provider-adapters.js");
+  const { calculateCombinedRetrievalAndTextCeilingCents,
+    requireResearchPriceEnvelope, ResearchPricingUnavailable } =
+    await import("../server/research-price-policy.js");
+
+  const retrievalRequest = buildBoundedTavilySearchRequest({
+    query, maxResults: 2,
+  });
+  const trustedSearch = {
+    results: [{
+      url: source,
+      title: "Professional profile",
+      content: "Verified Professional offers AI automation consultancy.",
+    }],
+    usage: { credits: 1 },
+  };
+  // Fully deterministic provider fixture: no fetch, credentials or payment.
+  const retrieval = normalizeBoundedTavilySearch({
+    response: trustedSearch,
+    maxResults: retrievalRequest.max_results,
+    observedAt: "2026-11-18T00:00:00.000Z",
+  });
+  const request = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest: retrieval.manifest,
+  });
+  assert.equal(Object.hasOwn(request, "tools"), false);
+  const sourceId = retrieval.manifest.records[0].sourceId;
+  const response = {
+    candidates: [{
+      finishReason: "STOP",
+      content: { parts: [{ text: JSON.stringify({ candidates: [
+        { name: "Verified Professional", category: "AI_AUTOMATION",
+          sourceId, rationale: "Professional publicly offers consulting services" },
+        { name: "Fabricated Expert", category: "AI_AUTOMATION",
+          sourceId: "not-in-manifest",
+          rationale: "No independently observed professional profile" },
+      ] }) }] },
+    }],
+    usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 70,
+      thoughtsTokenCount: 0 },
+  };
+  const extracted = parseGemini3TextOnlyResponse({
+    response, limit: 2, manifest: retrieval.manifest,
+  });
+  assert.deepEqual(extracted.candidates.map(c => c.name), ["Verified Professional"]);
+  assert.equal(extracted.candidates[0].email, null);
+  assert.equal(extracted.candidates[0].contactReviewed, false);
+  assert.equal(extracted.candidates[0].status, "REVIEW_PENDING");
+  assert.equal(extracted.manifestDigest, retrieval.manifest.digest);
+  assert.equal(extracted.imported, false);
+  assert.equal(extracted.sendingEnabled, false);
+
+  // A synthetic mathematical ceiling is never a server-approved tariff.
+  const quote = calculateCombinedRetrievalAndTextCeilingCents({
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 500 },
+    textModel: {
+      maxInputTokens: 1200, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+  });
+  assert.equal(quote.enforcementReady, false);
+  assert.ok(quote.worstCaseCents > 0);
+  assert.throws(() => requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-3-flash-preview",
+    ...quote,
+  }), ResearchPricingUnavailable);
+});
