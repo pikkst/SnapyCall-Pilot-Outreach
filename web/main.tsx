@@ -3470,15 +3470,14 @@ function App() {
               {personalAi.provider === "gemini" &&
                 personalAi.model === "gemini-3-flash-preview" &&
                 <p role="status" className="muted">
-                  Gemini 3 Flash supports Google Search, but the provider
-                  can execute multiple separately billed queries in one call.
-                  The application cannot verify a hard query-cost limit, so
-                  paid discovery is currently disabled for this exact model.
-                  Save this model without replacing your existing Gemini API
-                  key. No paid search or replay occurs when saving.
-                  Google AI Studio's optional project spending cap may lag
-                  billing by about 10 minutes and is not an app-level
-                  per-request cost ceiling.
+                  Gemini 3 Flash uses one bounded Tavily Basic search,
+                  followed by text-only Gemini extraction with no native
+                  Google Search tool. The server reserves up to $0.03 per task,
+                  with a maximum of 16,384 input and 2,048 output/thinking
+                  tokens. Your personal Gemini key, monthly budget, Tavily
+                  account controls and workspace approval must all be valid.
+                  Saving the model never launches research or sends email.
+                  Provider invoices may differ from the conservative ledger.
                 </p>}
               <label>Personal API key <input type="password" autoComplete="off"
                 value={personalApiKey} required={!personalAi.keyConfigured}
@@ -3537,10 +3536,10 @@ function App() {
           <h2>Monthly research budget</h2>
           <p className="muted">Required USD application spending limit for your personal API key across
             every workspace. Approved exact models are Claude Sonnet 4.6 (up to $4.00),
-            OpenAI GPT-4.1 mini (up to $1.50) and the existing Gemini
-            2.5 Flash policy (up to $2.00) per attempt. Gemini 3 Flash
-            has different search-query billing and is not yet approved for
-            paid discovery.
+            OpenAI GPT-4.1 mini (up to $1.50), Gemini 2.5 Flash (up to $2.00),
+            and Gemini 3 Flash with Tavily Basic (up to $0.03) per task.
+            Gemini 3 also requires an enabled server-managed Tavily account
+            and a valid personal Gemini key.
             The application ledger is conservative, not a provider invoice or external billing cap.</p>
           <p role="status">{researchBudget.enforcedForPaidSearch
             ? "Approved web research is enabled within your saved application budget."
