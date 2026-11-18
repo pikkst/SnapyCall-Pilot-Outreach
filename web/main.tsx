@@ -919,7 +919,9 @@ function App() {
   async function stopCampaignAutonomousRun(workspaceId: string, campaignId: string) {
     if (campaignRunApprovalBusy || activeWorkspaceId !== workspaceId ||
         campaignProgressId !== campaignId ||
-        !["APPROVED", "RUNNING"].includes(campaignRunApproval?.run?.status ?? "")) return;
+        !["APPROVED", "RUNNING"].includes(campaignRunApproval?.run?.status ?? "") &&
+        !["DISCOVERY", "EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING"].includes(
+          campaignRunApproval?.fullRun?.status ?? "")) return;
     const generation = workspaceRequest.current;
     const request = campaignProgressRequest.current;
     setCampaignRunApprovalBusy(true);
@@ -2524,11 +2526,14 @@ function App() {
                           </div>
                           <div className="research-run-actions">
                             {campaignRunApproval?.run &&
-                              ["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
+                              (["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) ||
+                                ["DISCOVERY", "EMAIL_TRIAGE", "SOURCE_PREPARE",
+                                  "SOURCE_RUNNING"].includes(
+                                    campaignRunApproval.fullRun?.status ?? "")) &&
                               <button type="button" className="secondary"
                                 disabled={campaignRunApprovalBusy}
                                 onClick={() => void stopCampaignAutonomousRun(p.id, campaignProgress.id)}>
-                                Stop future searches
+                                Stop all future research
                               </button>}
                             <button type="button" className="secondary"
                               onClick={() => void loadCampaignObservations(p.id, campaignProgress.id)}
