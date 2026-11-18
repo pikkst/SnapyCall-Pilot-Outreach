@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeResearchEvidence, publicCitationUrl } from "../server/research-evidence.js";
+import { buildBoundedRetrievalManifest, normalizeResearchEvidence, publicCitationUrl } from "../server/research-evidence.js";
 
 const url = "https://profiles.example.org/consultant";
 const candidate = {
@@ -70,4 +70,53 @@ test("uncited model URLs are discarded and the operator sees the exclusion count
   assert.deepEqual(result.candidates.map(c => c.name), ["Independent Expert"]);
   assert.match(result.warnings.join(" "), /1 AI suggestions were not accepted/);
   assert.equal(result.candidates[0].email, null);
+});
+
+
+const boundedRecord = {
+  sourceId: "doc-01",
+  url: "https://profiles.example.org/consultant#bio",
+  title: "Independent profile",
+  excerpt: "Publicly described AI automation consultancy",
+};
+const manifest = records => buildBoundedRetrievalManifest({
+  provider: "synthetic_test",
+  observedAt: "2026-11-18T00:00:00.000Z",
+  records,
+});
+
+test("bounded manifest is order-independent, immutable and binds exact source text", () => {
+  const second = {
+    sourceId: "doc-02", url: "https://another.example.org/a",
+    title: "Second source", excerpt: "Professional profile corroboration",
+  };
+  const first = manifest([boundedRecord, second]);
+  const reordered = manifest([second, boundedRecord]);
+  assert.deepEqual(first, reordered);
+  assert.match(first.digest, /^[a-f0-9]{64}$/);
+  assert.equal(first.records[0].sourceId, "doc-01");
+  assert.equal(first.records[0].url, "https://profiles.example.org/consultant");
+  assert.equal(first.records[0].sourceProvider, "synthetic_test");
+  assert.equal(Object.isFrozen(first.records[0]), true);
+  assert.notEqual(manifest([{ ...boundedRecord, excerpt: "Edited profile" }, second]).digest, first.digest);
+  assert.notEqual(buildBoundedRetrievalManifest({
+    provider: "different", observedAt: "2026-11-18T00:00:00.000Z",
+    records: [boundedRecord, second],
+  }).digest, first.digest);
+});
+
+test("bounded manifest fails closed for ambiguous or malformed retrieval records", () => {
+  for (const records of [
+    [], Array(21).fill(boundedRecord),
+    [boundedRecord, boundedRecord],
+    [{ ...boundedRecord, sourceId: "../path" }],
+    [{ ...boundedRecord, url: "https://127.0.0.1/private" }],
+    [{ ...boundedRecord, url: "http://profiles.example.org/a" }],
+    [{ ...boundedRecord, url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc" }],
+    [{ ...boundedRecord, title: "" }],
+    [{ ...boundedRecord, excerpt: "x".repeat(1501) }],
+  ]) assert.throws(() => manifest(records), TypeError);
+  assert.throws(() => buildBoundedRetrievalManifest({
+    provider: "synthetic_test", observedAt: "not-a-time", records: [boundedRecord],
+  }), TypeError);
 });
