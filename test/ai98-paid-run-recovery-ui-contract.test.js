@@ -23,7 +23,7 @@ test("exhausted budget displays successful bound rather than provider failure", 
   assert.match(outcome, /lastCode === "RUN_LIMIT_REACHED"/);
   assert.match(outcome, /Approved research limit reached successfully/);
   assert.match(outcome, /not a[\s\S]*provider failure/);
-  assert.match(outcome, /role=\{campaignRunApproval\.run\.lastCode === "RUN_LIMIT_REACHED"/);
+  assert.match(ui.slice(start - 210, start), /role=\{campaignRunApproval\.run\.lastCode === "RUN_LIMIT_REACHED"/);
   assert.match(outcome, /status" : "alert"/);
 });
 
