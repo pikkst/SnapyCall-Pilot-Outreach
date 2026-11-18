@@ -16,7 +16,9 @@ test("daily quota boundary uses UTC, never local timezone", () => {
 
 test("conservative quota reserves both scopes and returns correct remaining budgets", async () => {
   const counts = new Map();
-  const tx = { $queryRaw: async (_template, key, _day, limit) => {
+  const tx = {
+    partner: { findUnique: async () => ({ researchDailyLimit: 1000 }) },
+    $queryRaw: async (_template, key, _day, limit) => {
     // Prisma receives tagged template interpolations as positional arguments.
     // Real SQL atomicity is covered by disposable PostgreSQL smoke.
     const current = counts.get(key) ?? 0;
@@ -37,7 +39,10 @@ test("conservative quota reserves both scopes and returns correct remaining budg
 
 test("quota rejects client-controlled invalid identities without hitting database", async () => {
   let called = false;
-  const tx = { $queryRaw: async () => { called = true; } };
+  const tx = {
+    partner: { findUnique: async () => { called = true; } },
+    $queryRaw: async () => { called = true; },
+  };
   await assert.rejects(() => reserveResearchAttempt(tx, {
     workspaceId: "foreign", userId,
   }));
@@ -63,7 +68,9 @@ test("personal preferences respect server bounds and cannot be bypassed", async 
 
 test("custom daily threshold is enforced without changing the workspace ceiling", async () => {
   const counts = new Map();
-  const tx = { $queryRaw: async (_sql, key, _day, ceiling) => {
+  const tx = {
+    partner: { findUnique: async () => ({ researchDailyLimit: 1000 }) },
+    $queryRaw: async (_sql, key, _day, ceiling) => {
     const current = counts.get(key) ?? 0;
     if (current >= ceiling) return [];
     counts.set(key, current + 1);
@@ -134,4 +141,27 @@ test("workspace pacing fails before a lease insert, using persisted DB time", as
   });
   assert.equal(typeof lease, "string");
   assert.equal(operations.includes("lease-created"), true);
+});
+
+test("administrator workspace cap is enforced independent of personal cap", async () => {
+  const counts = new Map();
+  const tx = {
+    partner: { findUnique: async () => ({ researchDailyLimit: 3 }) },
+    $queryRaw: async (_sql, key, _day, ceiling) => {
+      const next = (counts.get(key) ?? 0) + 1;
+      if (next > ceiling) return [];
+      counts.set(key, next);
+      return [{ attempts: next }];
+    },
+  };
+  for (let i = 1; i <= 3; i++) {
+    const value = await reserveResearchAttempt(tx, {
+      workspaceId, userId, dailyLimit: 1000,
+    });
+    assert.equal(value.remaining.workspace, 3 - i);
+    assert.equal(value.remaining.userWorkspace, 1000 - i);
+  }
+  await assert.rejects(() => reserveResearchAttempt(tx, {
+    workspaceId, userId, dailyLimit: 1000,
+  }), ResearchQuotaExceeded);
 });
