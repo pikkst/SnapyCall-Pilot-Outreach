@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { isWorkspaceId, lockActiveWorkspaceMembership }
   from "./workspace-access.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
+import { personSourceFingerprint } from "./research-person-source-queue.js";
 
 const MAX_CALLS = 250;
 const MAX_RUN_CENTS = 50_000;
@@ -103,6 +104,19 @@ export async function approvePersonSourceResearch(db, {
     }
     if (limits.maxCalls > jobs.length) {
       return { status: 409, code: "SOURCE_RUN_CALL_CAP_EXCEEDS_JOBS" };
+    }
+    const observations = await tx.researchCampaignObservation.findMany({
+      where: { campaignId, id: { in: jobs.map(job => job.observationId) } },
+      select: { id: true, name: true, category: true, citationUrl: true,
+        groundingStatus: true, groundingResolvedUrl: true,
+        groundingProvenance: true, emailTriageStatus: true },
+      take: MAX_CALLS + 1,
+    });
+    const live = new Map(observations.map(row => [row.id, row]));
+    if (live.size !== jobs.length || jobs.some(job => !live.has(job.observationId) ||
+        personSourceFingerprint(live.get(job.observationId)) !==
+          job.evidenceFingerprint)) {
+      return { status: 409, code: "SOURCE_JOB_EVIDENCE_CHANGED" };
     }
     let snapshot;
     try { snapshot = personSourceJobSnapshot(jobs); }
