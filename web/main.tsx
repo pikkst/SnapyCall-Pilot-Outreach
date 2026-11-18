@@ -2443,7 +2443,17 @@ function App() {
                         <div className="research-run-window" aria-label="Research run overview">
                           <div className="research-run-title">
                             <div>
-                              <strong>{campaignRunApproval?.run?.status === "RUNNING"
+                              <strong>{campaignRunApproval?.fullRun &&
+                                ["EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING"].includes(
+                                  campaignRunApproval.fullRun.status)
+                                ? "Verifying professional emails"
+                                : campaignRunApproval?.fullRun?.status === "READY_FOR_REVIEW"
+                                  ? "Verified email review ready"
+                                  : campaignRunApproval?.fullRun?.status === "PARTIAL"
+                                    ? "Partial qualified-email results"
+                                    : campaignRunApproval?.fullRun?.status === "NEEDS_REVIEW"
+                                      ? "Research needs attention"
+                                      : campaignRunApproval?.run?.status === "RUNNING"
                                 ? "Finding experts"
                                 : campaignRunApproval?.run?.status === "COMPLETED" ||
                                   ["COMPLETED", "PARTIAL"].includes(campaignProgress.status)
@@ -2451,7 +2461,16 @@ function App() {
                                   : campaignRunApproval?.run?.status === "PAUSED" ||
                                     ["PAUSED_REVIEW", "QUALITY_STOP"].includes(campaignProgress.operationalState)
                                     ? "Research needs attention" : "Ready to research"}</strong>
-                              <p className="muted">{campaignRunApproval?.run?.status === "RUNNING"
+                              <p className="muted">{campaignRunApproval?.fullRun &&
+                                ["EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING"].includes(
+                                  campaignRunApproval.fullRun.status)
+                                ? "The approved stages are continuing server-side. " +
+                                  "Only independently attributed emails count."
+                                : campaignRunApproval?.fullRun?.status === "READY_FOR_REVIEW"
+                                  ? "Review the qualified email pairs before saving contacts."
+                                  : campaignRunApproval?.fullRun?.status === "PARTIAL"
+                                    ? "The approved stages ended below the qualified email goal."
+                                    : campaignRunApproval?.run?.status === "RUNNING"
                                 ? "The search continues automatically. You can leave this page."
                                 : campaignRunApproval?.run?.lastCode === "RUN_LIMIT_REACHED"
                                   ? "Your approved search limit was reached."
@@ -2459,7 +2478,10 @@ function App() {
                                     ? "The approved run ended. Review the saved findings."
                                     : "Review findings or plan a new campaign."}</p>
                             </div>
-                            {campaignRunApproval?.run?.status === "RUNNING" &&
+                            {(campaignRunApproval?.run?.status === "RUNNING" ||
+                            (campaignRunApproval?.fullRun &&
+                              ["EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING"].includes(
+                                campaignRunApproval.fullRun.status))) &&
                               !campaignProgressLiveWarning &&
                               <span className="research-running-indicator"
                                 aria-hidden="true"/>}
