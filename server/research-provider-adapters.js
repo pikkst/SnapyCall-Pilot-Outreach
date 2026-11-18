@@ -1,7 +1,9 @@
 // Provider-specific search envelopes. All output is normalized through
 // research-evidence.js; provider metadata is the only source of trusted URLs.
-import { normalizeResearchEvidence, normalizeBoundedRetrievalEvidence } from "./research-evidence.js";
+import { normalizeResearchEvidence, normalizeBoundedRetrievalEvidence,
+  buildBoundedRetrievalManifest, publicCitationUrl } from "./research-evidence.js";
 import { discoverySearchGuidance } from "./research-discovery-guidance.js";
+import { createHash } from "node:crypto";
 
 // Sanitized trusted-adapter classification. A provider can successfully
 // return/bill a response while omitting source metadata. That is NOT a
@@ -260,4 +262,73 @@ export function parseGemini3TextOnlyResponse({ response, manifest, limit }) {
       searchRequests: 0,
     },
   };
+}
+
+
+// Tavily candidate only: pure request/response contract, no fetch or credentials.
+// Pricing, contractual approval, upstream credit hard-stop and task-lease
+// reservation are NOT established by this code. No dispatch path is wired.
+export function buildBoundedTavilySearchRequest({ query, maxResults }) {
+  if (typeof query !== "string" || query.trim().length < 12 ||
+      query.length > 350 || !Number.isSafeInteger(maxResults) ||
+      maxResults < 1 || maxResults > 20) {
+    throw new TypeError("Invalid bounded retrieval criteria");
+  }
+  return Object.freeze({
+    query: query.trim(),
+    search_depth: "basic",
+    topic: "general",
+    max_results: maxResults,
+    include_answer: false,
+    include_raw_content: false,
+    include_images: false,
+    auto_parameters: false,
+    include_usage: true,
+  });
+}
+
+// Only pass a trusted Tavily HTTP response here; never a browser-submitted
+// object. Return zero-evidence explicitly instead of invoking Gemini on an
+// empty or entirely rejected result set.
+export function normalizeBoundedTavilySearch({ response, maxResults, observedAt }) {
+  if (!Number.isSafeInteger(maxResults) || maxResults < 1 || maxResults > 20 ||
+      !response || !Array.isArray(response.results) ||
+      response.results.length > maxResults) {
+    throw new TypeError("Invalid Tavily search result envelope");
+  }
+  // Usage is diagnostic only. Missing or ambiguous metadata cannot justify a
+  // budget refund; the existing worker must settle conservatively.
+  const credits = response.usage?.credits;
+  const reportedCredits = Number.isSafeInteger(credits) && credits >= 0
+    ? credits : null;
+  const records = [];
+  const seen = new Set();
+  for (const result of response.results) {
+    const url = publicCitationUrl(result?.url);
+    if (!url || typeof result?.title !== "string" ||
+        !result.title.trim() || typeof result?.content !== "string" ||
+        !result.content.trim() || seen.has(url)) continue;
+    seen.add(url);
+    records.push({
+      sourceId: createHash("sha256").update(url, "utf8").digest("hex"),
+      url,
+      title: result.title.trim().slice(0, 180),
+      excerpt: result.content.trim().slice(0, 1500),
+    });
+  }
+  if (records.length === 0) return Object.freeze({
+    status: "NO_USABLE_EVIDENCE",
+    manifest: null,
+    reportedCredits,
+    billableCallPossible: true,
+  });
+  const manifest = buildBoundedRetrievalManifest({
+    provider: "tavily", observedAt, records,
+  });
+  return Object.freeze({
+    status: "EVIDENCE_AVAILABLE",
+    manifest,
+    reportedCredits,
+    billableCallPossible: true,
+  });
 }
