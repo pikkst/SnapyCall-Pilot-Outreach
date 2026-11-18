@@ -93,7 +93,18 @@ export async function readQualifiedContactManifest(db, {
   if (!await requireWorkspaceMembership(db, {
     workspaceId, userId: ownerId,
   })) return { status: 403, code: "WORKSPACE_ACCESS_REVOKED" };
-  return { status: 200, ...buildQualifiedContactManifest(rows) };
+  const savedBatch = await db.researchContactBatch.findUnique({
+    where: { campaignId },
+    select: { status: true, itemCount: true,
+      items: { select: { status: true } } },
+  });
+  const batch = savedBatch ? {
+    status: savedBatch.status, itemCount: savedBatch.itemCount,
+    saved: savedBatch.items.filter(item => item.status === "SAVED").length,
+    needsReview: savedBatch.items.filter(item =>
+      ["REVIEW_REQUIRED", "PAUSED"].includes(item.status)).length,
+  } : null;
+  return { status: 200, ...buildQualifiedContactManifest(rows), batch };
 }
 
 export async function approveQualifiedContactBatch(db, {
