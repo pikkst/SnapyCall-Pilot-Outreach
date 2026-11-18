@@ -245,6 +245,12 @@ test("goal commit blocks further paid source claims in same locked transaction",
       findMany: async () => evidence,
     },
     researchPersonSourceJob: { count: async () => 0 },
+    researchPersonSourceCycle: {
+      updateMany: async ({ data }) => {
+        updates.push("cycles:" + data.status);
+        return { count: 1 };
+      },
+    },
     auditEvent: { create: async ({ data }) => {
       updates.push("audit");
       assert.equal(data.metadata.sourceNewPaidClaimsStopped, true);
@@ -254,7 +260,7 @@ test("goal commit blocks further paid source claims in same locked transaction",
   const result = await stopFullRunSourceAtGoal(db, scope);
   assert.equal(result.status, "READY_FOR_REVIEW");
   assert.deepEqual(updates,
-    ["source:TARGET_REACHED", "full:READY_FOR_REVIEW", "audit"]);
+    ["source:TARGET_REACHED", "cycles:TARGET_REACHED", "full:READY_FOR_REVIEW", "audit"]);
 });
 
 test("unproven source evidence never stops a paid stage early", async () => {
