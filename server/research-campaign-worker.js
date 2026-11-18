@@ -15,6 +15,17 @@ import { researchCandidates } from "./ai-research.js";
 import { decryptKey } from "./security.js";
 import { reserveApprovedRunCall, ApprovedRunBlocked } from "./research-campaign-run-approval.js";
 
+// One settlement decision for the existing campaign worker. This is not a
+// dispatch gate: requireResearchPriceEnvelope must already have authorized
+// the exact model before claim, reservation, or any provider request.
+export function calculateCampaignVerifiedSpendCents({ price, provider, model, usage }) {
+  if (price?.billingContractVersion === "tavily-basic-gemini3-text-v1") {
+    return provider === "gemini" && model === "gemini-3-flash-preview"
+      ? calculateVerifiedCombinedSpendCents(price, usage) : null;
+  }
+  return calculateVerifiedSpendCents(price, usage);
+}
+
 export class ResearchWorkerPreflightError extends Error {
   constructor(code) {
     super("Campaign research worker preflight failed");
@@ -143,13 +154,10 @@ export async function runOneCampaignTask(db, {
       // A future reviewed dual-provider policy uses its own complete Tavily
       // + Gemini billing contract. Never apply legacy single-provider tool
       // rates to the combined call. Missing receipts retain the full ceiling.
-      const verifiedCents = price.billingContractVersion ===
-          "tavily-basic-gemini3-text-v1" &&
-        setting.provider === "gemini" &&
-        setting.model === "gemini-3-flash-preview"
-        ? calculateVerifiedCombinedSpendCents(price, result.usage)
-        : calculateVerifiedSpendCents(price, result.usage);
-      await settle(verifiedCents);
+      await settle(calculateCampaignVerifiedSpendCents({
+        price, provider: setting.provider, model: setting.model,
+        usage: result.usage,
+      }));
       const write = await commitCampaignResearchResult(db, claim, result, now(), {
         beforeCommit: tx => lockActiveWorkspaceMembership(tx, {
           workspaceId, userId: ownerId,
