@@ -98,6 +98,11 @@ export function qualificationDecision(candidate, contactEvidence = {}) {
   const evidence = [];
   if (!c.onlineEnglish) evidence.push("english_online_requirement_unconfirmed");
   if (discovered && !c.profileReviewed) evidence.push("expert_profile_review_pending");
+  if (candidate.removedAt != null) {
+    return Object.freeze({ stage: QUALIFICATION_STAGES.SUPPRESSED, qualified: false,
+      score: null, blockers: Object.freeze(["candidate_removed"]),
+      evidence: Object.freeze(evidence) });
+  }
   if (c.suppressed) {
     return Object.freeze({ stage: QUALIFICATION_STAGES.SUPPRESSED, qualified: false,
       score: null, blockers: Object.freeze(["suppressed"]), evidence: Object.freeze(evidence) });
