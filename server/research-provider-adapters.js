@@ -261,9 +261,11 @@ export function buildGemini3CountTokensRequest({ model, payload }) {
       payload.generationConfig?.thinkingConfig?.thinkingLevel !== "minimal") {
     throw new TypeError("Unapproved Gemini 3 text-only token count request");
   }
+  // Copy the exact counted input. A later mutation of the generation payload
+  // must not silently change the already-counted request in place.
   return {
     model: "gemini-3-flash-preview",
-    contents: payload.contents,
+    contents: JSON.parse(JSON.stringify(payload.contents)),
   };
 }
 
