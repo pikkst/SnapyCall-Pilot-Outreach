@@ -31,7 +31,7 @@ test("only one expandable technical panel remains, without losing controls", () 
 
 test("running view keeps safe stop, read-only findings and owner run approval", () => {
   assert.match(research, /onClick=\{\(\) => void stopCampaignAutonomousRun/);
-  assert.match(research, /Stop future searches/);
+  assert.match(research, /Stop all future research/);
   assert.match(research, /loadCampaignObservations\(p\.id, campaignProgress\.id\)/);
   assert.match(research, /campaignObservationsStatus !== "idle"/);
   assert.match(research, /aria-label="Saved campaign findings"/);
