@@ -272,3 +272,103 @@ test("stopped or foreign run cannot be mutated", async () => {
   assert.equal(existing.code, "RUN_ALREADY_TERMINAL");
   assert.equal(updated, false);
 });
+
+
+test("successful tenth bounded task finalizes partial campaign without new paid calls", async () => {
+  const events = [];
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async p => p.join(" ").includes("PartnerMembership")
+      ? [{ revokedAt: null }]
+      : [{ id: campaignId, status: "RUNNING" }],
+    researchCampaignRun: {
+      findUnique: async () => ({
+        ...fakeRun, status: "RUNNING", startedTasks: 3,
+        committedWorstCaseCents: 600,
+      }),
+      update: async ({ data }) => {
+        events.push(["run", data.status, data.lastCode]);
+        return data;
+      },
+    },
+    researchCampaignTask: {
+      count: async ({ where }) => {
+        assert.equal(where.campaignId, campaignId);
+        assert.equal(where.status, "RUNNING");
+        events.push("checked-inflight");
+        return 0;
+      },
+    },
+    researchCampaign: {
+      updateMany: async ({ where, data }) => {
+        assert.deepEqual(where, {
+          id: campaignId, workspaceId, ownerId, status: "RUNNING",
+        });
+        assert.equal(data.status, "PARTIAL");
+        events.push("campaign-PARTIAL");
+        return { count: 1 };
+      },
+    },
+  }) };
+  const out = await finishApprovedRunTask(db, {
+    campaignId, workspaceId, ownerId, result: { status: "COMPLETED" },
+  });
+  assert.equal(out.code, "COMPLETED");
+  assert.equal(out.lastCode, "RUN_LIMIT_REACHED");
+  assert.deepEqual(events, ["checked-inflight", "campaign-PARTIAL",
+    ["run", "COMPLETED", "RUN_LIMIT_REACHED"]]);
+});
+
+test("run cap never finalizes campaign while a task remains in flight", async () => {
+  let campaignUpdated = false;
+  const writes = [];
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async p => p.join(" ").includes("PartnerMembership")
+      ? [{ revokedAt: null }]
+      : [{ id: campaignId, status: "RUNNING" }],
+    researchCampaignRun: {
+      findUnique: async () => ({
+        ...fakeRun, status: "RUNNING", startedTasks: 3,
+        committedWorstCaseCents: 600,
+      }),
+      update: async ({ data }) => { writes.push(data); return data; },
+    },
+    researchCampaignTask: { count: async () => 1 },
+    researchCampaign: {
+      updateMany: async () => { campaignUpdated = true; },
+    },
+  }) };
+  const out = await finishApprovedRunTask(db, {
+    campaignId, workspaceId, ownerId, result: { status: "COMPLETED" },
+  });
+  assert.equal(out.code, "PAUSED");
+  assert.equal(out.lastCode, "RUN_LIMIT_REACHED");
+  assert.equal(campaignUpdated, false);
+  assert.equal(writes[0].status, "PAUSED");
+});
+
+test("uncertain provider result cannot finalize partial campaign at run limit", async () => {
+  let attempted = false;
+  const writes = [];
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async p => p.join(" ").includes("PartnerMembership")
+      ? [{ revokedAt: null }]
+      : [{ id: campaignId, status: "RUNNING" }],
+    researchCampaignRun: {
+      findUnique: async () => ({
+        ...fakeRun, status: "RUNNING", startedTasks: 3,
+        committedWorstCaseCents: 600,
+      }),
+      update: async ({ data }) => { writes.push(data); return data; },
+    },
+    researchCampaignTask: { count: async () => { attempted = true; return 0; } },
+    researchCampaign: { updateMany: async () => { attempted = true; } },
+  }) };
+  const out = await finishApprovedRunTask(db, {
+    campaignId, workspaceId, ownerId,
+    result: { status: "PAUSED", code: "BILLING_UNCERTAIN" },
+  });
+  assert.equal(out.code, "PAUSED");
+  assert.equal(out.lastCode, "BILLING_UNCERTAIN");
+  assert.equal(attempted, false);
+  assert.equal(writes[0].status, "PAUSED");
+});
