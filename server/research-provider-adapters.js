@@ -343,6 +343,39 @@ export async function countGemini3TextOnlyInput({
   });
 }
 
+// Controlled two-step Gemini 3 text-only transport. It is NOT a public
+// execution entrypoint: a future campaign worker must authorize and reserve
+// BOTH retrieval and generation cost before invoking it. No retry is safe
+// after either provider request, even when the response is incomplete.
+export async function extractWithGemini3TextOnly({
+  model, payload, manifest, limit, maxInputTokens, apiKey,
+}, post, signal) {
+  // Reject malformed payload, model, identity or billing envelope before
+  // any provider call. The manifest check also binds the output evidence IDs.
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20 ||
+      typeof apiKey !== "string" || apiKey.length < 8 ||
+      typeof post !== "function") {
+    throw new TypeError("Gemini 3 text-only extraction preflight required");
+  }
+  const trusted = normalizeBoundedRetrievalEvidence({
+    text: '{"candidates":[]}', manifest, limit,
+  });
+  if (trusted.manifestDigest !== manifest.digest) {
+    throw new TypeError("Untrusted Gemini 3 extraction manifest");
+  }
+  // The same immutable generation payload is counted, then submitted once.
+  const preflight = await countGemini3TextOnlyInput({
+    model, payload, maxInputTokens, apiKey,
+  }, post, signal);
+  const response = await post(
+    "https://generativelanguage.googleapis.com/v1beta/models/" +
+      encodeURIComponent(model) + ":generateContent",
+    { "x-goog-api-key": apiKey }, payload, signal,
+  );
+  const extracted = parseGemini3TextOnlyResponse({ response, manifest, limit });
+  return Object.freeze({ ...extracted, preflightInputTokens: preflight.inputTokens });
+}
+
 // Interpret a response only AFTER an independently authorized provider call.
 // Usage is telemetry only: no billingEvidence, refunds, or search charges are
 // certified by this parser. Missing/ambiguous billing is handled by the worker.
