@@ -159,7 +159,7 @@ test("unattributed or ambiguous emails never qualify as person evidence", async 
     assert.equal(result.qualifiedEvidence, false);
     assert.equal(f.state.row.emailTriageEmail, null);
     assert.equal(f.state.row.personSourceUrl, null);
-    assert.equal(f.state.job.status, "NO_PUBLIC_EMAIL");
+    assert.equal(f.state.job.status, "SOURCE_NOT_ATTRIBUTABLE");
     assert.deepEqual(f.events, ["job", "audit"]);
   }
 });
