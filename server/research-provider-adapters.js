@@ -461,7 +461,7 @@ export async function searchWithBoundedTavily({
   if (typeof post !== "function" || typeof apiKey !== "string" ||
       !/^tvly-[A-Za-z0-9_-]{8,}$/.test(apiKey) ||
       typeof observedAt !== "string" ||
-      !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(observedAt) ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(observedAt) ||
       !Number.isFinite(Date.parse(observedAt)) ||
       new Date(observedAt).toISOString() !== observedAt) {
     throw new TypeError("Trusted bounded Tavily retrieval configuration required");
