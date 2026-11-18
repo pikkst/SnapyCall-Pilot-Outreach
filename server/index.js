@@ -28,7 +28,8 @@ import { startApprovedCampaignWorker } from "./research-approved-runner.js";
 import { normalizeManualResearchSources, enqueueManualResearchSources } from "./research-manual-sources.js";
 import { inspectCampaignObservationEmail } from "./research-observation-email.js";
 import { approveEmailTriage, stopEmailTriage, emailTriageSummary,
-  startEmailTriageWorker } from "./research-email-triage-worker.js";
+  emailTriageSourceReadiness, startEmailTriageWorker }
+  from "./research-email-triage-worker.js";
 import { approveGroundingResolution, stopGroundingResolution,
   groundingResolutionSummary, startGroundingResolutionWorker }
   from "./research-grounding-worker.js";
@@ -1833,17 +1834,26 @@ app.get("/api/research-campaigns/:id/email-triage",
     const campaign = await prisma.researchCampaign.findFirst({
       where: { id: req.params.id, workspaceId: req.candidateScope,
         ownerId: identity.id },
-      select: { id: true, emailTriageStatus: true, emailTriageMaxPages: true,
-        emailTriageExpiresAt: true },
+      select: { id: true, status: true, emailTriageStatus: true,
+        emailTriageMaxPages: true, emailTriageExpiresAt: true },
     });
     if (!campaign) return res.status(404).json({ code: "CAMPAIGN_NOT_FOUND" });
     const counts = await prisma.researchCampaignObservation.groupBy({
       by: ["emailTriageStatus"], where: { campaignId: campaign.id },
       _count: { id: true },
     });
+    // This is read-only and owner-scoped. Never return source URLs from the
+    // preflight or interpret inspectable as independently verified identity.
+    const savedSources = await prisma.researchCampaignObservation.findMany({
+      where: { campaignId: campaign.id },
+      select: { citationUrl: true, groundingStatus: true,
+        groundingResolvedUrl: true, groundingProvenance: true },
+      take: 251,
+    });
     res.set("Cache-Control", "no-store");
     return res.json({
       ...emailTriageSummary(campaign, counts),
+      preflight: emailTriageSourceReadiness(campaign.status, savedSources),
       enabled: env.AI_EMAIL_TRIAGE_ENABLED === "true",
     });
   }));
