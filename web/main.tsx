@@ -924,7 +924,8 @@ function App() {
     const request = campaignProgressRequest.current;
     setCampaignRunApprovalBusy(true);
     try {
-      const result = await api<{ run: ApprovedCampaignRun }>(
+      const result = await api<{ run: ApprovedCampaignRun;
+        fullRun?: FullRunStatus }>(
         "/research-campaigns/" + encodeURIComponent(campaignId) +
         "/approved-run/stop?workspaceId=" + encodeURIComponent(workspaceId), {
           method: "POST", body: JSON.stringify({ confirmStop: true }),
@@ -932,7 +933,8 @@ function App() {
       if (generation !== workspaceRequest.current ||
           request !== campaignProgressRequest.current) return;
       setCampaignRunApproval(current => current
-        ? { ...current, run: result.run } : null);
+        ? { ...current, run: result.run,
+            fullRun: result.fullRun ?? null } : null);
       setCampaignRunApprovalNotice("Run stopped. An already dispatched provider call may still be billed; it will not be replayed.");
     } catch (error) {
       if (generation === workspaceRequest.current &&
