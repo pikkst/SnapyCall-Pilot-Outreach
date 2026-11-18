@@ -193,6 +193,7 @@ type ResearchBudget = { monthlyLimitCents: number | null; currency: "USD";
   worstCaseCents?: number | null;
   ledger?: {
     monthUtc: string; reservedCents: number; settledCents: number;
+    historicalTestExcludedCents: number; effectiveSettledCents: number;
     pendingReservations: number; availableCents: number | null;
     billingSource: "application-estimate";
   }; reconciliation?: { staleAfterMinutes: number; staleReservations: number;
@@ -3764,8 +3765,11 @@ function App() {
               </label>
               {researchBudget.ledger && <div aria-label="Research spend ledger" className="review-panel">
                 <h3>Application spending ledger · {researchBudget.ledger.monthUtc.slice(0, 7)} UTC</h3>
-                <p>Estimated settled: ${(researchBudget.ledger.settledCents / 100).toFixed(2)} USD
+                <p>Effective application estimate: ${(researchBudget.ledger.effectiveSettledCents / 100).toFixed(2)} USD
                   · Reserved: ${(researchBudget.ledger.reservedCents / 100).toFixed(2)} USD</p>
+                <p className="muted">Historical gross estimates: ${(researchBudget.ledger.settledCents / 100).toFixed(2)} USD
+                  · Audited test exclusions: ${(researchBudget.ledger.historicalTestExcludedCents / 100).toFixed(2)} USD.
+                  Neither amount is a verified provider invoice.</p>
                 <p>Pending reservations: {researchBudget.ledger.pendingReservations}
                   · Estimated remaining application budget: {researchBudget.ledger.availableCents === null ?
                     "Not configured" : (researchBudget.ledger.availableCents / 100).toFixed(2) + " USD"}</p>
