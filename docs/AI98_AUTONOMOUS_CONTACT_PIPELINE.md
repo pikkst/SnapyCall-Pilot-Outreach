@@ -178,3 +178,11 @@ The source-search stage's one provider-cited URL is **not person attribution**. 
 Unavailable websites are `SOURCE_UNAVAILABLE`; a page without attributable evidence is `SOURCE_NOT_ATTRIBUTABLE`, **not** proof that no public email exists. The worker must try permitted alternate independent sources in a separately bounded stage, never manufacture addresses.
 
 **Still outstanding**: default-OFF scheduling and exact stage control, full-run one-click envelope, adaptive discovery replenishment to qualified-email target, verified-bulk storage semantics, authentic staging/production E2E smoke, source attempts beyond the first and outreach legal-basis gates. Do not call this full pipeline ready.
+
+## 18. Durable source-job runner and safe terminal handling — 2026-11-18
+
+`startPersonSourceWorker()` is now wired into existing server lifecycle and shutdown **only** when `AI_PERSON_SOURCE_EXECUTOR_ENABLED=true` **and** `AI_PERSON_SOURCE_APPROVAL_ENABLED=true`. Both default OFF. A persisted, currently valid, person-source-approved campaign is required for each tick. The worker first verifies a persisted paid-source proposal with the independently authenticated public reader, then considers at most one paid BYOK search under the unchanged lease/budget gates. Restarts can resume a saved source proposal without reissuing its paid search. An uncertain paid call remains `PAUSED` and is never auto-replayed.
+
+`quarantineUnverifiablePersonSource()` preserves ambiguous/shared/boundary-violating source proposals as `SOURCE_REVIEW_REQUIRED`, rather than repeatedly reading them. The stage finalizer distinguishes `COMPLETED` from `PARTIAL_BUDGET`; neither signifies 100 contacts nor send eligibility. One owner-scoped **non-billable queue-preparation API** was added with explicit confirmation. Source-stage paid approval still requires a separate explicit client action at this milestone; one-click cross-stage authorization is the next P0.
+
+Release and test gates: exact-head CI, migration checks, manual auth+workspace isolation, reduced-motion UI smoke, server restart/recovery, and no-send checks. Do not enable paid worker until the complete versioned one-run approval is reviewed; do not conflate qualification with human-reviewed acceptance.
