@@ -341,3 +341,116 @@ test("quality STOP is distinguishable from billing reconciliation in progress", 
   assert.equal(view.tasks.queued, 1);
   assert.equal(view.contactVerification, "NOT_PERFORMED");
 });
+
+test("full-run discovery adds a new task after 100 raw observations without claiming 100 emails", async () => {
+  const actions = [];
+  const scope = { campaignId: "campaign-1", taskId: "task-23",
+    workspaceId: "work-1", ownerId: "owner-1",
+    leaseToken: "lease-23", limit: 10 };
+  const fixtureCampaign = {
+    query: "Find independent AI automation experts worldwide",
+    targetCount: 100, planVersion: "ai62-planner-v1",
+    idempotencyKey: "6c8d3e48-14fc-4f67-b0c1-e70cf9c48fad",
+  };
+  const now = new Date("2026-11-18T16:20:00Z");
+  let observations = 101;
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async () => [{ id: "campaign-1" }],
+    researchFullRun: { findUnique: async () => ({
+      status: "DISCOVERY", workspaceId: "work-1",
+      ownerId: "owner-1", maxDiscoveryCalls: 80,
+      expiresAt: new Date(now.getTime() + 3600_000),
+    }) },
+    researchCampaignRun: { findUnique: async () => ({
+      status: "RUNNING", workspaceId: "work-1", ownerId: "owner-1",
+      maxTasks: 80, startedTasks: 24, maxWorstCaseCents: 800,
+      committedWorstCaseCents: 240, worstCasePerCallCents: 10,
+      expiresAt: new Date(now.getTime() + 3600_000),
+    }) },
+    researchCampaign: {
+      findFirst: async () => ({ targetCount: 100 }),
+      findUnique: async () => fixtureCampaign,
+      updateMany: async () => {
+        throw Error("Must not finalize at 100 names");
+      },
+    },
+    researchCampaignTask: {
+      count: async ({ where }) => where.status?.in ? 0 :
+        where.status === "QUEUED" ? 0 : 24,
+      findUnique: async () => ({ taskIndex: 23 }),
+      findMany: async () => [
+        { taskIndex: 23, status: "COMPLETED", observedCount: 2 },
+        { taskIndex: 22, status: "COMPLETED", observedCount: 2 },
+      ],
+      findFirst: async () => ({ taskIndex: 23 }),
+      updateMany: async () => ({ count: 1 }),
+      create: async ({ data }) => {
+        actions.push(data);
+        return data;
+      },
+    },
+    researchCampaignObservation: {
+      count: async () => observations,
+      createMany: async ({ data }) => {
+        actions.push({ evidence: data.length });
+        observations += data.length;
+        return { count: data.length };
+      },
+    },
+  }) };
+  const result = await commitCampaignResearchResult(db, scope, preview, now);
+  assert.equal(result.uniqueAdded, 2);
+  assert.equal(result.campaignStatus, undefined);
+  assert.equal(result.inspectionCap, 250);
+  assert.equal(actions.length, 2);
+  assert.equal(actions[1].taskIndex, 24);
+  assert.equal(actions[1].status, "QUEUED");
+  assert.equal(actions[1].resultLimit, 10);
+});
+
+test("full-run caps model results at last public-inspection slot and cancels remaining paid tasks", async () => {
+  const actions = [];
+  const now = new Date("2026-11-18T16:20:00Z");
+  const scope = { campaignId: "campaign-1", taskId: "task-1",
+    workspaceId: "work-1", ownerId: "owner-1",
+    leaseToken: "lease-1", limit: 10 };
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async () => [{ id: "campaign-1" }],
+    researchFullRun: { findUnique: async () => ({
+      status: "DISCOVERY", workspaceId: "work-1",
+      ownerId: "owner-1",
+    }) },
+    researchCampaign: {
+      findFirst: async () => ({ targetCount: 100 }),
+      updateMany: async ({ data }) => {
+        actions.push("campaign:" + data.status);
+        return { count: 1 };
+      },
+    },
+    researchCampaignTask: {
+      count: async () => 0,
+      findUnique: async () => ({ taskIndex: 1 }),
+      findMany: async () => [{ taskIndex: 1, status: "COMPLETED",
+        observedCount: 2 }],
+      updateMany: async ({ data }) => {
+        if (data.status === "CANCELLED") actions.push("tasks:CANCELLED");
+        return { count: 1 };
+      },
+    },
+    researchCampaignObservation: {
+      count: async () => 250,
+      createMany: async ({ data }) => {
+        actions.push("saved:" + data.length);
+        return { count: data.length };
+      },
+    },
+    auditEvent: { create: async () => { actions.push("audit"); } },
+  }) };
+  // All 250 slots are already occupied; another model result cannot overflow.
+  const result = await commitCampaignResearchResult(db, scope, preview, now);
+  assert.equal(result.campaignStatus, "PARTIAL");
+  assert.equal(result.uniqueAdded, 0);
+  assert.equal(result.omittedAtInspectionCap, 2);
+  assert.deepEqual(actions,
+    ["tasks:CANCELLED", "campaign:PARTIAL", "audit"]);
+});
