@@ -8,7 +8,6 @@ const FINISHED_EMAIL = new Set(["REVIEW_REQUIRED", "CHECKING"]);
 const NEEDS_RESOLUTION = new Set([
   "UNCHECKED", "BLOCKED", "NO_EMAIL",
 ]);
-const RESEARCH_EMAIL = /^[a-z0-9][a-z0-9._%+-]{0,63}@[a-z0-9.-]+\.[a-z]{2,24}$/;
 
 function normalizeIdentity(row) {
   if (typeof row?.name !== "string" || typeof row?.category !== "string") {
