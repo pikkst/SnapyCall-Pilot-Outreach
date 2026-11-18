@@ -294,6 +294,33 @@ export function requireGemini3CountTokensWithinBudget({
     maxInputTokens });
 }
 
+
+
+// The existing trusted HTTP client (see ai-research.js) owns transport,
+// timeout and error sanitation. This preflight intentionally performs ONLY
+// countTokens. The paid generateContent request is not authorized here.
+export async function countGemini3TextOnlyInput({
+  model, payload, maxInputTokens, apiKey,
+}, post, signal) {
+  if (typeof post !== "function" ||
+      typeof apiKey !== "string" || apiKey.length < 8 ||
+      !Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
+      maxInputTokens > 1_000_000) {
+    throw new TypeError("Trusted Gemini 3 countTokens preflight required");
+  }
+  const countRequest = buildGemini3CountTokensRequest({ model, payload });
+  // Snapshot must be stable across the await; otherwise token accounting for
+  // one prompt could mistakenly approve a different prompt at dispatch.
+  const result = await post(
+    "https://generativelanguage.googleapis.com/v1beta/models/" +
+      encodeURIComponent(model) + ":countTokens",
+    { "x-goog-api-key": apiKey }, countRequest, signal,
+  );
+  return requireGemini3CountTokensWithinBudget({
+    payload, countRequest, countResponse: result, maxInputTokens,
+  });
+}
+
 // Interpret a response only AFTER an independently authorized provider call.
 // Usage is telemetry only: no billingEvidence, refunds, or search charges are
 // certified by this parser. Missing/ambiguous billing is handled by the worker.
