@@ -231,6 +231,7 @@ test("owner stop is idempotent, survives restarts, never touches in-flight spend
   const db = { $transaction: async fn => fn({
     $queryRaw: async parts => parts.join(" ").includes("PartnerMembership")
       ? [{ revokedAt: null }] : [{ id: campaignId }],
+    researchFullRun: { findUnique: async () => null },
     researchCampaignRun: {
       findUnique: async () => existing,
       update: async ({ data }) => {
@@ -261,6 +262,7 @@ test("stopped or foreign run cannot be mutated", async () => {
   const db = { $transaction: async fn => fn({
     $queryRaw: async parts => parts.join(" ").includes("PartnerMembership")
       ? [{ revokedAt: null }] : [{ id: campaignId }],
+    researchFullRun: { findUnique: async () => null },
     researchCampaignRun: {
       findUnique: async () => ({ ...fakeRun, status: "PAUSED" }),
       update: async () => { updated = true; },
