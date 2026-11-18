@@ -24,7 +24,10 @@ test("existing campaigns open read-only and retain selected tenant context", () 
   assert.match(ui, /partnerTab !== "discovery"/);
   assert.match(ui, /campaignListStatus !== "ready"/);
   assert.match(ui, /Date\.parse\(b\.createdAt\) - Date\.parse\(a\.createdAt\)/);
-  assert.match(ui, /if \(latest\) void openCampaignProgress\(activeWorkspaceId, latest\.id\)/);
+  assert.match(ui, /void openCampaignProgress\(activeWorkspaceId, latest\.id\)/);
+  assert.match(ui, /setCampaignTestQuery\(latest\.query\)/);
+  assert.match(ui, /Number\(b\.status === "RUNNING"\)/);
+  assert.match(researchPanel, /setCampaignTestQuery\(selected\.query\)/);
   assert.match(ui, /if \(activeWorkspaceId !== workspaceId\) return/);
   assert.match(researchPanel, /value=\{campaignProgressId \?\? ""\}/);
   assert.match(researchPanel, /openCampaignProgress\(p\.id, event\.target\.value\)/);
