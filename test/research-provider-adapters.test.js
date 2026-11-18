@@ -772,3 +772,84 @@ test("Gemini countTokens rejects every uncounted generation field before HTTP", 
   }
   assert.equal(calls, 0, "Uncounted fields must never reach the provider");
 });
+
+
+test("bounded Tavily transport performs one approved-shape HTTP call and binds source evidence", async () => {
+  const { searchWithBoundedTavily } =
+    await import("../server/research-provider-adapters.js");
+  let calls = 0;
+  const signal = new AbortController().signal;
+  const observedAt = "2026-11-18T00:00:00.000Z";
+  const output = await searchWithBoundedTavily({
+    query, maxResults: 2, observedAt, apiKey: "tvly-test-only-key",
+  }, async (url, headers, body, receivedSignal) => {
+    calls++;
+    assert.equal(url, "https://api.tavily.com/search");
+    assert.deepEqual(headers, { authorization: "Bearer tvly-test-only-key" });
+    assert.equal(body.search_depth, "basic");
+    assert.equal(body.max_results, 2);
+    assert.equal(body.auto_parameters, false);
+    assert.equal(body.include_answer, false);
+    assert.equal(body.include_raw_content, false);
+    assert.equal(body.include_images, false);
+    assert.equal(receivedSignal, signal);
+    return { results: [{
+      url: source, title: "Verified expert",
+      content: "Verified Professional offers AI automation consulting",
+    }], usage: { credits: 1 } };
+  }, signal);
+  assert.equal(calls, 1);
+  assert.equal(output.status, "EVIDENCE_AVAILABLE");
+  assert.equal(output.reportedCredits, 1);
+  assert.equal(output.manifest.records.length, 1);
+  assert.equal(output.manifest.records[0].sourceProvider, "tavily");
+  assert.equal(output.manifest.records[0].url, source);
+});
+
+test("bounded Tavily transport fails closed before HTTP for invalid configuration", async () => {
+  const { searchWithBoundedTavily } =
+    await import("../server/research-provider-adapters.js");
+  let calls = 0;
+  const post = async () => {
+    calls++;
+    return { results: [] };
+  };
+  const base = {
+    query, maxResults: 2, observedAt: "2026-11-18T00:00:00.000Z",
+    apiKey: "tvly-test-only-key",
+  };
+  for (const override of [
+    { apiKey: "" }, { apiKey: "not-a-tavily-key" },
+    { maxResults: 21 }, { maxResults: "2" },
+    { observedAt: "2026-11-18" },
+    { observedAt: "2026-13-18T00:00:00.000Z" },
+    { query: "short" },
+  ]) await assert.rejects(
+    () => searchWithBoundedTavily({ ...base, ...override }, post),
+    TypeError,
+  );
+  assert.equal(calls, 0);
+});
+
+test("bounded Tavily transport propagates uncertain errors without retrying", async () => {
+  const { searchWithBoundedTavily } =
+    await import("../server/research-provider-adapters.js");
+  let calls = 0;
+  const run = post => searchWithBoundedTavily({
+    query, maxResults: 2, observedAt: "2026-11-18T00:00:00.000Z",
+    apiKey: "tvly-test-only-key",
+  }, post);
+  await assert.rejects(() => run(async () => {
+    calls++;
+    throw new Error("Synthetic upstream transport timeout");
+  }), /Synthetic upstream transport timeout/);
+  assert.equal(calls, 1);
+  const empty = await run(async () => {
+    calls++;
+    return { results: [] };
+  });
+  assert.equal(empty.status, "NO_USABLE_EVIDENCE");
+  assert.equal(empty.manifest, null);
+  assert.equal(empty.billableCallPossible, true);
+  assert.equal(calls, 2);
+});
