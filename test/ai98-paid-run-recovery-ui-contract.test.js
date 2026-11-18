@@ -16,7 +16,7 @@ test("paused paid run offers a new free plan rather than replay or second execut
   const end = ui.indexOf('aria-label="Approve a one-launch campaign"', start);
   assert.ok(start >= 0 && end > start);
   const panel = ui.slice(start, end);
-  assert.match(panel, /campaignRunApproval\?\.run\?\.status === "PAUSED"/);
+  assert.match(ui.slice(start - 160, start), /campaignRunApproval\?\.run\?\.status === "PAUSED"/);
   assert.match(panel, /no automatic retry/i);
   assert.match(panel, /immutable paid-run/);
   assert.match(panel, /createManualTestCampaign\(p\.id\)/);
