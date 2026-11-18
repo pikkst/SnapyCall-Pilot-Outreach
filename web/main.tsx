@@ -2303,8 +2303,12 @@ function App() {
                     {campaignProgressId && <section className="review-panel"
                       aria-label="Campaign research progress" aria-live="polite">
                       <h4>Campaign progress</h4>
-                      {campaignProgressStatus === "loading" && <p role="status">
-                        Loading committed research progress…</p>}
+                      {campaignProgressStatus === "loading" &&
+                        <div className="research-run-window research-run-loading"
+                          role="status" aria-label="Loading research status">
+                          <span className="research-activity-spinner" aria-hidden="true"/>
+                          <span>Connecting to saved research progress…</span>
+                        </div>}
                       {campaignProgressStatus === "error" && <p role="alert">
                         Progress could not be loaded.
 
@@ -2333,8 +2337,28 @@ function App() {
                                     : "Review findings or plan a new campaign."}</p>
                             </div>
                             {campaignRunApproval?.run?.status === "RUNNING" &&
-                              <span className="research-running-indicator" aria-label="Search is active"/>}
+                              !campaignProgressLiveWarning &&
+                              <span className="research-running-indicator"
+                                aria-hidden="true"/>}
                           </div>
+                          {campaignRunApproval?.run &&
+                            ["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
+                            <div className="research-run-activity" role="status"
+                              aria-label="Research connection activity">
+                              {campaignProgressLiveWarning
+                                ? <>
+                                    <span className="research-activity-spinner research-activity-reconnect"
+                                      aria-hidden="true"/>
+                                    <span>Connection interrupted. Reconnecting to the server; latest confirmed
+                                      progress remains below.</span>
+                                  </>
+                                : <>
+                                    <span className="research-activity-spinner" aria-hidden="true"/>
+                                    <span>{campaignRunApproval.run.status === "APPROVED"
+                                      ? "Run approved. Waiting for the server to start searching…"
+                                      : "Research is running on the server. Checking for new results automatically…"}</span>
+                                  </>}
+                            </div>}
                           <progress aria-label="Research task completion"
                             max={Math.max(1, campaignRunApproval?.run?.maxTasks ??
                               campaignProgress.plannedTasks)}
