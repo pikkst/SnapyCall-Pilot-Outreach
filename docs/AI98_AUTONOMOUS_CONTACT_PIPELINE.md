@@ -95,7 +95,8 @@ Reuse existing adapter interfaces and extend only required capabilities:
 - [x] Create single-run UX PR #142 (unmerged; CI verified on prior HEAD).
 - [x] Draft expanded approved-call cap PR #143 (unmerged; must verify exact HEAD).
 - [ ] **P0** Durable orchestration from discovered observations to person-specific source resolution and existing independent email triage, within appropriately expanded *explicit* approval; persist per-observation checkpoints.
-- [ ] **P0** Versioned deterministic qualified-evidence decision and count; no automatic contact insertion under current reviewed Candidate acceptance contract.
+- [x] **P0 first slice** Read-only deterministic qualified-evidence count from persisted named-email triage; reject duplicate email/source, missing digest and shared sources. Shown only when bounded snapshot is reliable. This does NOT perform automatic source resolution, contact insertion or review.
+- [ ] **P0 continuation** Versioned durable qualified-evidence persistence and adaptive target-driven orchestrator, with no automatic Candidate insertion under current reviewed acceptance contract.
 - [ ] **P0** Adaptive replenishment until 100 qualified or budget/source/time exhaustion; reuse existing task planner, no uncontrolled generation.
 - [ ] **P0** Automatic exception segregation and final bulk review; minimize per-contact clicks.
 - [ ] **P1** Provider capabilities for Gemini/OpenAI/Claude with normal error/usage evidence.
@@ -115,3 +116,7 @@ At least: 100 synthetic valid named-email fixtures, shared URL for 5 people, opa
 5. **Measurement:** no verified actual conversion/cost-per-qualified-contact. Run read-only baseline and synthetic complete E2E before paid production test.
 
 **Next PR**: implement durable `PERSON_SOURCE_RESOLUTION -> EMAIL_EVIDENCE` handoff using existing tables/adapters and scoped endpoints; test source ambiguity + idempotence + auth + crash/restart. Do not merge/deploy or run paid providers without explicit approval. Record each completed slice and exact commit/CI evidence in this document.
+
+## 11. Implementation checkpoint — 2026-11-18
+
+On PR #143 branch, added `server/research-qualified-evidence.js` and regression tests. Reuses existing canonical observation source selection and computes read-only **email evidence ready for review** counts on the already authorized `GET /api/research-campaigns/:id/email-triage`; central running window displays the count if the bounded snapshot is complete. Duplicated email/source, missing name/category/digest, generic inbox, opaque source and uninspected observations never count. No DB mutation, schema migration, provider call, contact insertion, or send. **This is a measurable funnel foundation, not 100-contact automation.** Next: durable person-specific resolution and email enrichment, then adaptive replenishment and minimal-click bulk review. Exact HEAD CI and full authenticated E2E still required.
