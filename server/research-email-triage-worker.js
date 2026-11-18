@@ -28,6 +28,35 @@ function validateScope({ campaignId, workspaceId, ownerId }) {
   }
 }
 
+// Read-only eligibility projection from already stored, owner-scoped
+// observations. URLs are used only locally; no personal data is returned.
+// READY means safe to REQUEST a separate immutable owner approval, not proof
+// that the cited page is a person's profile or contains a named email.
+export function emailTriageSourceReadiness(campaignStatus, sources) {
+  if (!Array.isArray(sources) || sources.length > MAX_PAGES + 1) {
+    throw new TypeError("Bounded saved-source snapshot required");
+  }
+  const total = sources.length;
+  const directSources = sources.map(observationInspectionSource);
+  const inspectable = directSources.filter(Boolean);
+  const uniqueSources = new Set(inspectable).size;
+  const code = !["COMPLETED", "PARTIAL"].includes(campaignStatus)
+    ? "DISCOVERY_NOT_TERMINAL"
+    : total === 0 ? "NO_OBSERVATIONS"
+    : total > MAX_PAGES ? "EMAIL_TRIAGE_PAGE_CAP_EXCEEDED"
+    : inspectable.length !== total ? "EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED"
+    : uniqueSources !== total ? "EMAIL_TRIAGE_SHARED_SOURCE_REVIEW_REQUIRED"
+    : "READY_FOR_OWNER_APPROVAL";
+  return Object.freeze({
+    eligible: code === "READY_FOR_OWNER_APPROVAL",
+    code, observations: total, inspectableObservations: inspectable.length,
+    uniqueSources,
+    // Shared or directory references are not independently verified profiles.
+    namedPersonEmailVerified: false,
+    sendingEnabled: false,
+  });
+}
+
 export async function approveEmailTriage(db, {
   campaignId, workspaceId, ownerId, maxPages, confirmPublicInspection,
 }, { now = () => new Date() } = {}) {
@@ -80,23 +109,14 @@ export async function approveEmailTriage(db, {
     if (sources.length !== count) {
       return { status: 409, code: "EMAIL_TRIAGE_SOURCE_SNAPSHOT_CHANGED" };
     }
-    const inspectable = sources.filter(source =>
-      observationInspectionSource(source)).length;
-    // Approval is immutable and an inspected observation cannot be retried.
-    // Do not consume a mixed batch's one-shot approval on opaque grounding
-    // redirects, even when some other observations are directly inspectable.
-    if (inspectable !== count) {
-      return { status: 409, code: "EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED",
-        availableObservations: count, inspectableObservations: inspectable };
-    }
-    // One public page reused for multiple people is not independent
-    // person evidence. Block the whole immutable batch before authorizing
-    // a fetch that would otherwise fail only after consuming its claim.
-    const effectiveSources = sources.map(observationInspectionSource);
-    if (new Set(effectiveSources).size !== count) {
-      return { status: 409, code: "EMAIL_TRIAGE_SHARED_SOURCE_REVIEW_REQUIRED",
+    const readiness = emailTriageSourceReadiness(campaign.status, sources);
+    // Do not consume one-shot approval for an uninspectable or shared URL.
+    // The GET preflight and the transactional approval use this SAME rule.
+    if (!readiness.eligible) {
+      return { status: 409, code: readiness.code,
         availableObservations: count,
-        uniqueSources: new Set(effectiveSources).size };
+        inspectableObservations: readiness.inspectableObservations,
+        uniqueSources: readiness.uniqueSources };
     }
     // Reject reauthorization if any previously claimed page exists.
     const previouslyChecked = await tx.researchCampaignObservation.count({
