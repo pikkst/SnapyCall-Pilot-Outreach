@@ -190,12 +190,14 @@ export async function tickFullRunStages(db, {
   transition = transitionFullRunStage,
   progress = qualifiedFullRunProgress,
   stopAtGoal = stopFullRunSourceAtGoal,
+  createSourceCycle = createNextSourceCycle,
   now = () => new Date(),
 } = {}) {
   const clock = now();
   if (!(clock instanceof Date) || !Number.isFinite(clock.getTime()) ||
       [approveTriage, enqueue, approveSource, transition,
-        progress, stopAtGoal].some(fn => typeof fn !== "function")) {
+        progress, stopAtGoal, createSourceCycle].some(fn =>
+          typeof fn !== "function")) {
     throw new TypeError("Trusted full-run stage controller required");
   }
   const full = await db.researchFullRun.findFirst({
@@ -372,7 +374,7 @@ export async function tickFullRunStages(db, {
     if (["COMPLETED", "PARTIAL_BUDGET"].includes(approval.status)) {
       // The original approval is immutable. Continuation receives only
       // previously unattempted jobs and whatever source budget remains.
-      const next = await createNextSourceCycle(db, scope, { now: clock });
+      const next = await createSourceCycle(db, scope, { now: clock });
       if (next.status === "CREATED" || next.status === "WAITING") {
         return { status: "WAITING", code: next.code };
       }
