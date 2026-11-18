@@ -2719,39 +2719,6 @@ function App() {
                             {qualifiedManifest.selectedCount > 0 &&
                               qualifiedManifest.reliable &&
                               qualifiedManifest.batchEnabled && <>
-                              {campaignRunApproval.dailyQuota &&
-                              campaignMaxTasks + campaignSourceCalls >
-                                campaignRunApproval.dailyQuota.remaining &&
-                              <div role="alert" className="campaign-blocker"
-                                aria-label="Daily search quota warning">
-                                <strong>Daily research limit would be exceeded</strong>
-                                <p>This run may use up to {campaignMaxTasks +
-                                  campaignSourceCalls} paid searches (discovery
-                                  and source enrichment), but only
-                                  {" "}{campaignRunApproval.dailyQuota.remaining} of
-                                  today's slots remain. Reduce the run size,
-                                  update your personal limit if possible, or
-                                  wait until {new Date(
-                                    campaignRunApproval.dailyQuota.resetsAt
-                                  ).toLocaleString()} for the UTC reset.</p>
-                                <p>Personal: {campaignRunApproval.dailyQuota.personalUsed}
-                                  /{campaignRunApproval.dailyQuota.personalLimit}.
-                                  Workspace: {campaignRunApproval.dailyQuota.workspaceUsed}
-                                  /{campaignRunApproval.dailyQuota.workspaceLimit}.
-                                  The workspace safety cap cannot be increased.</p>
-                                <button type="button" className="secondary"
-                                  onClick={() => {
-                                    setFocusResearchDailyLimits(true);
-                                    setPartnerTab("settings");
-                                  }}>
-                                  Open research limit settings
-                                </button>
-                              </div>}
-                            {!campaignRunApproval.dailyQuota &&
-                              <p role="alert" className="campaign-blocker">
-                                Daily quota unavailable. Approval is blocked
-                                until the server confirms the remaining capacity.
-                              </p>}
                             <label className="campaign-contact-confirm">
                                 <input type="checkbox"
                                   checked={qualifiedBatchConfirmed}
@@ -2913,6 +2880,39 @@ function App() {
                                 50000 && <p role="alert">The total approval
                                   exceeds the $500 hard ceiling. Reduce the
                                   number of paid requests.</p>}
+                              {campaignRunApproval.dailyQuota &&
+                              campaignMaxTasks + campaignSourceCalls >
+                                campaignRunApproval.dailyQuota.remaining &&
+                              <div role="alert" className="campaign-blocker"
+                                aria-label="Daily search quota warning">
+                                <strong>Daily research limit would be exceeded</strong>
+                                <p>This run may use up to {campaignMaxTasks +
+                                  campaignSourceCalls} paid searches (discovery
+                                  and source enrichment), but only
+                                  {" "}{campaignRunApproval.dailyQuota.remaining} of
+                                  today's slots remain. Reduce the run size,
+                                  update your personal limit if possible, or
+                                  wait until {new Date(
+                                    campaignRunApproval.dailyQuota.resetsAt
+                                  ).toLocaleString()} for the UTC reset.</p>
+                                <p>Personal: {campaignRunApproval.dailyQuota.personalUsed}
+                                  /{campaignRunApproval.dailyQuota.personalLimit}.
+                                  Workspace: {campaignRunApproval.dailyQuota.workspaceUsed}
+                                  /{campaignRunApproval.dailyQuota.workspaceLimit}.
+                                  The workspace safety cap cannot be increased.</p>
+                                <button type="button" className="secondary"
+                                  onClick={() => {
+                                    setFocusResearchDailyLimits(true);
+                                    setPartnerTab("settings");
+                                  }}>
+                                  Open research limit settings
+                                </button>
+                              </div>}
+                            {!campaignRunApproval.dailyQuota &&
+                              <p role="alert" className="campaign-blocker">
+                                Daily quota unavailable. Approval is blocked
+                                until the server confirms the remaining capacity.
+                              </p>}
                             <label className="campaign-contact-confirm">
                               <input type="checkbox" checked={campaignNoReplayConfirmed}
                                 onChange={event => setCampaignNoReplayConfirmed(event.target.checked)}/>
