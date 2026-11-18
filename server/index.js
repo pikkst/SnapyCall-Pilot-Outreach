@@ -25,6 +25,7 @@ import { approvePersonSourceResearch } from "./research-person-source-approval.j
 import { enqueuePersonSourceJobs } from "./research-person-source-queue.js";
 import { startPersonSourceWorker } from "./research-person-source-runner.js";
 import { startFullRunStageWorker } from "./research-full-run-stages.js";
+import { fullRunReadiness } from "./research-full-run-readiness.js";
 import { readQualifiedContactManifest, approveQualifiedContactBatch }
   from "./research-contact-batch.js";
 import { startContactBatchWorker } from "./research-contact-batch-worker.js";
@@ -2027,11 +2028,9 @@ app.post("/api/research-campaigns/:id/approve-run",
     const identity = await partnerIdentity(req);
     if (!identity) return res.status(401).json({ error: "Unauthorized" });
     if (req.body && Object.prototype.hasOwnProperty.call(req.body, "fullRun") &&
-        !(env.AI_FULL_RUN_ENABLED === "true" &&
-          env.AI_PERSON_SOURCE_APPROVAL_ENABLED === "true" &&
-          env.AI_PERSON_SOURCE_EXECUTOR_ENABLED === "true" &&
-          env.AI_EMAIL_TRIAGE_ENABLED === "true")) {
-      return res.status(503).json({ code: "FULL_RUN_DISABLED" });
+        !fullRunReadiness(env).enabled) {
+      return res.status(503).json({ code: "FULL_RUN_DISABLED",
+        missingStages: fullRunReadiness(env).missingStages });
     }
     const result = await approveCampaignRun(prisma, {
       campaignId: req.params.id, workspaceId: req.candidateScope,
@@ -2102,10 +2101,8 @@ app.get("/api/research-campaigns/:id/approved-run",
     return res.json({ run: run ? publicRunStatus(run) : null,
       fullRun: fullRun ? { ...fullRun, contactAcceptanceAuthorized: false,
         sendingEnabled: false } : null,
-      fullRunEnabled: env.AI_FULL_RUN_ENABLED === "true" &&
-        env.AI_PERSON_SOURCE_APPROVAL_ENABLED === "true" &&
-        env.AI_PERSON_SOURCE_EXECUTOR_ENABLED === "true" &&
-        env.AI_EMAIL_TRIAGE_ENABLED === "true",
+      fullRunEnabled: fullRunReadiness(env).enabled,
+      fullRunMissingStages: fullRunReadiness(env).missingStages,
       priceEnvelope,
       autonomousRunEnabled: env.AI_AGENT_AUTORUN_ENABLED === "true" &&
         env.AI_AGENT_RESEARCH_ENABLED === "true" &&
@@ -2514,15 +2511,8 @@ async function start() {
     ? startEmailTriageWorker(prisma) : () => {};
   const stopContactBatchWorker = env.AI_CONTACT_BATCH_ENABLED === "true"
     ? startContactBatchWorker(prisma) : () => {};
-  const stopFullRunWorker =
-    env.AI_FULL_RUN_ENABLED === "true" &&
-    env.AI_PERSON_SOURCE_APPROVAL_ENABLED === "true" &&
-    env.AI_PERSON_SOURCE_EXECUTOR_ENABLED === "true" &&
-    env.AI_EMAIL_TRIAGE_ENABLED === "true" &&
-    env.AI_AGENT_AUTORUN_ENABLED === "true" &&
-    env.AI_AGENT_RESEARCH_ENABLED === "true" &&
-    env.AI_AGENT_EXECUTOR_ENABLED === "true"
-      ? startFullRunStageWorker(prisma) : () => {};
+  const stopFullRunWorker = fullRunReadiness(env).enabled
+    ? startFullRunStageWorker(prisma) : () => {};
   const stopPersonSourceWorker =
     env.AI_PERSON_SOURCE_EXECUTOR_ENABLED === "true" &&
     env.AI_PERSON_SOURCE_APPROVAL_ENABLED === "true"
