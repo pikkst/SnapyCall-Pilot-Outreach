@@ -28,6 +28,9 @@ model Candidate {
   legalBasis String?
   contactReviewed Boolean @default(false)
   suppressed Boolean @default(false)
+  // Removed from active workspace lists, without destroying research evidence.
+  removedAt DateTime?
+  removedBy String?
   status String @default("NEW")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
