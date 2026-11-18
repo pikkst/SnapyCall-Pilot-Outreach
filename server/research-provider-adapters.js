@@ -494,19 +494,24 @@ export function normalizeBoundedTavilySearch({ response, maxResults, observedAt 
 // Caller MUST hold the owner-scoped task lease, approved search entitlement
 // and combined monetary reservation before calling this function. It is not
 // reachable from campaign execution until those server-side gates exist.
+function requireBoundedTavilyTransportConfig({ apiKey, observedAt, post }) {
+    if (typeof post !== "function" || typeof apiKey !== "string" ||
+        !/^tvly-[A-Za-z0-9_-]{8,}$/.test(apiKey) ||
+        typeof observedAt !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(observedAt) ||
+        !Number.isFinite(Date.parse(observedAt)) ||
+        new Date(observedAt).toISOString() !== observedAt) {
+      throw new TypeError("Trusted bounded Tavily retrieval configuration required");
+    }
+
+}
+
 export async function searchWithBoundedTavily({
   query, maxResults, observedAt, apiKey,
 }, post, signal) {
   // Validate the complete local request BEFORE any potentially charged call.
   const request = buildBoundedTavilySearchRequest({ query, maxResults });
-  if (typeof post !== "function" || typeof apiKey !== "string" ||
-      !/^tvly-[A-Za-z0-9_-]{8,}$/.test(apiKey) ||
-      typeof observedAt !== "string" ||
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(observedAt) ||
-      !Number.isFinite(Date.parse(observedAt)) ||
-      new Date(observedAt).toISOString() !== observedAt) {
-    throw new TypeError("Trusted bounded Tavily retrieval configuration required");
-  }
+  requireBoundedTavilyTransportConfig({ apiKey, observedAt, post });
   // A second call after a transport error could charge again: no retry here.
   const response = await post("https://api.tavily.com/search",
     { authorization: "Bearer " + apiKey }, request, signal);
@@ -525,6 +530,9 @@ export async function runBoundedTavilyGemini3Stages({
   // Validate both credentials and all static bounds BEFORE calling Tavily.
   // In particular, an absent Gemini key must not waste a Tavily credit.
   buildBoundedTavilySearchRequest({ query, maxResults });
+  requireBoundedTavilyTransportConfig({
+    apiKey: tavilyApiKey, observedAt, post: tavilyPost,
+  });
   if (model !== "gemini-3-flash-preview" ||
       !Number.isSafeInteger(limit) || limit < 1 || limit > 20 ||
       !Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
