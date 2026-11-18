@@ -5,7 +5,7 @@ import { lockActiveWorkspaceMembership }
   from "./workspace-access.js";
 import { runOnePersonSourceJob }
   from "./research-person-source-executor.js";
-import { verifyPersonSourceProposal }
+import { verifyPersonSourceProposal, personSourceReadAuthorized }
   from "./research-person-source-evidence.js";
 import { finalizeSourceCycle } from "./research-person-source-cycles.js";
 
@@ -34,13 +34,12 @@ export async function quarantineUnverifiablePersonSource(db, scope, code) {
     if (campaign.length !== 1) {
       return { status: "BLOCKED", code: "CAMPAIGN_NOT_FOUND" };
     }
-    const approved = await tx.researchPersonSourceApproval.findUnique({
-      where: { campaignId: scope.campaignId },
+    const job = await tx.researchPersonSourceJob.findFirst({
+      where: { id: scope.jobId, campaignId: scope.campaignId },
+      select: { cycleIndex: true, status: true },
     });
-    if (!approved || approved.ownerId !== scope.ownerId ||
-        approved.workspaceId !== scope.workspaceId ||
-        approved.publicInspectionAuthorized !== true ||
-        !["APPROVED", "RUNNING"].includes(approved.status)) {
+    if (!job || job.status !== "COMPLETED" ||
+        !await personSourceReadAuthorized(tx, scope, job, new Date())) {
       return { status: "BLOCKED", code: "PUBLIC_INSPECTION_NOT_AUTHORIZED" };
     }
     const updated = await tx.researchPersonSourceJob.updateMany({
