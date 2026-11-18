@@ -388,3 +388,100 @@ test("Gemini text-only response rejects generated search metadata and incomplete
     query, limit: 3, manifest: { ...manifest, digest: "0".repeat(64) },
   }), TypeError);
 });
+
+
+test("bounded Tavily request disables generation, raw fetch and automatic expansion", async () => {
+  const { buildBoundedTavilySearchRequest } =
+    await import("../server/research-provider-adapters.js");
+  const request = buildBoundedTavilySearchRequest({
+    query, maxResults: 3,
+  });
+  assert.deepEqual(request, {
+    query, search_depth: "basic", topic: "general", max_results: 3,
+    include_answer: false, include_raw_content: false, include_images: false,
+    auto_parameters: false, include_usage: true,
+  });
+  assert.equal(Object.isFrozen(request), true);
+  for (const input of [
+    { query: "short", maxResults: 2 },
+    { query, maxResults: 21 },
+    { query, maxResults: 0 },
+    { query, maxResults: "3" },
+  ]) assert.throws(() => buildBoundedTavilySearchRequest(input), TypeError);
+});
+
+test("bounded Tavily normalization yields only provider-returned HTTPS evidence", async () => {
+  const { normalizeBoundedTavilySearch, buildGemini3TextOnlyPayload } =
+    await import("../server/research-provider-adapters.js");
+  const observedAt = "2026-11-18T00:00:00.000Z";
+  const result = normalizeBoundedTavilySearch({
+    maxResults: 3, observedAt,
+    response: {
+      results: [
+        { url: "https://consultants.example.org/experts/verified#bio",
+          title: "Expert profile",
+          content: "Verified Professional provides AI automation services." },
+        { url: "https://consultants.example.org/experts/verified",
+          title: "Duplicate result", content: "Duplicate snippet." },
+        { url: "https://127.0.0.1/private",
+          title: "Unsafe source", content: "Do not use." },
+      ],
+      usage: { credits: 1 },
+    },
+  });
+  assert.equal(result.status, "EVIDENCE_AVAILABLE");
+  assert.equal(result.manifest.records.length, 1);
+  assert.equal(result.manifest.records[0].sourceProvider, "tavily");
+  assert.equal(result.manifest.records[0].url,
+    "https://consultants.example.org/experts/verified");
+  assert.equal(result.manifest.records[0].sourceId.length, 64);
+  assert.equal(result.reportedCredits, 1);
+  assert.equal(result.billableCallPossible, true);
+  const prompt = buildGemini3TextOnlyPayload({
+    query, limit: 3, manifest: result.manifest,
+  });
+  assert.equal(Object.hasOwn(prompt, "tools"), false);
+});
+
+test("empty or unsafe Tavily response never produces a manifest for Gemini", async () => {
+  const { normalizeBoundedTavilySearch } =
+    await import("../server/research-provider-adapters.js");
+  for (const results of [
+    [], [{ url: "http://example.org", title: "Invalid",
+      content: "Unsafe URL." }],
+    [{ url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/unsafe",
+      title: "Opaque", content: "Unresolved Google link." }],
+  ]) {
+    const output = normalizeBoundedTavilySearch({
+      response: { results }, maxResults: 2,
+      observedAt: "2026-11-18T00:00:00.000Z",
+    });
+    // A remote request may have been charged even if it produced no evidence.
+    assert.equal(output.status, "NO_USABLE_EVIDENCE");
+    assert.equal(output.manifest, null);
+    assert.equal(output.billableCallPossible, true);
+    assert.equal(output.reportedCredits, null);
+  }
+});
+
+test("oversized or invalid Tavily envelope fails before accepting any results", async () => {
+  const { normalizeBoundedTavilySearch } =
+    await import("../server/research-provider-adapters.js");
+  const entry = {
+    url: "https://consultants.example.org/a",
+    title: "Professional", content: "Professional profile description",
+  };
+  for (const [response, maxResults] of [
+    [{ results: [entry, entry] }, 1],
+    [{ results: "invalid" }, 2],
+    [null, 2],
+    [{ results: [entry] }, 21],
+  ]) assert.throws(() => normalizeBoundedTavilySearch({
+    response, maxResults, observedAt: "2026-11-18T00:00:00.000Z",
+  }), TypeError);
+  const result = normalizeBoundedTavilySearch({
+    response: { results: [entry], usage: { credits: "1" } },
+    maxResults: 1, observedAt: "2026-11-18T00:00:00.000Z",
+  });
+  assert.equal(result.reportedCredits, null);
+});
