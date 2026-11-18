@@ -18,6 +18,7 @@ const now = new Date("2026-11-18T15:35:00Z");
 function fixture({ stage = "DISCOVERY", status = "PARTIAL",
   triageStatus = "IDLE", observations = 2, qualified = 0,
   jobs = 2, sourceStatus = null, expires = false,
+  discoveryPaused = false, uncertainSourceJobs = 0,
   model = "gemini-3-flash-preview" } = {}) {
   const actions = [];
   const full = { id: "cmabcdefghijklmnopqrsfull",
@@ -34,11 +35,16 @@ function fixture({ stage = "DISCOVERY", status = "PARTIAL",
       id: scope.campaignId, status, emailTriageStatus: triageStatus,
     }) },
     researchCampaignObservation: { count: async () => observations },
+    researchCampaignRun: { findUnique: async () => ({
+      status: discoveryPaused ? "PAUSED" : "RUNNING",
+      expiresAt: new Date(now.getTime() + 600000),
+    }) },
     researchPersonSourceApproval: { findUnique: async () => sourceStatus
       ? { ...scope, status: sourceStatus, provider: full.provider,
         model: full.model, priceVersion: full.priceVersion,
         publicInspectionAuthorized: true } : null },
-    researchPersonSourceJob: { count: async () => jobs },
+    researchPersonSourceJob: { count: async ({ where } = {}) =>
+      where?.OR ? uncertainSourceJobs : jobs },
     aiSetting: { findUnique: async () => ({
       provider: "gemini", model: "gemini-3-flash-preview",
     }) },
@@ -233,6 +239,7 @@ test("goal commit blocks further paid source claims in same locked transaction",
       count: async () => 1,
       findMany: async () => evidence,
     },
+    researchPersonSourceJob: { count: async () => 0 },
     auditEvent: { create: async ({ data }) => {
       updates.push("audit");
       assert.equal(data.metadata.sourceNewPaidClaimsStopped, true);
@@ -265,9 +272,27 @@ test("unproven source evidence never stops a paid stage early", async () => {
     }) },
     researchCampaignObservation: { count: async () => 0,
       findMany: async () => [] },
+    researchPersonSourceJob: { count: async () => 0 },
     auditEvent: { create: async () => { throw Error("Must not write"); } },
   }) };
   const result = await stopFullRunSourceAtGoal(db, scope);
   assert.equal(result.status, "WAITING");
   assert.equal(result.code, "QUALIFIED_TARGET_NOT_REACHED");
+});
+
+test("paused discovery is visible as review-required instead of a running spinner", async () => {
+  const f = fixture({ status: "RUNNING", discoveryPaused: true });
+  const result = await tickFullRunStages(f.db, f.input);
+  assert.equal(result.status, "NEEDS_REVIEW");
+  assert.equal(result.code, "DISCOVERY_APPROVAL_RECONCILIATION_REQUIRED");
+  assert.deepEqual(f.actions, ["stage:NEEDS_REVIEW"]);
+});
+
+test("uncertain source bill blocks qualified-target success until reconciled", async () => {
+  const f = fixture({ stage: "SOURCE_RUNNING", qualified: 100,
+    uncertainSourceJobs: 1 });
+  const result = await tickFullRunStages(f.db, f.input);
+  assert.equal(result.status, "NEEDS_REVIEW");
+  assert.equal(result.code, "SOURCE_JOB_BILLING_RECONCILIATION_REQUIRED");
+  assert.deepEqual(f.actions, ["stage:NEEDS_REVIEW"]);
 });
