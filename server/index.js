@@ -1854,7 +1854,9 @@ app.get("/api/research-campaigns/:id/email-triage",
         groundingResolvedUrl: true, groundingProvenance: true,
         name: true, category: true, emailTriageStatus: true,
         emailTriageCode: true, emailTriageEmail: true,
-        emailTriageDigest: true, emailTriageAt: true },
+        emailTriageDigest: true, emailTriageAt: true,
+        personSourceUrl: true, personSourceProvenance: true,
+        personSourceVerifiedAt: true },
       take: 251,
     });
     res.set("Cache-Control", "no-store");
