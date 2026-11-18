@@ -2548,9 +2548,15 @@ function App() {
                                       ? "Research needs attention"
                                       : campaignRunApproval?.run?.status === "RUNNING"
                                 ? "Finding experts"
-                                : campaignRunApproval?.run?.status === "COMPLETED" ||
-                                  ["COMPLETED", "PARTIAL"].includes(campaignProgress.status)
-                                  ? "Research finished"
+                                : !campaignRunApproval?.fullRun &&
+                                  (campaignRunApproval?.run?.status === "COMPLETED" ||
+                                    ["COMPLETED", "PARTIAL"].includes(campaignProgress.status))
+                                  ? "Discovery finished · emails not verified"
+                                  : campaignRunApproval?.fullRun?.status === "DISCOVERY" &&
+                                    campaignRunApproval?.run?.status === "COMPLETED"
+                                    ? "Discovery complete · enrichment pending"
+                                  : campaignRunApproval?.run?.status === "COMPLETED"
+                                    ? "Research stage complete"
                                   : campaignRunApproval?.run?.status === "PAUSED" ||
                                     ["PAUSED_REVIEW", "QUALITY_STOP"].includes(campaignProgress.operationalState)
                                     ? "Research needs attention" : "Ready to research"}</strong>
@@ -2567,8 +2573,15 @@ function App() {
                                 ? "The search continues automatically. You can leave this page."
                                 : campaignRunApproval?.run?.lastCode === "RUN_LIMIT_REACHED"
                                   ? "Your approved search limit was reached."
-                                  : campaignProgress.status === "PARTIAL"
-                                    ? "The approved run ended. Review the saved findings."
+                                  : !campaignRunApproval?.fullRun &&
+                                    ["PARTIAL", "COMPLETED"].includes(campaignProgress.status)
+                                    ? "This campaign only discovered named people. " +
+                                      "No email inspection or source enrichment was authorized. " +
+                                      "A new campaign with a full-pipeline approval is required."
+                                    : campaignRunApproval?.fullRun?.status === "DISCOVERY" &&
+                                      ["PARTIAL", "COMPLETED"].includes(campaignProgress.status)
+                                      ? "The discovery phase ended. The approved " +
+                                        "email-enrichment stages are being reconciled."
                                     : "Review findings or plan a new campaign."}</p>
                             </div>
                             {(campaignRunApproval?.run?.status === "RUNNING" ||
