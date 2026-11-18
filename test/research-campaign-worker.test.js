@@ -85,6 +85,10 @@ function fakeDatabase({ queued = true, member = true,
         return reservation;
       },
     },
+    // No historical exclusions exist in this clean fixture.
+    researchSpendAdjustment: {
+      aggregate: async () => ({ _sum: { excludedCents: null } }),
+    },
     researchSpendMonth: {
       upsert: async () => ({ reservedCents: 0, settledCents: 0 }),
       update: async () => ({}),
