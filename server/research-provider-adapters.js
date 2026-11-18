@@ -495,16 +495,14 @@ export function normalizeBoundedTavilySearch({ response, maxResults, observedAt 
 // and combined monetary reservation before calling this function. It is not
 // reachable from campaign execution until those server-side gates exist.
 function requireBoundedTavilyTransportConfig({ apiKey, observedAt, post }) {
-    if (typeof post !== "function" || typeof apiKey !== "string" ||
-        !/^tvly-[A-Za-z0-9_-]{8,}$/.test(apiKey) ||
-        typeof observedAt !== "string" ||
-        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(observedAt) ||
-        !Number.isFinite(Date.parse(observedAt)) ||
-        new Date(observedAt).toISOString() !== observedAt) {
-      throw new TypeError("Trusted bounded Tavily retrieval configuration required");
-    }
-
-}
+  if (typeof post !== "function" || typeof apiKey !== "string" ||
+      !/^tvly-[A-Za-z0-9_-]{8,}$/.test(apiKey) ||
+      typeof observedAt !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(observedAt) ||
+      !Number.isFinite(Date.parse(observedAt)) ||
+      new Date(observedAt).toISOString() !== observedAt) {
+    throw new TypeError("Trusted bounded Tavily retrieval configuration required");
+  }\n}
 
 export async function searchWithBoundedTavily({
   query, maxResults, observedAt, apiKey,
@@ -538,9 +536,6 @@ export async function runBoundedTavilyGemini3Stages({
       !Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
       maxInputTokens > 1_000_000 ||
       typeof geminiApiKey !== "string" || geminiApiKey.length < 8 ||
-      typeof tavilyApiKey !== "string" ||
-      !/^tvly-[A-Za-z0-9_-]{8,}$/.test(tavilyApiKey) ||
-      typeof tavilyPost !== "function" ||
       typeof geminiPost !== "function") {
     throw new TypeError("Bounded dual-provider execution configuration required");
   }
