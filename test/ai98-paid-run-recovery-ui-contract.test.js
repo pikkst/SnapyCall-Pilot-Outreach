@@ -9,7 +9,7 @@ const research = ui.slice(ui.indexOf('{partnerTab === "discovery" && <>'),
 test("only server-managed approval can launch paid work on Research page", () => {
   assert.match(research, /campaignRunApproval\?\.autonomousRunEnabled &&/);
   assert.match(research, /!campaignRunApproval\.run &&/);
-  assert.match(research, /"Approve single run"/);
+  assert.match(research, /"Approve full pipeline"/);
   assert.doesNotMatch(research, /executeManualCampaignTask\(/);
   assert.doesNotMatch(research, /Run campaign until target or safety stop/);
   assert.doesNotMatch(research, /Run one search|Run ONE Gemini 3 Search cost test/);
