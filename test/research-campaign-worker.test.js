@@ -433,11 +433,10 @@ test("unusable terminal output does not finalize without completed spend settlem
 });
 
 
-test("Gemini 3 remains fail-closed in the real campaign worker before DB claim or paid calls", async () => {
+test("Gemini 3 refuses missing operator Tavily credentials before DB claim or paid calls", async () => {
   const { db, events, search } = fakeDatabase({ approvedRun: true });
   db.aiSetting.findUnique = async () => ({
-    provider: "gemini",
-    model: "gemini-3-flash-preview",
+    provider: "gemini", model: "gemini-3-flash-preview",
     encryptedApiKey: "test-only-encrypted-key",
   });
   let decryptAttempts = 0;
@@ -448,15 +447,17 @@ test("Gemini 3 remains fail-closed in the real campaign worker before DB claim o
       decryptAttempts++;
       return "test-only-provider-key";
     },
+    tavilyApiKey: undefined,
+    tavilyEnabled: false, accountCapVerified: false,
     now: () => now,
-  }), error => error?.name === "ResearchPricingUnavailable");
+  }), error => error instanceof ResearchWorkerPreflightError &&
+    error.code === "TAVILY_ACCOUNT_NOT_VERIFIED");
   assert.equal(decryptAttempts, 0);
   for (const event of ["provider-called", "money-reserved",
     "task-claimed", "run-allowance-reserved", "concurrency-reserved"]) {
     assert.equal(events.includes(event), false, event);
   }
 });
-
 
 test("campaign worker uses exact dual-provider settlement tariff only when fully attested", () => {
   const price = {
@@ -567,23 +568,64 @@ test("dual-provider task plan selects bounded search only with exact reviewed ac
   assert.equal(legacy.search, researchCandidates);
 });
 
-test("worker never claims Gemini 3 without an approved registry tariff even with Tavily enabled", async () => {
-  const { db, events, search } = fakeDatabase({ approvedRun: true });
+test("approved Gemini 3 worker reserves owner funds before bounded search and settles conservatively", async () => {
+  const { db, events, getReservation } = fakeDatabase();
   db.aiSetting.findUnique = async () => ({
     provider: "gemini", model: "gemini-3-flash-preview",
     encryptedApiKey: "encrypted-synthetic-gemini-key",
   });
-  let calls = 0;
-  await assert.rejects(() => runOneCampaignTask(db, input, {
-    search,
-    decrypt: () => { calls++; return "test-gemini-key"; },
+  const output = await runOneCampaignTask(db, input, {
+    search: async ({ query, limit, provider, model, apiKey,
+      tavilyApiKey, maxResults, maxInputTokens }) => {
+      events.push("provider-called");
+      assert.equal(query, "AI workflow consultants");
+      assert.equal(limit, 10);
+      assert.equal(provider, "gemini");
+      assert.equal(model, "gemini-3-flash-preview");
+      assert.equal(apiKey, "test-gemini-key");
+      assert.equal(tavilyApiKey, "tvly-synthetic-test-key");
+      assert.equal(maxResults, 20);
+      assert.equal(maxInputTokens, 16_384);
+      return {
+        candidates: [{
+          name: "Ada Expert", category: "AI_AUTOMATION",
+          sourceUrl: "https://example.org/people/ada",
+          rationale: "Publicly documented AI workflow specialist.",
+        }],
+        sources: [{
+          url: "https://example.org/people/ada", title: "Ada Expert",
+        }],
+        // Provider adapter does not attest billing, so never issue a refund.
+        usage: { inputTokens: 800, outputTokens: 50, thinkingTokens: 10 },
+      };
+    },
+    decrypt: () => "test-gemini-key",
     tavilyApiKey: "tvly-synthetic-test-key",
     tavilyEnabled: true, accountCapVerified: true,
     now: () => now,
-  }), error => error.name === "ResearchPricingUnavailable");
-  assert.equal(calls, 0);
-  for (const event of ["provider-called", "money-reserved",
-    "task-claimed", "concurrency-reserved", "run-allowance-reserved"]) {
-    assert.equal(events.includes(event), false, event);
-  }
+  });
+  assert.equal(output.status, "COMPLETED");
+  assert.equal(output.observed, 1);
+  assert.equal(output.sendingEnabled, false);
+  assert.equal(events.filter(x => x === "provider-called").length, 1);
+  assert.ok(events.indexOf("money-reserved") < events.indexOf("provider-called"));
+  assert.ok(events.indexOf("money-settled") < events.indexOf("evidence-saved"));
+  assert.equal(getReservation().chargedCents, 3);
+});
+
+test("Gemini 3 refuses disabled account flag even with a valid stored key", async () => {
+  const { db, events } = fakeDatabase();
+  db.aiSetting.findUnique = async () => ({
+    provider: "gemini", model: "gemini-3-flash-preview",
+    encryptedApiKey: "encrypted-synthetic-gemini-key",
+  });
+  await assert.rejects(() => runOneCampaignTask(db, input, {
+    tavilyApiKey: "tvly-synthetic-test-key",
+    tavilyEnabled: true, accountCapVerified: false,
+    now: () => now,
+  }), error => error instanceof ResearchWorkerPreflightError &&
+    error.code === "TAVILY_ACCOUNT_NOT_VERIFIED");
+  assert.ok(!events.includes("money-reserved"));
+  assert.ok(!events.includes("task-claimed"));
+  assert.ok(!events.includes("provider-called"));
 });

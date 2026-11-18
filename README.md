@@ -70,49 +70,44 @@ Do not put real credentials or Google refresh tokens in the repository. The Rend
 
 ## Gemini 3 Flash + Tavily Basic research pipeline (AI98)
 
-The backend contains a bounded two-provider discovery route intended for the
-**existing** owner-scoped campaign worker. **It is not activated.** The exact
-`gemini:gemini-3-flash-preview` price entry in
-`server/research-price-policy.js` is deliberately `enforcementReady: false`,
-so `requireResearchPriceEnvelope` rejects execution before claiming a task,
-decrypting a user Gemini key, reserving spend or contacting either provider.
-Changing environment variables alone does **not** enable paid research.
+The **exact** `gemini:gemini-3-flash-preview` tariff is approved in
+`server/research-price-policy.js` for this bounded pilot (expires
+2026-12-01). It reserves **USD $0.03 per task** as a conservative ceiling:
+one Tavily Basic Search, up to 16,384 Gemini input tokens and up to 2,048
+Gemini output *including thinking tokens*. It is **not** a blanket grant
+for other models, other Tavily operations, arbitrary requests or email sending.
 
-A future operator must independently review and confirm all of the following
-before explicitly approving a production price-policy change:
+Paid execution requires all existing server-side gates:
 
-- Tavily's applicable plan/ToS, allowed commercial use and contact-data
-  restrictions; publisher rights and lawful grounds for any personal outreach.
-  Discovery returns **review-only** experts with source citations, not emails,
-  automatically imported contacts, mailing approval or sending permission.
-- A server-managed `TAVILY_API_KEY`, entered into Render **only on the
-  server** (never `VITE_*`, client bundles, logs or GitHub). Verify the actual
-  provider-account hard credit cutoff, spending reports and ability to stop
-  further requests. The boolean `TAVILY_ACCOUNT_CAP_VERIFIED=true` merely
-  records operator attestation; it cannot enforce a real external cap.
-- Explicit `TAVILY_DUAL_PROVIDER_ENABLED=true` only after the above verification.
-  User Gemini key stays in the existing encrypted BYOK `AiSetting` storage
-  and is decrypted only by the existing owner-scoped worker.
-- Exact dated, reviewed Tavily + Gemini tariffs, billing units and quotas
-  documented and enabled in the server-only price registry. Review the
-  maximum 1 Tavily Basic call + 16,384 Gemini input tokens + 2,048 total
-  output/thinking tokens. The staged $0.03 worst-case **USD** quote is not a
-  guarantee of the account's actual invoice or applicable surcharges.
-- The usual authenticated workspace membership, explicit campaign run
-  approval, `reserveApprovedRunCall`, `reserveOwnerSpend`, tenant-scoped
-  concurrency and attempt quotas. The existing campaign row and owner budget
-  locks must be held before either provider is called.
+- A valid encrypted Gemini BYOK key for the authenticated campaign owner.
+- Server-only `TAVILY_API_KEY` (never `VITE_*`, client, GitHub or logs).
+  `TAVILY_DUAL_PROVIDER_ENABLED=true` and
+  `TAVILY_ACCOUNT_CAP_VERIFIED=true`. These flags are an operator's
+  attestation of an actual provider-account cap, not a substitute for it.
+  The verified Tavily Researcher account has 1,000 monthly credits with
+  pay-as-you-go off; stop execution if this changes.
+- Existing owner-scoped workspace membership, campaign-row lock, explicitly
+  approved campaign run, quota and owner monthly USD budget. Each task must
+  reserve its full server-reviewed ceiling inside the existing transaction
+  before contacting either provider.
+- A bounded query, at most one Tavily Basic POST, one Gemini `countTokens`,
+  one `generateContent`, then only source-cited, review-only observations.
+  A timeout, missing citations, missing billing evidence or ambiguous
+  provider outcome is **never automatically retried** and is charged
+  conservatively to the task's reservation.
+- No automatic contact import, email discovery, outreach drafting approval
+  or sending is conferred by this tariff. Review Tavily's acceptable-use
+  policy, source rights and applicable outreach rules before enabling a
+  real campaign.
 
-Execution is limited to one Tavily POST, one Gemini `countTokens`, one
-`generateContent`, then cited review-only observations. Each task reuses
-`runOneCampaignTask` and `commitCampaignResearchResult`; no parallel
-endpoint or database migration was added. A timeout or partial result is
-never automatically replayed; incomplete provider billing evidence settles
-against the full pre-reserved ceiling. Audit stores fixed stage identifiers,
-never provider payloads or credentials.
-
-Before release: verify account limits outside the repository, confirm the
-pricing policy in code, run exact-HEAD CI, test Gemini key authorization and
-owner-budget exhaustion, validate source quality/no-email behavior in staging,
-and explicitly authorize merge and deployment. A verified test search must be
-separately approved because it can incur upstream charges.
+**Smoke and release checklist:** exact-HEAD Unit CI, PostgreSQL CI and
+staging read-only smoke must all pass; the Render deployment must be live.
+A *real provider smoke* additionally requires the campaign owner to sign
+into the existing workspace, approve a tightly bounded run (e.g., 1 task /
+3 USD cents) using the authenticated `/api/research-campaigns/:id/approve-run`
+path, and execute one task through
+`/api/research-campaigns/:id/execute-next`. Verify one Tavily credit,
+Gemini usage and that a single matching task appears in the audited owner
+ledger, with cited observations or an explicit PAUSED/no-evidence result.
+A deploy or read-only smoke alone does **not** prove the two external APIs
+worked; do not claim live-provider PASS without this evidence.

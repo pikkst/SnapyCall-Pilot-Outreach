@@ -552,10 +552,12 @@ test("bounded research stages compose without external calls or contact promotio
   });
   assert.equal(quote.enforcementReady, false);
   assert.ok(quote.worstCaseCents > 0);
-  assert.throws(() => requireResearchPriceEnvelope({
+  const approved = requireResearchPriceEnvelope({
     provider: "gemini", model: "gemini-3-flash-preview",
     ...quote,
-  }), ResearchPricingUnavailable);
+  });
+  assert.equal(approved.worstCaseCents, 3);
+  assert.equal(approved.billingContractVersion, "tavily-basic-gemini3-text-v1");
 });
 
 test("Gemini text-only preflight requires a server-owned max input ceiling", async () => {

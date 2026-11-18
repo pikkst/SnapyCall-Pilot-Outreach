@@ -49,16 +49,17 @@ const approvedResearchPrices = Object.freeze({
       maxSearchRequests: 3,
     }),
   }),
-  // Staged dual-provider tariff. Deliberately NOT approved for dispatch.
-  // Provider account credit ceilings, contractual rights and owner-level
-  // allocation have not been independently confirmed. A public price alone
-  // cannot enable a paid campaign. No environment flag overrides this gate.
+  // Explicit 2026-11-18 owner-approved pilot tariff for ONE bounded
+  // Tavily Basic retrieval and ONE Gemini 3 Flash text-only generation.
+  // External account/credential gates remain mandatory in the worker; a
+  // price policy alone does not grant authorization or initiate a request.
+  // Use separate fully rounded components for conservative USD reservation.
   "gemini:gemini-3-flash-preview": Object.freeze({
     provider: "gemini",
     model: "gemini-3-flash-preview",
     retrievalProvider: "tavily",
-    enforcementReady: false,
-    priceVersion: "tavily-basic-gemini3-flash-preview-staged-2026-11-18",
+    enforcementReady: true,
+    priceVersion: "tavily-basic-gemini3-flash-preview-2026-11-18",
     expiresAt: new Date("2026-12-01T00:00:00Z"),
     billingContractVersion: "tavily-basic-gemini3-text-v1",
     worstCaseCents: 3,
