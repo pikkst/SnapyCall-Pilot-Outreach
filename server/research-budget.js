@@ -19,6 +19,20 @@ export function validateMonthlyBudgetCents(amount) {
   return amount;
 }
 
+// Test-data exclusions change available application budget, never provider invoices.
+// They are backed by immutable, reviewed reservation IDs, not guessed prices.
+async function historicalTestExcludedCents(db, ownerId, monthUtc) {
+  const result = await db.researchSpendAdjustment.aggregate({
+    where: { ownerId, monthUtc, classification: "LEGACY_TEST_ESTIMATE" },
+    _sum: { excludedCents: true },
+  });
+  const cents = result._sum.excludedCents ?? 0;
+  if (!Number.isSafeInteger(cents) || cents < 0) {
+    throw new TypeError("Invalid historical budget adjustment");
+  }
+  return cents;
+}
+
 export function utcBudgetMonth(now = new Date()) {
   if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
     throw new TypeError("Invalid UTC budget clock");
@@ -66,7 +80,12 @@ export async function reserveOwnerSpend(tx, {
     create: { ownerId, monthUtc, reservedCents: 0, settledCents: 0 },
     update: {},
   });
-  if (month.reservedCents + month.settledCents + worstCaseCents > limitCents) {
+  const excluded = await historicalTestExcludedCents(tx, ownerId, monthUtc);
+  if (!Number.isSafeInteger(month.settledCents) || excluded > month.settledCents) {
+    throw new TypeError("Historical adjustments exceed settled application ledger");
+  }
+  if (month.reservedCents + (month.settledCents - excluded) +
+      worstCaseCents > limitCents) {
     throw new ResearchBudgetExceeded();
   }
   await tx.researchSpendReservation.create({ data: {
@@ -130,7 +149,8 @@ export async function readOwnerBudgetSnapshot(db, ownerId, now = new Date()) {
   // Count unresolved claims across all UTC months: a previous month's
   // possibly billed reservation must not disappear from diagnostics.
   const staleBefore = new Date(now.getTime() - 5 * 60_000);
-  const [budget, month, pendingReservations, staleReservations, oldestPending] = await Promise.all([
+  const [budget, month, pendingReservations, staleReservations, oldestPending,
+    historicalExcludedCents] = await Promise.all([
     db.researchOwnerBudget.findUnique({
       where: { ownerId }, select: { monthlyLimitCents: true },
     }),
@@ -149,10 +169,15 @@ export async function readOwnerBudgetSnapshot(db, ownerId, now = new Date()) {
       orderBy: { createdAt: "asc" },
       select: { createdAt: true },
     }),
+    historicalTestExcludedCents(db, ownerId, monthUtc),
   ]);
   const reservedCents = month?.reservedCents ?? 0;
   const settledCents = month?.settledCents ?? 0;
   const monthlyLimitCents = budget?.monthlyLimitCents ?? null;
+  if (historicalExcludedCents > settledCents) {
+    throw new TypeError("Historical adjustments exceed settled application ledger");
+  }
+  const effectiveSettledCents = settledCents - historicalExcludedCents;
   if (![reservedCents, settledCents, pendingReservations, staleReservations].every(
     value => Number.isSafeInteger(value) && value >= 0)) {
     throw new TypeError("Invalid persisted spend ledger totals");
@@ -162,8 +187,12 @@ export async function readOwnerBudgetSnapshot(db, ownerId, now = new Date()) {
     ledger: {
       monthUtc: monthUtc.toISOString().slice(0, 10),
       reservedCents, settledCents, pendingReservations,
+      // Immutable gross committed estimates remain auditable. The effective
+      // budget excludes only explicitly reviewed historical test reservations.
+      historicalTestExcludedCents: historicalExcludedCents,
+      effectiveSettledCents,
       availableCents: monthlyLimitCents === null ? null :
-        Math.max(0, monthlyLimitCents - reservedCents - settledCents),
+        Math.max(0, monthlyLimitCents - reservedCents - effectiveSettledCents),
       // Values represent app-side budget accounting, never provider invoices.
       billingSource: "application-estimate",
     },
