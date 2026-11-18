@@ -472,6 +472,8 @@ model ResearchPersonSourceJob {
   leaseUntil DateTime?
   spendReservationId String? @db.Uuid
   researchLeaseId String? @db.Uuid
+  // Provider-cited source proposal only; not independently verified evidence.
+  proposedSourceUrl String? @db.VarChar(2048)
   lastErrorCode String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
