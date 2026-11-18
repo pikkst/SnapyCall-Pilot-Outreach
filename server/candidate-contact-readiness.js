@@ -34,7 +34,7 @@ export function projectCandidateContactReadiness(candidate, {
       // A confirmed personal mailbox is a necessary but not sufficient
       // condition. Drafting also requires legal/contact-review gates.
       usableAsContact: personEmailLinked && mailboxVerificationStatus === "VALID" &&
-        candidate.suppressed === false,
+        candidate.suppressed === false && candidate.removedAt == null,
       draftEligible: outreach.canDraft,
       onboardingEligible: false,
       sendingEnabled: false,
