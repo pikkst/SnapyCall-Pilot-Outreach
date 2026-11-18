@@ -960,3 +960,153 @@ test("Gemini 3 text-only generation does not retry an ambiguous provider failure
   assert.deepEqual(calls.map(x => x.split(":").at(-1)),
     ["countTokens", "generateContent"]);
 });
+
+
+test("bounded dual-provider pipeline uses one Tavily, countTokens and Gemini call", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const { createHash } = await import("node:crypto");
+  const sourceId = createHash("sha256").update(source, "utf8").digest("hex");
+  const calls = [];
+  const result = await runBoundedTavilyGemini3Stages({
+    query, limit: 2, maxResults: 2,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  }, {
+    tavilyPost: async (url, headers, body) => {
+      calls.push("tavily");
+      assert.equal(url, "https://api.tavily.com/search");
+      assert.equal(body.search_depth, "basic");
+      assert.equal(body.auto_parameters, false);
+      return { results: [{
+        url: source, title: "Professional profile",
+        content: "Verified Professional offers AI automation services",
+      }], usage: { credits: 1 } };
+    },
+    geminiPost: async (url, headers, body) => {
+      assert.equal(headers["x-goog-api-key"], "gemini-test-only-key");
+      if (url.endsWith(":countTokens")) {
+        calls.push("count");
+        assert.ok(body.contents[0].parts[0].text.includes(sourceId));
+        return { totalTokens: 900 };
+      }
+      calls.push("generate");
+      assert.equal(Object.hasOwn(body, "tools"), false);
+      return {
+        candidates: [{ finishReason: "STOP", content: {
+          parts: [{ text: JSON.stringify({ candidates: [{
+            name: "Verified Professional", category: "AI_AUTOMATION",
+            sourceId, rationale: "Cited provider profile",
+          }, {
+            name: "Unverified", category: "AI_AUTOMATION",
+            sourceId: "made-up", rationale: "Not in source evidence",
+          }] }) }],
+        } }],
+        usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 110,
+          thoughtsTokenCount: 0 },
+      };
+    },
+  });
+  assert.deepEqual(calls, ["tavily", "count", "generate"]);
+  assert.equal(result.status, "REVIEW_PENDING");
+  assert.deepEqual(result.candidates.map(x => x.name), ["Verified Professional"]);
+  assert.equal(result.candidates[0].email, null);
+  assert.equal(result.reportedRetrievalCredits, 1);
+  assert.equal(result.billableCallPossible, true);
+  assert.equal(result.automaticRetryAllowed, false);
+  assert.equal(result.sendingEnabled, false);
+  assert.equal(result.imported, false);
+  assert.equal(Object.hasOwn(result.usage, "billingEvidence"), false);
+});
+
+test("bounded dual-provider pipeline stops after unusable Tavily results", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const events = [];
+  const result = await runBoundedTavilyGemini3Stages({
+    query, limit: 2, maxResults: 2,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  }, {
+    tavilyPost: async () => {
+      events.push("tavily");
+      return { results: [], usage: { credits: 1 } };
+    },
+    geminiPost: async () => {
+      events.push("gemini");
+      throw new Error("Must not dispatch generation after no evidence");
+    },
+  });
+  assert.deepEqual(events, ["tavily"]);
+  assert.equal(result.status, "NO_USABLE_EVIDENCE");
+  assert.equal(result.candidates.length, 0);
+  assert.equal(result.reportedRetrievalCredits, 1);
+  assert.equal(result.billableCallPossible, true);
+  assert.equal(result.automaticRetryAllowed, false);
+  assert.equal(result.sendingEnabled, false);
+});
+
+test("bounded dual-provider preflight rejects invalid second-provider settings before Tavily", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const base = {
+    query, limit: 2, maxResults: 2,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  };
+  let calls = 0;
+  for (const bad of [
+    { geminiApiKey: "" }, { tavilyApiKey: "invalid" },
+    { model: "gemini-2.5-flash" }, { maxInputTokens: 0 },
+    { maxResults: 21 }, { query: "too short" },
+  ]) await assert.rejects(() => runBoundedTavilyGemini3Stages({
+    ...base, ...bad,
+  }, {
+    tavilyPost: async () => { calls++; return { results: [] }; },
+    geminiPost: async () => { calls++; return {}; },
+  }), TypeError);
+  assert.equal(calls, 0);
+});
+
+test("bounded dual-provider pipeline marks ambiguous provider calls non-retryable", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const config = {
+    query, limit: 2, maxResults: 2,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  };
+  let calls = 0;
+  await assert.rejects(() => runBoundedTavilyGemini3Stages(config, {
+    tavilyPost: async () => {
+      calls++;
+      throw new Error("Synthetic transport timed out");
+    },
+    geminiPost: async () => {
+      calls++;
+      throw new Error("Must not run");
+    },
+  }), error => error.code === "RETRIEVAL_OUTCOME_UNCERTAIN" &&
+    error.billableCallPossible && !error.automaticRetryAllowed);
+  assert.equal(calls, 1);
+  await assert.rejects(() => runBoundedTavilyGemini3Stages(config, {
+    tavilyPost: async () => {
+      calls++;
+      return { results: [{
+        url: source, title: "Verified expert",
+        content: "Verified Professional profile",
+      }] };
+    },
+    geminiPost: async url => {
+      calls++;
+      assert.match(url, /:countTokens$/);
+      throw new Error("Synthetic countTokens error");
+    },
+  }), error => error.code === "DUAL_PROVIDER_OUTCOME_UNCERTAIN" &&
+    error.billableCallPossible && !error.automaticRetryAllowed);
+  assert.equal(calls, 3);
+});
