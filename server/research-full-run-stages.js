@@ -168,9 +168,8 @@ export async function tickFullRunStages(db, {
     }
     // An all-opaque campaign must go through source resolution, not have
     // individual sources falsely classified as verified or email-free.
-    if (["NO_INSPECTABLE_PUBLIC_PROFILE", "DIRECT_PROFILE_SOURCE_REQUIRED",
-      "NO_DIRECT_PROFILE_SOURCES", "NO_ELIGIBLE_PUBLIC_SOURCES",
-      "NO_INDEPENDENT_SOURCE", "NO_INSPECTABLE_SOURCES"].includes(result.code)) {
+    if (["EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED",
+      "EMAIL_TRIAGE_SHARED_SOURCE_REVIEW_REQUIRED"].includes(result.code)) {
       return move("SOURCE_PREPARE", "DISCOVERY_SOURCES_NEED_RESOLUTION");
     }
     return move("NEEDS_REVIEW", result.code ?? "EMAIL_TRIAGE_NOT_AUTHORIZED");
