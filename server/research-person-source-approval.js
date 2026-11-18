@@ -38,7 +38,7 @@ export function validatePersonSourceApproval(input) {
   if (!input || typeof input !== "object" || Array.isArray(input) ||
       Object.keys(input).some(key => ![
         "maxCalls", "maxWorstCaseCents", "confirmPaidSourceResearch",
-        "confirmNoAutomaticRetry",
+        "confirmNoAutomaticRetry", "confirmPublicInspection",
       ].includes(key)) ||
       !Number.isInteger(input.maxCalls) || input.maxCalls < 1 ||
       input.maxCalls > MAX_CALLS ||
@@ -46,7 +46,8 @@ export function validatePersonSourceApproval(input) {
       input.maxWorstCaseCents < 1 ||
       input.maxWorstCaseCents > MAX_RUN_CENTS ||
       input.confirmPaidSourceResearch !== true ||
-      input.confirmNoAutomaticRetry !== true) {
+      input.confirmNoAutomaticRetry !== true ||
+      input.confirmPublicInspection !== true) {
     throw new TypeError("Explicit bounded person-source spend approval required");
   }
   return Object.freeze({ maxCalls: input.maxCalls,
@@ -131,6 +132,7 @@ export async function approvePersonSourceResearch(db, {
       worstCasePerCallCents: price.worstCaseCents,
       maxCalls: limits.maxCalls, maxWorstCaseCents: limits.maxWorstCaseCents,
       eligibleJobCount: jobs.length, jobSnapshotHash: snapshot,
+      publicInspectionAuthorized: true,
       expiresAt: new Date(clock.getTime() + APPROVAL_MS),
     } });
     await tx.auditEvent.create({ data: {
@@ -141,6 +143,7 @@ export async function approvePersonSourceResearch(db, {
         priceVersion: price.priceVersion, maxCalls: limits.maxCalls,
         maxWorstCaseCents: limits.maxWorstCaseCents,
         eligibleJobCount: jobs.length, jobSnapshotHash: snapshot,
+        publicInspectionAuthorized: true, publicInspectionScope: "BOUNDED_PUBLIC_PROFILE",
         automaticBillableReplay: false, sendingEnabled: false },
     } });
     return { status: 201, code: "SOURCE_RUN_APPROVED",

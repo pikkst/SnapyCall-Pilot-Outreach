@@ -22,6 +22,19 @@ export function isDirectPublicProfileUrl(value) {
 // the only way to produce reviewable evidence from this source.
 export function observationInspectionSource(observation) {
   if (!observation || typeof observation !== "object") return null;
+  // Only an independently retrieved page with a deterministic exact-name
+  // email label may override the original (possibly shared/opaque) citation.
+  // An unverified AI URL proposal cannot satisfy this condition.
+  if (observation.personSourceProvenance ===
+        "AI98_EXPLICIT_NAMED_EMAIL_ON_PUBLIC_PROFILE" &&
+      observation.emailTriageStatus === "REVIEW_REQUIRED" &&
+      typeof observation.emailTriageDigest === "string" &&
+      /^[a-f0-9]{64}$/.test(observation.emailTriageDigest) &&
+      observation.personSourceVerifiedAt instanceof Date &&
+      Number.isFinite(observation.personSourceVerifiedAt.getTime())) {
+    const verified = isDirectPublicProfileUrl(observation.personSourceUrl);
+    if (verified) return verified;
+  }
   const direct = isDirectPublicProfileUrl(observation.citationUrl);
   if (direct) return observation.groundingStatus === "UNCHECKED" ||
       observation.groundingStatus == null ? direct : null;

@@ -1854,7 +1854,9 @@ app.get("/api/research-campaigns/:id/email-triage",
         groundingResolvedUrl: true, groundingProvenance: true,
         name: true, category: true, emailTriageStatus: true,
         emailTriageCode: true, emailTriageEmail: true,
-        emailTriageDigest: true, emailTriageAt: true },
+        emailTriageDigest: true, emailTriageAt: true,
+        personSourceUrl: true, personSourceProvenance: true,
+        personSourceVerifiedAt: true },
       take: 251,
     });
     res.set("Cache-Control", "no-store");
@@ -1929,6 +1931,7 @@ app.post("/api/research-campaigns/:id/person-source/approve",
       maxWorstCaseCents: z.number().int().min(1).max(50000),
       confirmPaidSourceResearch: z.literal(true),
       confirmNoAutomaticRetry: z.literal(true),
+      confirmPublicInspection: z.literal(true),
     }).strict().parse(req.body ?? {});
     const result = await approvePersonSourceResearch(prisma, {
       campaignId: req.params.id, workspaceId: req.candidateScope,
