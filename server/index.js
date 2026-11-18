@@ -27,6 +27,7 @@ import { approveCampaignRun, stopApprovedCampaignRun,
 import { startApprovedCampaignWorker } from "./research-approved-runner.js";
 import { normalizeManualResearchSources, enqueueManualResearchSources } from "./research-manual-sources.js";
 import { inspectCampaignObservationEmail } from "./research-observation-email.js";
+import { summarizeQualifiedEmailEvidence } from "./research-qualified-evidence.js";
 import { approveEmailTriage, stopEmailTriage, emailTriageSummary,
   emailTriageSourceReadiness, startEmailTriageWorker }
   from "./research-email-triage-worker.js";
@@ -1847,13 +1848,17 @@ app.get("/api/research-campaigns/:id/email-triage",
     const savedSources = await prisma.researchCampaignObservation.findMany({
       where: { campaignId: campaign.id },
       select: { citationUrl: true, groundingStatus: true,
-        groundingResolvedUrl: true, groundingProvenance: true },
+        groundingResolvedUrl: true, groundingProvenance: true,
+        name: true, category: true, emailTriageStatus: true,
+        emailTriageCode: true, emailTriageEmail: true,
+        emailTriageDigest: true, emailTriageAt: true },
       take: 251,
     });
     res.set("Cache-Control", "no-store");
     return res.json({
       ...emailTriageSummary(campaign, counts),
       preflight: emailTriageSourceReadiness(campaign.status, savedSources),
+      qualification: summarizeQualifiedEmailEvidence(savedSources),
       enabled: env.AI_EMAIL_TRIAGE_ENABLED === "true",
     });
   }));
