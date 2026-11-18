@@ -128,7 +128,7 @@ test("atomically claims one job after tenant, spend and daily quota reservations
   assert.equal(claim.query.includes("Ada Lovelace"), true);
   assert.match(claim.reservationId, /^[a-f0-9-]{36}$/);
   assert.deepEqual(state.events, [
-    "concurrency", "spend-reserved", "spend-ledger", "quota",
+    "concurrency", "spend-reserved", "spend-ledger", "quota", "quota",
     "approval-counter", "job-claimed", "audit",
   ]);
   assert.equal(state.job.status, "RUNNING");
