@@ -54,6 +54,11 @@ function fixture({ stage = "DISCOVERY", status = "PARTIAL",
     progress: async () => ({
       reliable: true, qualifiedEvidence: qualified,
     }),
+    createSourceCycle: async (_, owner) => {
+      assert.equal(owner.campaignId, scope.campaignId);
+      actions.push("cycle-exhausted");
+      return { status: "EXHAUSTED", code: "NO_UNATTEMPTED_SOURCE_JOBS" };
+    },
     stopAtGoal: async (_, owner) => {
       assert.equal(owner.campaignId, scope.campaignId);
       actions.push("atomic-source-stop");
@@ -163,7 +168,7 @@ test("completed source stage with 0 emails remains partial", async () => {
     sourceStatus: "COMPLETED", qualified: 0 });
   const result = await tickFullRunStages(f.db, f.input);
   assert.equal(result.status, "PARTIAL");
-  assert.equal(result.code, "QUALIFIED_TARGET_NOT_REACHED");
+  assert.equal(result.code, "NO_UNATTEMPTED_SOURCE_JOBS");
 });
 
 test("empty discovery is partial, not completed", async () => {
@@ -295,4 +300,26 @@ test("uncertain source bill blocks qualified-target success until reconciled", a
   assert.equal(result.status, "NEEDS_REVIEW");
   assert.equal(result.code, "SOURCE_JOB_BILLING_RECONCILIATION_REQUIRED");
   assert.deepEqual(f.actions, ["stage:NEEDS_REVIEW"]);
+});
+
+test("terminal first-stage approval creates a second source cycle without a new user click", async () => {
+  const f = fixture({ stage: "SOURCE_RUNNING", sourceStatus: "PARTIAL_BUDGET" });
+  f.input.createSourceCycle = async (_, owner) => {
+    assert.equal(owner.campaignId, scope.campaignId);
+    f.actions.push("new-cycle");
+    return { status: "CREATED", code: "SOURCE_CYCLE_APPROVED" };
+  };
+  const result = await tickFullRunStages(f.db, f.input);
+  assert.equal(result.status, "WAITING");
+  assert.equal(result.code, "SOURCE_CYCLE_APPROVED");
+  assert.deepEqual(f.actions, ["new-cycle"]);
+});
+
+test("already-running continuation does not generate another approval", async () => {
+  const f = fixture({ stage: "SOURCE_RUNNING", sourceStatus: "COMPLETED" });
+  f.input.createSourceCycle = async () => ({ status: "WAITING",
+    code: "SOURCE_CYCLE_IN_PROGRESS" });
+  const result = await tickFullRunStages(f.db, f.input);
+  assert.equal(result.status, "WAITING");
+  assert.equal(result.code, "SOURCE_CYCLE_IN_PROGRESS");
 });
