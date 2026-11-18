@@ -401,6 +401,13 @@ export async function stopApprovedCampaignRun(db, {
           status: { in: ["APPROVED", "RUNNING"] } },
         data: { status: "STOPPED" },
       });
+      // Continuations have independent immutable approvals. Stop all of
+      // them in the same campaign lock; no future paid claim is possible.
+      await tx.researchPersonSourceCycle.updateMany({
+        where: { campaignId, workspaceId, ownerId,
+          status: { in: ["APPROVED", "RUNNING"] } },
+        data: { status: "STOPPED" },
+      });
       await tx.researchCampaign.updateMany({
         where: { id: campaignId, workspaceId, ownerId,
           emailTriageStatus: "RUNNING" },

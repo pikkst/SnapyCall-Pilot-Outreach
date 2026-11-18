@@ -17,6 +17,37 @@ function scopeValid({ campaignId, workspaceId, ownerId, jobId }) {
   return [campaignId, workspaceId, ownerId, jobId].every(isWorkspaceId);
 }
 
+// Only the exact active cycle may inspect its own proposed page. Consent
+// still originates from the immutable full-run and original stage approval.
+export async function personSourceReadAuthorized(db, scope, job, clock) {
+  const approval = await db.researchPersonSourceApproval.findUnique({
+    where: { campaignId: scope.campaignId },
+  });
+  if (!approval || approval.workspaceId !== scope.workspaceId ||
+      approval.ownerId !== scope.ownerId ||
+      approval.publicInspectionAuthorized !== true) return false;
+  if (!job.cycleIndex) {
+    return ["APPROVED", "RUNNING"].includes(approval.status) &&
+      approval.expiresAt instanceof Date && approval.expiresAt > clock;
+  }
+  if (!["COMPLETED", "PARTIAL_BUDGET"].includes(approval.status)) return false;
+  const cycle = await db.researchPersonSourceCycle.findUnique({
+    where: { campaignId_cycleIndex: {
+      campaignId: scope.campaignId, cycleIndex: job.cycleIndex,
+    } },
+  });
+  const full = await db.researchFullRun.findUnique({
+    where: { campaignId: scope.campaignId },
+  });
+  return !!cycle && !!full && cycle.workspaceId === scope.workspaceId &&
+    cycle.ownerId === scope.ownerId && full.workspaceId === scope.workspaceId &&
+    full.ownerId === scope.ownerId && full.status === "SOURCE_RUNNING" &&
+    full.publicInspectionAuthorized === true &&
+    ["APPROVED", "RUNNING"].includes(cycle.status) &&
+    cycle.expiresAt instanceof Date && cycle.expiresAt > clock &&
+    full.expiresAt instanceof Date && full.expiresAt > clock;
+}
+
 // Classifier failure is a terminal read result, not permission to fetch other
 // websites or trust the original AI citation. Fail closed on ambiguous pages.
 export async function verifyPersonSourceProposal(db, scope, {
@@ -41,22 +72,15 @@ export async function verifyPersonSourceProposal(db, scope, {
     select: { id: true },
   });
   if (!campaign) return { status: 404, code: "CAMPAIGN_NOT_FOUND" };
-  const approval = await db.researchPersonSourceApproval.findUnique({
-    where: { campaignId: scope.campaignId },
-  });
-  if (!approval || approval.workspaceId !== scope.workspaceId ||
-      approval.ownerId !== scope.ownerId ||
-      approval.publicInspectionAuthorized !== true ||
-      !["APPROVED", "RUNNING"].includes(approval.status) ||
-      !(approval.expiresAt instanceof Date) || approval.expiresAt <= clock) {
-    return { status: 409, code: "PUBLIC_INSPECTION_NOT_AUTHORIZED" };
-  }
   const job = await db.researchPersonSourceJob.findFirst({
     where: { id: scope.jobId, campaignId: scope.campaignId },
     select: { id: true, observationId: true, evidenceFingerprint: true,
-      proposedSourceUrl: true, status: true },
+      proposedSourceUrl: true, status: true, cycleIndex: true },
   });
   if (!job) return { status: 404, code: "SOURCE_JOB_NOT_FOUND" };
+  if (!await personSourceReadAuthorized(db, scope, job, clock)) {
+    return { status: 409, code: "PUBLIC_INSPECTION_NOT_AUTHORIZED" };
+  }
   if (job.status === "VERIFIED") {
     return { status: 200, code: "PERSON_SOURCE_ALREADY_VERIFIED",
       qualifiedEvidence: true, contactCreated: false, sendingEnabled: false };
@@ -129,23 +153,17 @@ async function persistPersonSourceInspection(db, scope, job, observation, {
     if (campaign.length !== 1) {
       return { status: 409, code: "CAMPAIGN_STATE_CHANGED" };
     }
-    const approval = await tx.researchPersonSourceApproval.findUnique({
-      where: { campaignId: scope.campaignId },
-    });
-    if (!approval || approval.workspaceId !== scope.workspaceId ||
-        approval.ownerId !== scope.ownerId ||
-        approval.publicInspectionAuthorized !== true ||
-        !["APPROVED", "RUNNING"].includes(approval.status) ||
-        !(approval.expiresAt instanceof Date) || approval.expiresAt <= clock) {
-      return { status: 409, code: "PUBLIC_INSPECTION_NOT_AUTHORIZED" };
-    }
     const currentJob = await tx.researchPersonSourceJob.findFirst({
       where: { id: job.id, campaignId: scope.campaignId },
     });
     if (!currentJob || currentJob.status !== "COMPLETED" ||
         currentJob.proposedSourceUrl !== url ||
-        currentJob.evidenceFingerprint !== job.evidenceFingerprint) {
+        currentJob.evidenceFingerprint !== job.evidenceFingerprint ||
+        currentJob.cycleIndex !== (job.cycleIndex ?? 0)) {
       return { status: 409, code: "SOURCE_JOB_CHANGED" };
+    }
+    if (!await personSourceReadAuthorized(tx, scope, currentJob, clock)) {
+      return { status: 409, code: "PUBLIC_INSPECTION_NOT_AUTHORIZED" };
     }
     const current = await tx.researchCampaignObservation.findFirst({
       where: { id: observation.id, campaignId: scope.campaignId },

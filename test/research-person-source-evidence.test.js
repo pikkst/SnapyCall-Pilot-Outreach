@@ -33,19 +33,31 @@ const job = {
   id: scope.jobId, campaignId: scope.campaignId,
   observationId: observation.id,
   evidenceFingerprint: personSourceFingerprint(observation),
-  proposedSourceUrl: url, status: "COMPLETED",
+  proposedSourceUrl: url, status: "COMPLETED", cycleIndex: 0,
 };
 function fixture({ approval = true, shared = false,
-  memberAfterFetch = true, original = observation } = {}) {
+  memberAfterFetch = true, original = observation,
+  continuation = false, fullStopped = false } = {}) {
   const events = [];
-  const state = { row: { ...original }, job: { ...job }, fetched: 0 };
+  const state = { row: { ...original },
+    job: { ...job, cycleIndex: continuation ? 1 : 0 }, fetched: 0 };
   const approve = {
     campaignId: scope.campaignId, workspaceId: scope.workspaceId,
-    ownerId: scope.ownerId, status: "RUNNING",
+    ownerId: scope.ownerId,
+    status: continuation ? "PARTIAL_BUDGET" : "RUNNING",
     publicInspectionAuthorized: approval,
     expiresAt: new Date("2026-11-19T15:00:00Z"),
   };
+  const cycle = {
+    ...approve, status: "RUNNING", cycleIndex: 1,
+  };
+  const fullRun = {
+    ...approve, status: fullStopped ? "STOPPED" : "SOURCE_RUNNING",
+    publicInspectionAuthorized: true,
+  };
   const db = {
+    researchPersonSourceCycle: { findUnique: async () => cycle },
+    researchFullRun: { findUnique: async () => fullRun },
     partnerMembership: {
       findUnique: async () => ({
         id: "member-id", role: "MEMBER", revokedAt: null,
@@ -77,6 +89,8 @@ function fixture({ approval = true, shared = false,
       researchPersonSourceApproval: {
         findUnique: async () => approve,
       },
+      researchPersonSourceCycle: { findUnique: async () => cycle },
+      researchFullRun: { findUnique: async () => fullRun },
       researchPersonSourceJob: {
         findFirst: async () => state.job,
         count: async () => shared ? 1 : 0,
@@ -219,4 +233,25 @@ test("existing review intake re-inspects independently verified person source", 
   assert.equal(result.observedEmail, "ada@example.org");
   assert.equal(result.evidenceDigest, f.state.row.emailTriageDigest);
   assert.equal(result.sendingEnabled, false);
+});
+
+test("continuation page evidence is tied to exact active cycle and does not need another user click", async () => {
+  const f = fixture({ continuation: true });
+  const result = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve: f.retrieve, now: () => clock,
+  });
+  assert.equal(result.code, "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED");
+  assert.equal(result.qualifiedEvidence, true);
+  assert.equal(f.state.row.personSourceUrl, url);
+  assert.equal(f.state.fetched, 1);
+});
+
+test("stopping full-run revokes continuation public-page reads", async () => {
+  const f = fixture({ continuation: true, fullStopped: true });
+  const result = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve: f.retrieve, now: () => clock,
+  });
+  assert.equal(result.code, "PUBLIC_INSPECTION_NOT_AUTHORIZED");
+  assert.equal(f.state.fetched, 0);
+  assert.deepEqual(f.events, []);
 });

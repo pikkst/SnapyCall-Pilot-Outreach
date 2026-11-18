@@ -278,6 +278,7 @@ model ResearchCampaign {
   manualSources ResearchCampaignSource[]
   personSourceJobs ResearchPersonSourceJob[]
   personSourceApproval ResearchPersonSourceApproval?
+  personSourceCycles ResearchPersonSourceCycle[]
   contactBatch ResearchContactBatch?
   approvedRun ResearchCampaignRun?
   fullRun ResearchFullRun?
@@ -503,6 +504,35 @@ model ResearchPersonSourceApproval {
   @@index([workspaceId, ownerId])
 }
 
+// Continuation of a fully approved source run. Each cycle freezes only
+// previously unattempted observation jobs, never reauthorizing a paid call.
+model ResearchPersonSourceCycle {
+  id String @id @default(cuid())
+  campaignId String
+  campaign ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  workspaceId String
+  ownerId String
+  cycleIndex Int
+  provider String
+  model String
+  priceVersion String
+  worstCasePerCallCents Int
+  maxCalls Int
+  maxWorstCaseCents Int
+  eligibleJobCount Int
+  jobSnapshotHash String @db.Char(64)
+  status String @default("APPROVED")
+  startedCalls Int @default(0)
+  committedWorstCaseCents Int @default(0)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([campaignId, cycleIndex])
+  @@index([status, updatedAt])
+  @@index([workspaceId, ownerId])
+}
+
 model ResearchPersonSourceJob {
   id String @id @default(cuid())
   campaignId String
@@ -519,6 +549,8 @@ model ResearchPersonSourceJob {
   leaseUntil DateTime?
   spendReservationId String? @db.Uuid
   researchLeaseId String? @db.Uuid
+  // 0 belongs to the initial immutable approval; >0 is an explicit continuation batch.
+  cycleIndex Int @default(0)
   // Provider-cited source proposal only; not independently verified evidence.
   proposedSourceUrl String? @db.VarChar(2048)
   lastErrorCode String?
@@ -526,6 +558,7 @@ model ResearchPersonSourceJob {
   updatedAt DateTime @updatedAt
 
   @@index([campaignId, status, createdAt])
+  @@index([campaignId, cycleIndex, status])
   @@index([status, leaseUntil])
 }
 

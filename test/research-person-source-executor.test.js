@@ -32,9 +32,12 @@ const price = requireResearchPriceEnvelope({
 
 function fixture({ member = true, campaignStatus = "PARTIAL",
   changedEvidence = false, approved = true, mismatchedModel = false,
-  priorRunning = false } = {}) {
+  priorRunning = false, continuation = false,
+  fullStopped = false } = {}) {
   const events = [];
-  const job = { ...sourceJob, ...(priorRunning ? {
+  const job = { ...sourceJob,
+    cycleIndex: continuation ? 1 : 0,
+    ...(priorRunning ? {
     status: "RUNNING", leaseToken: "old", attempts: 1,
   } : {}) };
   const approval = {
@@ -45,7 +48,8 @@ function fixture({ member = true, campaignStatus = "PARTIAL",
     worstCasePerCallCents: price.worstCaseCents,
     maxCalls: 1, maxWorstCaseCents: price.worstCaseCents,
     eligibleJobCount: 1, jobSnapshotHash: personSourceJobSnapshot([sourceJob]),
-    status: "APPROVED", startedCalls: 0, committedWorstCaseCents: 0,
+    status: continuation ? "PARTIAL_BUDGET" : "APPROVED",
+    startedCalls: 0, committedWorstCaseCents: 0,
     expiresAt: new Date("2026-11-19T12:00:00Z"),
   };
   const currentEvidence = changedEvidence
@@ -86,8 +90,26 @@ function fixture({ member = true, campaignStatus = "PARTIAL",
         return { count: 1 };
       },
     },
+    researchFullRun: {
+      findUnique: async () => ({
+        ...scope, status: fullStopped ? "STOPPED" : "SOURCE_RUNNING",
+        expiresAt: new Date("2026-11-19T12:00:00Z"),
+      }),
+    },
+    researchPersonSourceCycle: {
+      findFirst: async () => continuation ? ({
+        ...approval, id: "cmabcdefghijklmnopqrs4",
+        status: "APPROVED", cycleIndex: 1,
+      }) : null,
+      count: async () => 0,
+      updateMany: async ({ data }) => {
+        events.push("approval-counter");
+        return { count: 1 };
+      },
+    },
     researchPersonSourceJob: {
       findMany: async () => [job],
+      count: async () => 0,
       updateMany: async ({ data }) => {
         events.push("job-claimed");
         Object.assign(job, data, { attempts: job.attempts + 1 });
@@ -185,4 +207,25 @@ test("invalid claim scope cannot trigger database access", async () => {
     ...scope, campaignId: "not-a-cuid",
   }, { now: clock }), TypeError);
   assert.ok(PersonSourceExecutionBlocked.prototype instanceof Error);
+});
+
+test("new continuation claims exactly one never-attempted job under frozen cycle approval", async () => {
+  const f = fixture({ continuation: true });
+  const claim = await claimPersonSourceJob(f.db, scope, { now: clock });
+  assert.equal(claim.status, "CLAIMED");
+  assert.equal(f.job.cycleIndex, 1);
+  assert.equal(f.job.attempts, 1);
+  assert.equal(f.reservations.size, 1);
+  assert.equal(f.events.filter(x => x === "approval-counter").length, 1);
+  assert.equal(f.events.filter(x => x === "spend-reserved").length, 1);
+  const replay = await claimPersonSourceJob(f.db, scope, { now: clock });
+  assert.equal(replay.code, "SOURCE_JOB_UNSETTLED");
+  assert.equal(f.reservations.size, 1);
+});
+
+test("stopped full-run prevents any new continuation charge", async () => {
+  const f = fixture({ continuation: true, fullStopped: true });
+  const result = await claimPersonSourceJob(f.db, scope, { now: clock });
+  assert.equal(result.code, "SOURCE_CONTINUATION_NOT_ACTIVE");
+  assert.deepEqual(f.events, []);
 });
