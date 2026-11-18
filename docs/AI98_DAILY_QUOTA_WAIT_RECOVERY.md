@@ -43,3 +43,31 @@ full-run stage manager moved to `NEEDS_REVIEW` with
 No automatic replay, quota reset, manual DB status mutation, new paid
 provider calls, or email sending. Validate the exact PR HEAD in CI,
 and use read-only production checks after deployment.
+
+## Pre-start daily capacity warning
+
+The existing authenticated owner-scoped `GET /api/research-campaigns/:id/approved-run`
+returns `dailyQuota` only for unstarted campaigns. It reads today's
+`ResearchDailyQuota` counters for both the workspace (fixed 100/day)
+and the owner's per-workspace daily limit (editable in Settings, up to
+100/day). Both discovery and person-source paid searches consume these
+counters. The response includes `remaining` and the precise next UTC
+midnight in `resetsAt`. No quota reservation occurs during reads.
+
+The Research Start panel warns when
+`maxDiscoveryCalls + maxSourceCalls > remaining`, disables the paid
+approval action, and offers a button linking to **Settings → My research
+limits**. If the workspace's absolute cap is exhausted, adjusting
+personal limits cannot unlock it; wait for the UTC reset or reduce the
+requested run size. The browser re-fetches capacity immediately before
+approval. The existing server-side `approveCampaignRun` also checks
+capacity before creating either immutable approval, returning HTTP 409
+`DAILY_QUOTA_INSUFFICIENT` if the selected maximum cannot fit.
+The actual claim's transaction remains authoritative against races.
+This does not increase the 100/day ceiling, bypass auth, spend money,
+or grant additional provider calls.
+
+An existing run waiting across UTC midnight remains subject to the
+original 24h approval expiry and every existing budget/replay rule.
+The existing historical `NEEDS_REVIEW` campaign is not resumed by
+this feature.
