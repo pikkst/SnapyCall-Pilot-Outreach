@@ -15,7 +15,7 @@ export async function inspectAndPersistCandidateDns(db, {
   }
 
   const initial = await db.candidate.findFirst({
-    where: { id: candidateId, workspaceId },
+    where: { id: candidateId, workspaceId, removedAt: null },
     select: { id: true, email: true },
   });
   if (!initial) return { status: 404, code: "CANDIDATE_NOT_FOUND" };
@@ -43,7 +43,7 @@ export async function inspectAndPersistCandidateDns(db, {
     const rows = await tx.$queryRaw`
       SELECT "id", "email" FROM "Candidate"
       WHERE "id" = ${candidateId} AND "workspaceId" = ${workspaceId}
-      FOR UPDATE`;
+        AND "removedAt" IS NULL FOR UPDATE`;
     if (rows.length !== 1) return { status: 404, code: "CANDIDATE_NOT_FOUND" };
     const current = normalizeVerificationAddress(rows[0].email);
     if (current?.email !== address?.email) {
