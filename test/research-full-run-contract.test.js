@@ -80,6 +80,9 @@ function fixture({ prior = null, priorFull = null, revocation = false,
       researchCampaign: {
         findUnique: async () => ({ targetCount: 100 }),
       },
+      partner: {
+        findUnique: async () => ({ researchDailyLimit: 1000 }),
+      },
       researchUserLimits: {
         findUnique: async () => ({ dailyLimit: personalLimit }),
       },
