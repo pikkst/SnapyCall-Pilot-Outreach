@@ -6,11 +6,17 @@ const workspaceId = "c" + "a".repeat(24);
 const userId = "c" + "b".repeat(24);
 const now = new Date("2026-11-18T23:58:00.000Z");
 
-function mock({ personalLimit = 100, workspaceUsed = 0, personalUsed = 0 } = {}) {
+function mock({ personalLimit = 100, workspaceLimit = 1000, workspaceUsed = 0, personalUsed = 0 } = {}) {
   const workspaceKey = "workspace:" + workspaceId;
   const userKey = "workspace-user:" + workspaceId + ":" + userId;
   const seen = [];
   const db = {
+    partner: {
+      findUnique: async ({ where }) => {
+        assert.equal(where.id, workspaceId);
+        return { researchDailyLimit: workspaceLimit };
+      },
+    },
     researchUserLimits: {
       findUnique: async ({ where, select }) => {
         assert.equal(where.ownerId, userId);
@@ -40,7 +46,7 @@ test("quota is owner/workspace scoped and computes minimum of both daily limits"
   assert.deepEqual(result, {
     dayUtc: "2026-11-18",
     resetsAt: "2026-11-19T00:00:00.000Z",
-    workspaceLimit: 100, workspaceUsed: 25,
+    workspaceLimit: 1000, workspaceUsed: 25,
     personalLimit: 60, personalUsed: 40, remaining: 20,
   });
   assert.equal(seen.length, 1);
@@ -48,10 +54,10 @@ test("quota is owner/workspace scoped and computes minimum of both daily limits"
 });
 
 test("workspace hard cap cannot be increased by changing personal limit", async () => {
-  const { db } = mock({ personalLimit: 100, workspaceUsed: 100, personalUsed: 16 });
+  const { db } = mock({ personalLimit: 1000, workspaceLimit: 120, workspaceUsed: 120, personalUsed: 16 });
   const result = await readResearchDailyCapacity(db, { workspaceId, userId, now });
   assert.equal(result.remaining, 0);
-  assert.equal(result.workspaceLimit, 100);
+  assert.equal(result.workspaceLimit, 120);
 });
 
 test("no saved personal limit defaults to two, and UTC reset rolls to next day", async () => {
@@ -78,4 +84,21 @@ test("quota preflight has no writes, provider calls or reservations", async () =
   const { db } = mock();
   const value = await readResearchDailyCapacity(db, { workspaceId, userId, now });
   assert.equal(value.remaining, 100);
+});
+
+test("administrator can assign a 1000-per-day workspace ceiling", async () => {
+  const { db } = mock({ personalLimit: 1000, workspaceLimit: 1000,
+    workspaceUsed: 100, personalUsed: 100 });
+  const capacity = await readResearchDailyCapacity(db, { workspaceId, userId, now });
+  assert.equal(capacity.workspaceLimit, 1000);
+  assert.equal(capacity.remaining, 900);
+});
+
+test("invalid persisted workspace quota fails closed", async () => {
+  for (const workspaceLimit of [0, 1001, -10, NaN]) {
+    const { db } = mock({ workspaceLimit });
+    await assert.rejects(() => readResearchDailyCapacity(db, {
+      workspaceId, userId, now,
+    }), TypeError);
+  }
 });
