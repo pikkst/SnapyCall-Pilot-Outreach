@@ -272,13 +272,15 @@ export function buildGemini3CountTokensRequest({ model, payload }) {
 // unexpectedly large counts. Counting input does not certify output/thinking
 // charges, price versions or paid dispatch authorization.
 export function requireGemini3CountTokensWithinBudget({
-  countRequest, countResponse, maxInputTokens,
+  payload, countRequest, countResponse, maxInputTokens,
 }) {
   if (!Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
       maxInputTokens > 1_000_000 ||
       countRequest?.model !== "gemini-3-flash-preview" ||
-      !Array.isArray(countRequest?.contents) ||
-      countRequest.contents.length !== 1) {
+      JSON.stringify(countRequest?.contents) !==
+        JSON.stringify(buildGemini3CountTokensRequest({
+          model: "gemini-3-flash-preview", payload,
+        }).contents)) {
     throw new TypeError("Invalid Gemini token budget envelope");
   }
   const actual = countResponse?.totalTokens;
