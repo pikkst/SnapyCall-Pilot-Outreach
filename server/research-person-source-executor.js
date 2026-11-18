@@ -13,6 +13,7 @@ import { reserveOwnerSpend, settleOwnerSpend } from "./research-budget.js";
 import { normalizeCampaignObservations } from "./research-campaign-observations.js";
 import { isDirectPublicProfileUrl } from "./research-observation-email.js";
 import { researchCandidates } from "./ai-research.js";
+import { resolveCampaignResearchExecution } from "./research-campaign-worker.js";
 import { decryptKey } from "./security.js";
 
 const LEASE_MS = 120_000;
@@ -245,8 +246,8 @@ export async function finishPersonSourceJob(db, claim, {
       });
       if (collisions || otherProposals) source = null;
     }
-    const state = authorized
-      ? providerInvoked ? "COMPLETED" : "PAUSED" : "PAUSED";
+    const state = authorized && providerInvoked && code !== "BILLING_UNCERTAIN"
+      ? "COMPLETED" : "PAUSED";
     const reason = !authorized ? "WORKSPACE_ACCESS_REVOKED" :
       !providerInvoked ? "PROVIDER_NOT_DISPATCHED" :
       code === "BILLING_UNCERTAIN" ? "BILLING_UNCERTAIN" :
@@ -301,6 +302,9 @@ export async function runOnePersonSourceJob(db, {
 }, {
   now = () => new Date(), search = researchCandidates,
   decrypt = decryptKey,
+  tavilyApiKey = process.env.TAVILY_API_KEY,
+  tavilyEnabled = process.env.TAVILY_DUAL_PROVIDER_ENABLED === "true",
+  accountCapVerified = process.env.TAVILY_ACCOUNT_CAP_VERIFIED === "true",
 } = {}) {
   if (typeof encryptionKey !== "string" || encryptionKey.length < 16 ||
       typeof search !== "function" || typeof decrypt !== "function") {
@@ -310,6 +314,16 @@ export async function runOnePersonSourceJob(db, {
   if (!setting?.provider || !setting.model) {
     return { status: "BLOCKED", code: "RESEARCH_AI_SETTINGS_REQUIRED" };
   }
+  // Reuse the discovery executor's exact provider-specific billing contract.
+  // Gemini 3's approved tariff is Tavily Basic + text-only Gemini, NEVER
+  // Google's differently billed grounding search on the same model.
+  const price = requireResearchPriceEnvelope({
+    provider: setting.provider, model: setting.model,
+  });
+  const plan = resolveCampaignResearchExecution({
+    provider: setting.provider, model: setting.model, price, search,
+    tavilyApiKey, tavilyEnabled, accountCapVerified,
+  });
   // No paid search is allowed until the owner has a matching immutable
   // source-stage approval. Claim transaction rechecks model and pricing.
   const claim = await claimPersonSourceJob(db, {
@@ -335,9 +349,13 @@ export async function runOnePersonSourceJob(db, {
         { providerInvoked: false }, { now: now() });
     }
     invoked = true;
-    result = await search({
+    result = await plan.search({
       query: claim.query, limit: 5, provider: claim.provider,
       model: claim.model, apiKey: key,
+      ...(plan.dualProvider ? {
+        tavilyApiKey: plan.tavilyApiKey, maxResults: plan.maxResults,
+        maxInputTokens: plan.maxInputTokens,
+      } : {}),
     });
     const source = proposedPersonSource(result, claim);
     return await finishPersonSourceJob(db, claim,
