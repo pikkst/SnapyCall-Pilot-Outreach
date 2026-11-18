@@ -2228,7 +2228,6 @@ function App() {
                         disabled={campaignTestBusy}
                         onClick={() => {
                           setCampaignCreationOpen(value => !value);
-                          campaignCreateIdempotency.current = null;
                         }}>
                         {campaignCreationOpen ? "Hide new campaign setup" :
                           "Plan new campaign (free)"}
@@ -2256,6 +2255,10 @@ function App() {
                       from the server even after this page is reopened.
                       Cited experts are not verified email contacts.
                       No emails are sent.</p>
+                    <details className="research-technical-details"
+                      aria-label="AI provider and budget readiness">
+                      <summary>AI provider and budget ·
+                        {" "}{readiness.ready ? "Ready" : "Setup needed"}</summary>
                     <section aria-label="Campaign research setup" className="research-readiness">
                       <div className="research-readiness-heading">
                         <h4>Research setup</h4>
@@ -2282,6 +2285,7 @@ function App() {
                         Configure AI adapter, spending limit and quotas
                       </button>}
                     </section>
+                    </details>
                     {(campaignCreationOpen || workspaceCampaigns.length === 0) &&
                       <div className="form-grid" aria-label="Plan new research campaign">
                       <label>100-candidate search criteria
@@ -2679,62 +2683,6 @@ function App() {
                               Skip uncertain task without replay
                             </button>
                           </>}
-                        {campaignProgress.operationalState === "READY" &&
-                          campaignRunApproval?.run === null && <>
-                          <p>Personal AI key: {personalAi.keyConfigured ? "configured" : "missing"} ·
-                            {describeCampaignBudget(researchBudget,
-                              personalAi.keyConfigured).message} ·
-                            Daily research attempt limit: {researchLimits.dailyLimit}
-                            (shared across manual and campaign research).</p>
-                          <p className="muted">One campaign run continues through
-                            the remaining {campaignProgress.tasks.queued} queued tasks
-                            (maximum 24), until 100 cited candidates are found,
-                            the plan is exhausted, or a safety gate stops it.
-                            Start intervals are paced to respect the API limit.
-                            Leave this browser tab open while the run is active.</p>
-                          <p className="muted">Each task can incur a separate
-                            provider charge. The app currently reserves a
-                            conservative pricing ceiling; this is not the
-                            actual Gemini invoice. Workspace permissions, spend
-                            and daily quota are rechecked before each task.</p>
-                          <label className="checkbox-review">
-                            <input type="checkbox" checked={campaignPaidConfirmed}
-                              disabled={campaignTestBusy}
-                              onChange={event => setCampaignPaidConfirmed(event.target.checked)}/>
-                            I authorize this single campaign run for up to
-                            {Math.min(24, campaignProgress.tasks.queued)} paid AI research
-                            tasks, within my configured limits. I will keep the
-                            browser tab open, and stopping waits for the current task.
-                          </label>
-                          <button type="button" disabled={campaignTestBusy ||
-                            !campaignPaidConfirmed || !personalAi.keyConfigured ||
-                            !researchBudget.enforcedForPaidSearch ||
-                            researchBudget.monthlyLimitCents == null ||
-                            researchBudget.reconciliation?.needsReview === true ||
-                            budgetStatus !== "ready" || personalAiStatus !== "ready"}
-                            onClick={() => void executeManualCampaignTask(p.id, campaignProgress.id)}>
-                            Run campaign until target or safety stop
-                          </button>
-                          {campaignTestBusy && <button type="button" className="secondary"
-                            disabled={batchStopRequested.current}
-                            onClick={() => {
-                              batchStopRequested.current = true;
-                              setCampaignTestNotice("Stop requested. Current paid task may finish; no further task will start.");
-                            }}>
-                            Stop run after current task ({campaignBatchCompleted} complete)
-                          </button>}
-                          {(budgetStatus !== "ready" || personalAiStatus !== "ready") &&
-                            <p className="muted" role="status">Research budget or AI key
-                              status is loading or unavailable. Refresh Settings
-                              before initiating a paid call.</p>}
-                          {budgetStatus === "ready" && personalAiStatus === "ready" &&
-                            describeCampaignBudget(researchBudget,
-                              personalAi.keyConfigured).code !== "READY" &&
-                            <p role="status">Action required: {describeCampaignBudget(
-                              researchBudget, personalAi.keyConfigured).message}
-                              {" "}Review your application budget and spend ledger in AI settings.
-                              No automatic budget increase or refund is performed.</p>}
-                        </>}
                         <section className="campaign-observations"
                           aria-label="Saved campaign findings">
                           <div className="campaign-observations-heading">
