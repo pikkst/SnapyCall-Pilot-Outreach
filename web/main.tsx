@@ -88,10 +88,16 @@ type FullRunStatus = {
   lastCode: string | null; expiresAt: string;
   contactAcceptanceAuthorized: false; sendingEnabled: false;
 };
+type ResearchDailyCapacity = {
+  dayUtc: string; resetsAt: string;
+  workspaceLimit: number; workspaceUsed: number;
+  personalLimit: number; personalUsed: number; remaining: number;
+};
 type CampaignRunApprovalState = {
   run: ApprovedCampaignRun | null; autonomousRunEnabled: boolean;
   fullRun: FullRunStatus | null; fullRunEnabled: boolean;
   fullRunMissingStages: string[];
+  dailyQuota: ResearchDailyCapacity | null;
   priceEnvelope: null | { provider: string; model: string;
     worstCasePerCallCents: number; priceVersion: string };
   sendingEnabled: false;
@@ -351,6 +357,7 @@ function App() {
   const [campaignMaxTasks, setCampaignMaxTasks] = useState(10);
   const [campaignSourceCalls, setCampaignSourceCalls] = useState(40);
   const [campaignNoReplayConfirmed, setCampaignNoReplayConfirmed] = useState(false);
+  const [focusResearchDailyLimits, setFocusResearchDailyLimits] = useState(false);
 
   const [campaignProgressLastSeen, setCampaignProgressLastSeen] = useState<number | null>(null);
   const [campaignProgressLiveWarning, setCampaignProgressLiveWarning] = useState(false);
@@ -958,6 +965,13 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (partnerTab !== "settings" || !focusResearchDailyLimits) return;
+    document.getElementById("research-daily-limit-settings")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setFocusResearchDailyLimits(false);
+  }, [partnerTab, focusResearchDailyLimits]);
+
   async function approveCampaignAutonomousRun(workspaceId: string, campaignId: string) {
     const price = campaignRunApproval?.priceEnvelope;
     if (!price || !campaignRunApproval?.autonomousRunEnabled ||
@@ -969,6 +983,24 @@ function App() {
     setCampaignRunApprovalBusy(true);
     setCampaignRunApprovalNotice("");
     try {
+      // Refresh the server-owned counters before a billable approval. The
+      // backend repeats this check and remains authoritative on races.
+      const fresh = await api<CampaignRunApprovalState>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/approved-run?workspaceId=" + encodeURIComponent(workspaceId));
+      if (generation !== workspaceRequest.current ||
+          request !== campaignProgressRequest.current) return;
+      setCampaignRunApproval(fresh);
+      const requested = campaignMaxTasks + campaignSourceCalls;
+      if (!fresh.dailyQuota || fresh.run ||
+          requested > fresh.dailyQuota.remaining) {
+        setCampaignRunApprovalNotice(fresh.dailyQuota
+          ? "This run needs " + requested + " daily search slots, but only " +
+            fresh.dailyQuota.remaining + " remain. Update your personal limit " +
+            "if possible or wait for the UTC reset; no run was started."
+          : "Daily quota could not be verified. No run was started.");
+        return;
+      }
       const result = await api<{ run: ApprovedCampaignRun;
         fullRun: FullRunStatus; code: string }>(
         "/research-campaigns/" + encodeURIComponent(campaignId) +
@@ -2687,7 +2719,40 @@ function App() {
                             {qualifiedManifest.selectedCount > 0 &&
                               qualifiedManifest.reliable &&
                               qualifiedManifest.batchEnabled && <>
-                              <label className="campaign-contact-confirm">
+                              {campaignRunApproval.dailyQuota &&
+                              campaignMaxTasks + campaignSourceCalls >
+                                campaignRunApproval.dailyQuota.remaining &&
+                              <div role="alert" className="campaign-blocker"
+                                aria-label="Daily search quota warning">
+                                <strong>Daily research limit would be exceeded</strong>
+                                <p>This run may use up to {campaignMaxTasks +
+                                  campaignSourceCalls} paid searches (discovery
+                                  and source enrichment), but only
+                                  {" "}{campaignRunApproval.dailyQuota.remaining} of
+                                  today's slots remain. Reduce the run size,
+                                  update your personal limit if possible, or
+                                  wait until {new Date(
+                                    campaignRunApproval.dailyQuota.resetsAt
+                                  ).toLocaleString()} for the UTC reset.</p>
+                                <p>Personal: {campaignRunApproval.dailyQuota.personalUsed}
+                                  /{campaignRunApproval.dailyQuota.personalLimit}.
+                                  Workspace: {campaignRunApproval.dailyQuota.workspaceUsed}
+                                  /{campaignRunApproval.dailyQuota.workspaceLimit}.
+                                  The workspace safety cap cannot be increased.</p>
+                                <button type="button" className="secondary"
+                                  onClick={() => {
+                                    setFocusResearchDailyLimits(true);
+                                    setPartnerTab("settings");
+                                  }}>
+                                  Open research limit settings
+                                </button>
+                              </div>}
+                            {!campaignRunApproval.dailyQuota &&
+                              <p role="alert" className="campaign-blocker">
+                                Daily quota unavailable. Approval is blocked
+                                until the server confirms the remaining capacity.
+                              </p>}
+                            <label className="campaign-contact-confirm">
                                 <input type="checkbox"
                                   checked={qualifiedBatchConfirmed}
                                   onChange={event => setQualifiedBatchConfirmed(
@@ -2858,6 +2923,9 @@ function App() {
                             <button type="button"
                               disabled={!campaignNoReplayConfirmed || campaignRunApprovalBusy ||
                                 !campaignRunApproval.fullRunEnabled ||
+                                !campaignRunApproval.dailyQuota ||
+                                campaignMaxTasks + campaignSourceCalls >
+                                  campaignRunApproval.dailyQuota.remaining ||
                                 ((campaignMaxTasks +
                                   campaignSourceCalls) *
                                   campaignRunApproval.priceEnvelope.worstCasePerCallCents > 50000)}
@@ -3703,7 +3771,8 @@ function App() {
                 onClick={() => void deletePersonalAiSettings()}>Remove my AI key</button>}
             </form>}
         </section>
-        <section aria-label="Personal AI research limits" className="review-panel">
+        <section id="research-daily-limit-settings"
+          aria-label="Personal AI research limits" className="review-panel">
           <h2>My research limits</h2>
           <p className="muted">Your limits apply to your personal API key in each
             authorized workspace. Limits count attempts, including failed provider calls.
