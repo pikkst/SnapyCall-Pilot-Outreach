@@ -1094,6 +1094,7 @@ test("bounded dual-provider pipeline marks ambiguous provider calls non-retryabl
       throw new Error("Must not run");
     },
   }), error => error.code === "RETRIEVAL_OUTCOME_UNCERTAIN" &&
+    error.stage === "TAVILY_SEARCH_DISPATCHED" &&
     error.billableCallPossible && !error.automaticRetryAllowed);
   assert.equal(calls, 1);
   await assert.rejects(() => runBoundedTavilyGemini3Stages(config, {
@@ -1110,6 +1111,7 @@ test("bounded dual-provider pipeline marks ambiguous provider calls non-retryabl
       throw new Error("Synthetic countTokens error");
     },
   }), error => error.code === "DUAL_PROVIDER_OUTCOME_UNCERTAIN" &&
+    error.stage === "GEMINI_COUNT_TOKENS_DISPATCHED" &&
     error.billableCallPossible && !error.automaticRetryAllowed);
   assert.equal(calls, 3);
 });
@@ -1162,4 +1164,54 @@ test("dual-provider results are compatible with the existing worker observation 
   assert.equal(normalized[0].status, "UNVERIFIED");
   assert.equal(evidence.sendingEnabled, false);
   assert.equal(evidence.imported, false);
+});
+
+
+test("dual-provider orchestration preserves sanitized generation and local rejection stages", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const input = {
+    query, limit: 2, maxResults: 2,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key",
+    geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview",
+    maxInputTokens: 16_384,
+  };
+  const tavilyPost = async () => ({
+    results: [{
+      url: source, title: "Verified professional",
+      content: "Professional profile with publicly described work",
+    }],
+  });
+  const apiCalls = [];
+  await assert.rejects(() => runBoundedTavilyGemini3Stages(input, {
+    tavilyPost,
+    geminiPost: async url => {
+      apiCalls.push(url);
+      if (url.endsWith(":countTokens")) return { totalTokens: 850 };
+      throw new Error("Secret provider diagnostic must not reach browser");
+    },
+  }), error => error.code === "DUAL_PROVIDER_OUTCOME_UNCERTAIN" &&
+    error.stage === "GEMINI_GENERATE_CONTENT_DISPATCHED" &&
+    error.message === "Bounded multi-provider research requires reconciliation" &&
+    error.billableCallPossible && error.automaticRetryAllowed === false &&
+    !error.message.includes("Secret"));
+  assert.equal(apiCalls.length, 2);
+  const calls = [];
+  await assert.rejects(() => runBoundedTavilyGemini3Stages({
+    ...input, maxInputTokens: 257,
+  }, {
+    tavilyPost: async (...args) => {
+      calls.push("tavily");
+      return tavilyPost(...args);
+    },
+    geminiPost: async () => {
+      calls.push("gemini");
+      throw new Error("Should not call Gemini with oversized prompt");
+    },
+  }), error => error.code === "DUAL_PROVIDER_OUTCOME_UNCERTAIN" &&
+    error.stage === "GEMINI_INPUT_PREPARATION" &&
+    error.billableCallPossible && error.automaticRetryAllowed === false);
+  assert.deepEqual(calls, ["tavily"]);
 });
