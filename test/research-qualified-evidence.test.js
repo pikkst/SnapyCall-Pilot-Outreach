@@ -17,7 +17,7 @@ const ben = person("Ben Example", "ben@example.org", "https://example.org/ben");
 test("counts independent named email evidence but not accepted or sendable contacts", () => {
   assert.deepEqual(summarizeQualifiedEmailEvidence([ada, ben]), {
     qualifiedEvidence: 2, reviewRequired: 2, ambiguous: 0,
-    countReliable: true, contactsAccepted: 0, sendEligible: 0,
+    countReliable: true, sendEligible: 0,
     sendingEnabled: false,
   });
 });
