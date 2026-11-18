@@ -49,6 +49,17 @@ type CampaignEmailTriageState = {
     eligibleSubsetObservations: number; excludedObservations: number };
   enabled: boolean;
 };
+type QualifiedContactManifest = {
+  status: number; reliable: boolean; totalQualified: number;
+  eligibleForBatch: number; selectedCount: number;
+  manifestHash: string | null; batchEnabled: boolean;
+  sendingEnabled: false;
+  entries: Array<{ observationId: string; name: string; category: string;
+    email: string; sourceUrl: string; evidenceDigest: string;
+    inspectedAt: string }>;
+  batch: { status: string; itemCount: number; saved: number;
+    needsReview: number } | null;
+};
 type CampaignObservationsPage = {
   observations: CampaignObservation[]; nextCursor: string | null;
   verifiedContacts: number; sendingEnabled: false;
@@ -317,6 +328,11 @@ function App() {
   const [campaignTriageBusy, setCampaignTriageBusy] = useState(false);
   const [campaignTriageConfirmed, setCampaignTriageConfirmed] = useState(false);
   const [campaignTriageNotice, setCampaignTriageNotice] = useState("");
+  const [qualifiedManifest, setQualifiedManifest] =
+    useState<QualifiedContactManifest | null>(null);
+  const [qualifiedManifestBusy, setQualifiedManifestBusy] = useState(false);
+  const [qualifiedBatchConfirmed, setQualifiedBatchConfirmed] = useState(false);
+  const [qualifiedBatchNotice, setQualifiedBatchNotice] = useState("");
 
   const [campaignRunApproval, setCampaignRunApproval] =
     useState<CampaignRunApprovalState | null>(null);
@@ -1110,6 +1126,10 @@ function App() {
     setCampaignTriageBusy(false);
     setCampaignTriageConfirmed(false);
     setCampaignTriageNotice("");
+    setQualifiedManifest(null);
+    setQualifiedManifestBusy(false);
+    setQualifiedBatchConfirmed(false);
+    setQualifiedBatchNotice("");
     setCampaignProgressId(campaignId);
     setCampaignProgress(null);
     setCampaignProgressStatus("loading");
