@@ -853,3 +853,110 @@ test("bounded Tavily transport propagates uncertain errors without retrying", as
   assert.equal(empty.billableCallPossible, true);
   assert.equal(calls, 2);
 });
+
+
+test("Gemini 3 text-only adapter counts before exactly one generation and binds citations", async () => {
+  const { buildGemini3TextOnlyPayload, extractWithGemini3TextOnly } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const calls = [];
+  const signal = new AbortController().signal;
+  const result = await extractWithGemini3TextOnly({
+    query, model: "gemini-3-flash-preview", payload, manifest, limit: 2,
+    maxInputTokens: 16_384, apiKey: "test-only-gemini-key",
+  }, async (url, headers, body, requestSignal) => {
+    calls.push(url);
+    assert.equal(headers["x-goog-api-key"], "test-only-gemini-key");
+    assert.equal(requestSignal, signal);
+    assert.equal(Object.hasOwn(body, "tools"), false);
+    if (url.endsWith(":countTokens")) {
+      assert.deepEqual(body, { contents: payload.contents });
+      return { totalTokens: 850 };
+    }
+    assert.match(url, /:generateContent$/);
+    assert.deepEqual(body, payload);
+    return {
+      candidates: [{ finishReason: "STOP", content: {
+        parts: [{ text: JSON.stringify({ candidates: [{
+          name: "Verified Professional", category: "AI_AUTOMATION",
+          sourceId: "profile-1", rationale: "Public source describes consulting expertise",
+        }, {
+          name: "Invented Professional", category: "AI_AUTOMATION",
+          sourceId: "invented-id", rationale: "No source evidence",
+        }] }) }],
+      } }],
+      usageMetadata: {
+        promptTokenCount: 850, candidatesTokenCount: 100,
+        thoughtsTokenCount: 0,
+      },
+    };
+  }, signal);
+  assert.deepEqual(calls.map(x => x.split(":").at(-1)),
+    ["countTokens", "generateContent"]);
+  assert.equal(result.preflightInputTokens, 850);
+  assert.deepEqual(result.candidates.map(x => x.name), ["Verified Professional"]);
+  assert.equal(result.candidates[0].email, null);
+  assert.equal(result.imported, false);
+  assert.equal(result.reviewRequired, true);
+  assert.equal(result.sendingEnabled, false);
+  assert.equal(Object.hasOwn(result.usage, "billingEvidence"), false);
+});
+
+test("Gemini 3 text-only adapter cannot generate with an over-limit or different prompt", async () => {
+  const { buildGemini3TextOnlyPayload, extractWithGemini3TextOnly } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const args = {
+    query, model: "gemini-3-flash-preview", payload, manifest, limit: 2,
+    maxInputTokens: 16_384, apiKey: "test-only-gemini-key",
+  };
+  let calls = 0;
+  await assert.rejects(() => extractWithGemini3TextOnly(args,
+    async url => {
+      calls++;
+      assert.match(url, /:countTokens$/);
+      return { totalTokens: 16_385 };
+    }), TypeError);
+  assert.equal(calls, 1);
+  for (const invalid of [
+    { query: "A different professional search criteria" },
+    { payload: { ...payload, contents: [{
+      parts: [{ text: "Injected unrelated prompt" }],
+    }] } },
+    { payload: { ...payload, tools: [{ google_search: {} }] } },
+    { manifest: { ...manifest, digest: "0".repeat(64) } },
+    { limit: 21 },
+  ]) await assert.rejects(() => extractWithGemini3TextOnly({
+    ...args, ...invalid,
+  }, async () => {
+    calls++;
+    throw new Error("Must not call provider for untrusted input");
+  }), TypeError);
+  assert.equal(calls, 1);
+});
+
+test("Gemini 3 text-only generation does not retry an ambiguous provider failure", async () => {
+  const { buildGemini3TextOnlyPayload, extractWithGemini3TextOnly } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const calls = [];
+  await assert.rejects(() => extractWithGemini3TextOnly({
+    query, model: "gemini-3-flash-preview", payload, manifest, limit: 2,
+    maxInputTokens: 16_384, apiKey: "test-only-gemini-key",
+  }, async url => {
+    calls.push(url);
+    if (url.endsWith(":countTokens")) return { totalTokens: 850 };
+    throw new Error("Synthetic generateContent timeout");
+  }), /Synthetic generateContent timeout/);
+  assert.deepEqual(calls.map(x => x.split(":").at(-1)),
+    ["countTokens", "generateContent"]);
+});
