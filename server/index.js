@@ -28,6 +28,7 @@ import { startApprovedCampaignWorker } from "./research-approved-runner.js";
 import { normalizeManualResearchSources, enqueueManualResearchSources } from "./research-manual-sources.js";
 import { inspectCampaignObservationEmail } from "./research-observation-email.js";
 import { summarizeQualifiedEmailEvidence } from "./research-qualified-evidence.js";
+import { planPersonSourceResolution, publicPersonSourcePlan } from "./research-person-source-plan.js";
 import { approveEmailTriage, stopEmailTriage, emailTriageSummary,
   emailTriageSourceReadiness, startEmailTriageWorker }
   from "./research-email-triage-worker.js";
@@ -1848,7 +1849,7 @@ app.get("/api/research-campaigns/:id/email-triage",
     // preflight or interpret inspectable as independently verified identity.
     const savedSources = await prisma.researchCampaignObservation.findMany({
       where: { campaignId: campaign.id },
-      select: { citationUrl: true, groundingStatus: true,
+      select: { id: true, citationUrl: true, groundingStatus: true,
         groundingResolvedUrl: true, groundingProvenance: true,
         name: true, category: true, emailTriageStatus: true,
         emailTriageCode: true, emailTriageEmail: true,
@@ -1860,6 +1861,8 @@ app.get("/api/research-campaigns/:id/email-triage",
       ...emailTriageSummary(campaign, counts),
       preflight: emailTriageSourceReadiness(campaign.status, savedSources),
       qualification: summarizeQualifiedEmailEvidence(savedSources),
+      sourceResolution: publicPersonSourcePlan(
+        planPersonSourceResolution(savedSources, { maxJobs: 0 })),
       enabled: env.AI_EMAIL_TRIAGE_ENABLED === "true",
     });
   }));
