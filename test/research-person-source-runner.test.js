@@ -17,6 +17,7 @@ function mock({ approval = true, proposed = false } = {}) {
     researchPersonSourceApproval: {
       findFirst: async () => approval ? scope : null,
     },
+    researchPersonSourceCycle: { findFirst: async () => null },
     researchPersonSourceJob: {
       findFirst: async () => proposed ? { id: jobId } : null,
     },
@@ -129,9 +130,11 @@ test("persistent review block is owner-scoped and non-billable", async () => {
         findUnique: async () => ({
           workspaceId: scope.workspaceId, ownerId: scope.ownerId,
           publicInspectionAuthorized: true, status: "RUNNING",
+          expiresAt: new Date(Date.now() + 60000),
         }),
       },
       researchPersonSourceJob: {
+        findFirst: async () => ({ cycleIndex: 0, status: "COMPLETED" }),
         updateMany: async ({ data }) => {
           events.push(data.status); return { count: 1 };
         },
