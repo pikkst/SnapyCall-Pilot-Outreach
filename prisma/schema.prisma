@@ -277,6 +277,7 @@ model ResearchCampaign {
   observations ResearchCampaignObservation[]
   manualSources ResearchCampaignSource[]
   personSourceJobs ResearchPersonSourceJob[]
+  personSourceApproval ResearchPersonSourceApproval?
   approvedRun ResearchCampaignRun?
   // This is a separate no-provider-call authorization for reading public profiles.
   emailTriageStatus String @default("IDLE")
@@ -428,6 +429,32 @@ model CandidateDirectEmailObservation {
   @@index([workspaceId, inspectedAt])
 }
 
+
+model ResearchPersonSourceApproval {
+  id String @id @default(cuid())
+  campaignId String @unique
+  campaign ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  workspaceId String
+  ownerId String
+  provider String
+  model String
+  priceVersion String
+  worstCasePerCallCents Int
+  maxCalls Int
+  maxWorstCaseCents Int
+  eligibleJobCount Int
+  // Frozen set of queued source-resolution job fingerprints.
+  jobSnapshotHash String @db.Char(64)
+  status String @default("APPROVED")
+  startedCalls Int @default(0)
+  committedWorstCaseCents Int @default(0)
+  approvedAt DateTime @default(now())
+  expiresAt DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([status, expiresAt])
+  @@index([workspaceId, ownerId])
+}
 
 model ResearchPersonSourceJob {
   id String @id @default(cuid())
