@@ -345,3 +345,84 @@ test("published Nov 2026 Tavily Basic plus Gemini 3 Flash quote stays non-author
     enabled: true, remainingCents: 50_000,
   }).pricingStatus, "MODEL_PRICING_UNAVAILABLE");
 });
+
+
+test("combined settlement fails closed without complete attested dual-provider usage", async () => {
+  const { calculateVerifiedCombinedSpendCents } =
+    await import("../server/research-price-policy.js");
+  const base = {
+    enforcementReady: true, provider: "gemini",
+    model: "gemini-3-flash-preview", retrievalProvider: "tavily",
+    billingContractVersion: "tavily-basic-gemini3-text-v1",
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 800 },
+    textModel: {
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+    worstCaseCents: 3,
+  };
+  const usage = {
+    retrievalCredits: 1, inputTokens: 1000,
+    outputTokens: 400, thinkingTokens: 100,
+    billingEvidence: {
+      source: "trusted_provider_adapters",
+      contractVersion: base.billingContractVersion, complete: true,
+      retrievalProvider: "tavily", textProvider: "gemini",
+      model: base.model,
+    },
+  };
+  assert.equal(calculateVerifiedCombinedSpendCents(base, usage), 3);
+  for (const changed of [
+    { ...base, enforcementReady: false },
+    { ...base, worstCaseCents: 2 },
+    { ...base, billingContractVersion: "other" },
+    { ...base, model: "gemini-2.5-flash" },
+    { ...base, retrievalProvider: "google_search" },
+  ]) assert.equal(calculateVerifiedCombinedSpendCents(changed, usage), null);
+  for (const bad of [
+    null,
+    { ...usage, billingEvidence: undefined },
+    { ...usage, retrievalCredits: null },
+    { ...usage, retrievalCredits: 0 },
+    { ...usage, retrievalCredits: 2 },
+    { ...usage, inputTokens: "1000" },
+    { ...usage, inputTokens: 16_385 },
+    { ...usage, outputTokens: 2048, thinkingTokens: 1 },
+    { ...usage, outputTokens: 400, thinkingTokens: undefined },
+    { ...usage, billingEvidence: { ...usage.billingEvidence, complete: false } },
+    { ...usage, billingEvidence: { ...usage.billingEvidence, source: "browser" } },
+    { ...usage, billingEvidence: { ...usage.billingEvidence, model: "gemini-2.5-flash" } },
+  ]) assert.equal(calculateVerifiedCombinedSpendCents(base, bad), null);
+});
+
+test("existing dual-provider adapter telemetry cannot certify a budget refund", async () => {
+  const { calculateVerifiedCombinedSpendCents } =
+    await import("../server/research-price-policy.js");
+  const fakeFuturePolicy = {
+    enforcementReady: true, provider: "gemini",
+    model: "gemini-3-flash-preview", retrievalProvider: "tavily",
+    billingContractVersion: "tavily-basic-gemini3-text-v1",
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 800 },
+    textModel: {
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+    worstCaseCents: 3,
+  };
+  // The current adapter only returns diagnostic counts and reportedCredits;
+  // it does not attest provider-signed complete billing units or thinking.
+  assert.equal(calculateVerifiedCombinedSpendCents(fakeFuturePolicy, {
+    retrievalCredits: 1, inputTokens: 800, outputTokens: 200,
+    thinkingTokens: 0,
+  }), null);
+  assert.equal(calculateVerifiedCombinedSpendCents(fakeFuturePolicy, {
+    reportedRetrievalCredits: 1,
+    usage: { inputTokens: 800, outputTokens: 200, thinkingTokens: 0 },
+  }), null);
+  assert.equal(requireResearchPriceEnvelope.bind(null, {
+    provider: "gemini", model: "gemini-3-flash-preview",
+  }) instanceof Function, true);
+  assert.throws(() => requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-3-flash-preview",
+  }), ResearchPricingUnavailable);
+});
