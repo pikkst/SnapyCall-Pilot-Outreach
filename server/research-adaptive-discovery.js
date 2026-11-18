@@ -35,13 +35,20 @@ export function nextAdaptiveDiscoveryTask({ query, targetCount, planVersion,
   ];
   const round = 1 + Math.floor(
     (index - base.tasks.length) / base.tasks.length);
-  const fullQuery = [
-    query, "Find additional independent experts in",
-    seed.region + "; focus on", seed.facet + "; prioritize", focus + ".",
-    "Distinct discovery round", String(round),
+  // The original campaign input permits up to 240 characters. The
+  // provider query limit remains 350; never make a paid result uncommittable
+  // just because a legal input needs a shorter deterministic supplement.
+  const detailed = [
+    query, "Additional direct professional profiles in",
+    seed.region + ";", seed.facet + ";", focus + "; round", String(round),
   ].join(" ");
-  if (fullQuery.length > 430) {
-    throw new TypeError("Adaptive query exceeds controlled context bound");
+  const compact = [
+    query, "More original profiles in", seed.region,
+    "batch", String(round), "facet", String(index % 24),
+  ].join(" ");
+  const fullQuery = detailed.length <= 350 ? detailed : compact;
+  if (fullQuery.length > 350) {
+    throw new TypeError("Adaptive query exceeds provider bound");
   }
   return Object.freeze({
     index, limit: seed.limit, query: fullQuery,
