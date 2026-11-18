@@ -447,3 +447,27 @@ export function normalizeBoundedTavilySearch({ response, maxResults, observedAt 
     billableCallPossible: true,
   });
 }
+
+
+// Transport adapter for a single independently approved retrieval call.
+// Caller MUST hold the owner-scoped task lease, approved search entitlement
+// and combined monetary reservation before calling this function. It is not
+// reachable from campaign execution until those server-side gates exist.
+export async function searchWithBoundedTavily({
+  query, maxResults, observedAt, apiKey,
+}, post, signal) {
+  // Validate the complete local request BEFORE any potentially charged call.
+  const request = buildBoundedTavilySearchRequest({ query, maxResults });
+  if (typeof post !== "function" || typeof apiKey !== "string" ||
+      !/^tvly-[A-Za-z0-9_-]{8,}$/.test(apiKey) ||
+      typeof observedAt !== "string" ||
+      !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(observedAt) ||
+      !Number.isFinite(Date.parse(observedAt)) ||
+      new Date(observedAt).toISOString() !== observedAt) {
+    throw new TypeError("Trusted bounded Tavily retrieval configuration required");
+  }
+  // A second call after a transport error could charge again: no retry here.
+  const response = await post("https://api.tavily.com/search",
+    { authorization: "Bearer " + apiKey }, request, signal);
+  return normalizeBoundedTavilySearch({ response, maxResults, observedAt });
+}
