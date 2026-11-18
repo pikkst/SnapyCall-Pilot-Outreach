@@ -191,3 +191,38 @@ test("terminal cycle is fenced; no replay after paid or public inspection uncert
   const replay = await finalizeSourceCycle(f.db, scope);
   assert.equal(replay.status, "IDLE");
 });
+
+test("100 synthetic continuation jobs span four unique cycles without new paid permission", async () => {
+  const f = fixture({ remaining: 100, usedFirst: 25, sourceLimit: 125 });
+  const billedObservationIds = new Set(f.jobs.filter(job =>
+    job.attempts === 1).map(job => job.observationId));
+  for (let cycle = 1; cycle <= 4; cycle++) {
+    const created = await createNextSourceCycle(f.db, scope, { now: clock });
+    assert.equal(created.status, "CREATED");
+    assert.equal(created.cycleIndex, cycle);
+    assert.equal(created.count, 25);
+    const claimed = f.jobs.filter(job => job.cycleIndex === cycle);
+    assert.equal(claimed.length, 25);
+    for (const job of claimed) {
+      assert.equal(job.status, "QUEUED");
+      assert.equal(job.attempts, 0);
+      assert.equal(billedObservationIds.has(job.observationId), false);
+      billedObservationIds.add(job.observationId);
+      job.status = "VERIFIED";
+      job.attempts = 1;
+    }
+    f.cycles.at(-1).status = "RUNNING";
+    f.cycles.at(-1).startedCalls = 25;
+    f.cycles.at(-1).committedWorstCaseCents = 25 * price.worstCaseCents;
+    const finished = await finalizeSourceCycle(f.db, scope);
+    assert.equal(finished.status, "COMPLETED");
+  }
+  assert.equal(billedObservationIds.size, 125);
+  assert.equal(f.cycles.length, 4);
+  assert.equal(f.first.startedCalls + f.cycles.reduce((sum, c) =>
+    sum + c.startedCalls, 0), 125);
+  const exhausted = await createNextSourceCycle(f.db, scope, { now: clock });
+  assert.equal(exhausted.status, "EXHAUSTED");
+  assert.equal(exhausted.code, "SOURCE_CONTINUATION_BUDGET_EXHAUSTED");
+  assert.equal(f.jobs.some(job => job.status === "QUEUED"), false);
+});
