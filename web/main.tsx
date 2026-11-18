@@ -2749,7 +2749,7 @@ function App() {
                                   onChange={event => setCampaignTriageConfirmed(event.target.checked)}/>
                                 I authorize a single bounded inspection of
                                 {" "}{campaignEmailTriage.preflight?.eligibleSubsetObservations ?? 0}
-                                {" "}independently attributable public profile URLs
+                                {" "}independently inspectable public source URLs
                                 (24-hour approval, no paid AI calls, no automatic retry).
                                 {campaignEmailTriage.preflight?.partialEligible &&
                                   <> I explicitly approve excluding
