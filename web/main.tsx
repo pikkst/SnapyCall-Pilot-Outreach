@@ -44,6 +44,9 @@ type CampaignEmailTriageState = {
   contactsCreated: 0; providerCalls: 0; sendingEnabled: false;
   qualification?: { qualifiedEvidence: number; reviewRequired: number;
     ambiguous: number; countReliable: boolean; sendingEnabled: false };
+  preflight?: { eligible: boolean; partialEligible: boolean; code: string;
+    observations: number; inspectableObservations: number; uniqueSources: number;
+    eligibleSubsetObservations: number; excludedObservations: number };
   enabled: boolean;
 };
 type CampaignObservationsPage = {
@@ -1045,8 +1048,10 @@ function App() {
         encodeURIComponent(workspaceId), {
           method: "POST",
           body: JSON.stringify(action === "start" ? {
-            maxPages: Math.min(campaignProgress?.uniqueSourcedCandidates ?? 0, 250),
+            maxPages: Math.min(campaignEmailTriage?.preflight?.observations ?? 0, 250),
             confirmPublicInspection: true,
+            ...(campaignEmailTriage?.preflight?.partialEligible
+              ? { confirmSkipUninspectable: true } : {}),
           } : { confirmStop: true }),
         });
       if (generation !== workspaceRequest.current ||
@@ -2736,16 +2741,21 @@ function App() {
                           {campaignEmailTriage.status === "IDLE" &&
                             campaignEmailTriage.enabled &&
                             ["COMPLETED", "PARTIAL"].includes(campaignProgress.status) &&
-                            campaignProgress.uniqueSourcedCandidates > 0 &&
-                            campaignProgress.uniqueSourcedCandidates <= 250 && <>
+                            (campaignEmailTriage.preflight?.eligible ||
+                              campaignEmailTriage.preflight?.partialEligible) && <>
                               <label className="campaign-contact-confirm">
                                 <input type="checkbox"
                                   checked={campaignTriageConfirmed}
                                   onChange={event => setCampaignTriageConfirmed(event.target.checked)}/>
-                                I authorize a single bounded inspection of up to
-                                {" "}{campaignProgress.uniqueSourcedCandidates} saved public
-                                profile URLs (24-hour approval, no paid AI calls,
-                                no automatic retry after an uncertain inspection).
+                                I authorize a single bounded inspection of
+                                {" "}{campaignEmailTriage.preflight?.eligibleSubsetObservations ?? 0}
+                                {" "}independently attributable public profile URLs
+                                (24-hour approval, no paid AI calls, no automatic retry).
+                                {campaignEmailTriage.preflight?.partialEligible &&
+                                  <> I explicitly approve excluding
+                                    {" "}{campaignEmailTriage.preflight.excludedObservations}
+                                    {" "}shared, opaque or uninspectable sources without fetching them.
+                                    Excluded observations remain saved for later source resolution.</>}
                               </label>
                               <button type="button"
                                 disabled={!campaignTriageConfirmed || campaignTriageBusy}
