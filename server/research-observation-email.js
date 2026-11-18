@@ -62,7 +62,10 @@ export async function inspectCampaignObservationEmail(db, {
   const observation = await db.researchCampaignObservation.findFirst({
     where: { id: observationId, campaignId },
     select: { id: true, name: true, category: true, citationUrl: true,
-      groundingStatus: true, groundingResolvedUrl: true, groundingProvenance: true },
+      groundingStatus: true, groundingResolvedUrl: true, groundingProvenance: true,
+      personSourceUrl: true, personSourceProvenance: true,
+      personSourceVerifiedAt: true, emailTriageStatus: true,
+      emailTriageDigest: true },
   });
   if (!observation) return { status: 404, code: "OBSERVATION_NOT_FOUND" };
   const url = observationInspectionSource(observation);
@@ -76,7 +79,8 @@ export async function inspectCampaignObservationEmail(db, {
   // citations (e.g. a directory). Reject both direct and resolved collisions.
   const others = await db.researchCampaignObservation.count({
     where: { campaignId, id: { not: observationId },
-      OR: [{ citationUrl: url }, { groundingResolvedUrl: url }] },
+      OR: [{ citationUrl: url }, { groundingResolvedUrl: url },
+        { personSourceUrl: url }] },
   });
   if (others) {
     return { status: 200, code: "SHARED_SOURCE_REQUIRES_REVIEW",
@@ -115,7 +119,10 @@ export async function inspectCampaignObservationEmail(db, {
   const current = await db.researchCampaignObservation.findFirst({
     where: { id: observationId, campaignId },
     select: { id: true, name: true, category: true, citationUrl: true,
-      groundingStatus: true, groundingResolvedUrl: true, groundingProvenance: true },
+      groundingStatus: true, groundingResolvedUrl: true, groundingProvenance: true,
+      personSourceUrl: true, personSourceProvenance: true,
+      personSourceVerifiedAt: true, emailTriageStatus: true,
+      emailTriageDigest: true },
   });
   if (!current || current.name !== observation.name ||
       current.category !== observation.category ||
@@ -126,7 +133,8 @@ export async function inspectCampaignObservationEmail(db, {
   }
   const conflicts = await db.researchCampaignObservation.count({
     where: { campaignId, id: { not: observationId },
-      OR: [{ citationUrl: url }, { groundingResolvedUrl: url }] },
+      OR: [{ citationUrl: url }, { groundingResolvedUrl: url },
+        { personSourceUrl: url }] },
   });
   if (conflicts) return { status: 200, code: "SHARED_SOURCE_REQUIRES_REVIEW",
     contactCreated: false, emailChecked: false, sendingEnabled: false };
