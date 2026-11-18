@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { publicCitationUrl } from "./research-evidence.js";
 import { completeResearchTask } from "./research-campaign-leases.js";
+import { maybeAppendAdaptiveDiscoveryTask } from "./research-adaptive-discovery.js";
 import { consecutiveQualityFailures, shouldStopForQuality } from "./research-quality-gate.js";
 
 const observationSchema = z.object({
@@ -130,7 +131,14 @@ export async function commitCampaignResearchResult(db, claim, preview,
       const unique = await tx.researchCampaignObservation.count({
         where: { campaignId: claim.campaignId },
       });
-      if (unique >= campaign.targetCount) {
+      const full = await tx.researchFullRun?.findUnique({
+        where: { campaignId: claim.campaignId },
+        select: { status: true, workspaceId: true, ownerId: true },
+      });
+      const adaptive = full?.status === "DISCOVERY" &&
+        full.workspaceId === claim.workspaceId &&
+        full.ownerId === claim.ownerId;
+      if (unique >= campaign.targetCount && !adaptive) {
         // Prevent another paid claim after the threshold has been reached.
         await tx.researchCampaignTask.updateMany({
           where: { campaignId: claim.campaignId, status: "QUEUED" },
@@ -146,7 +154,25 @@ export async function commitCampaignResearchResult(db, claim, preview,
         const queued = await tx.researchCampaignTask.count({
           where: { campaignId: claim.campaignId, status: "QUEUED" },
         });
-        if (queued === 0) terminalStatus = "PARTIAL";
+        if (queued === 0) {
+          // Qualified-email research must not stop at the raw name count.
+          // Append exactly one deterministic task under the SAME campaign
+          // lock and immutable approved spend limit. Existing campaigns
+          // preserve their original observation-based finalization.
+          const expansion = adaptive
+            ? await maybeAppendAdaptiveDiscoveryTask(tx, {
+              campaignId: claim.campaignId,
+              workspaceId: claim.workspaceId,
+              ownerId: claim.ownerId,
+              campaign: await tx.researchCampaign.findUnique({
+                where: { id: claim.campaignId },
+                select: { query: true, targetCount: true,
+                  planVersion: true, idempotencyKey: true },
+              }),
+              observedCount: unique, now,
+            }) : { appended: false };
+          if (!expansion.appended) terminalStatus = "PARTIAL";
+        }
       }
     }
     if (terminalStatus) {
