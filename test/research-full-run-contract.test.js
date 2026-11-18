@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { validateFullRunScope }
   from "../server/research-full-run-contract.js";
-import { approveCampaignRun }
+import { approveCampaignRun, stopApprovedCampaignRun }
   from "../server/research-campaign-run-approval.js";
 import { requireResearchPriceEnvelope }
   from "../server/research-price-policy.js";
@@ -143,3 +143,68 @@ test("legacy discovery approval contract remains strict, without inspection cons
   assert.deepEqual(f.calls, ["discovery", "audit"]);
   assert.equal(result.fullRun, undefined);
 });
+
+test("one stop after discovery cancels future source and inspection work", async () => {
+  const actions = [];
+  const run = { ...scopeForStop(), status: "COMPLETED",
+    id: "run-id", startedTasks: 12,
+    committedWorstCaseCents: discovery.maxWorstCaseCents };
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async parts => {
+      const sql = parts.join("?");
+      if (sql.includes('FROM "PartnerMembership"'))
+        return [{ revokedAt: null }];
+      if (sql.includes('FROM "ResearchCampaign"'))
+        return [{ id: campaignId }];
+      throw Error("Unexpected SQL");
+    },
+    researchCampaignRun: {
+      findUnique: async () => run,
+      update: async () => { throw Error("Completed discovery remains terminal"); },
+    },
+    researchFullRun: {
+      findUnique: async () => ({
+        id: "full-id", campaignId, ownerId, workspaceId,
+        status: "SOURCE_RUNNING",
+      }),
+      updateMany: async ({ data }) => {
+        actions.push("full:" + data.status);
+        return { count: 1 };
+      },
+    },
+    researchPersonSourceApproval: {
+      updateMany: async ({ data }) => {
+        actions.push("source:" + data.status);
+        return { count: 1 };
+      },
+    },
+    researchCampaign: {
+      updateMany: async ({ data }) => {
+        actions.push("triage:" + data.emailTriageStatus);
+        return { count: 1 };
+      },
+    },
+    auditEvent: { create: async ({ data }) => {
+      actions.push("audit");
+      assert.equal(data.metadata.fullRunStopped, true);
+      assert.equal(data.metadata.sendingEnabled, false);
+    } },
+  }) };
+  const result = await stopApprovedCampaignRun(db, {
+    campaignId, workspaceId, ownerId,
+  });
+  assert.equal(result.code, "RUN_STOPPED");
+  assert.equal(result.fullRunStopped, true);
+  assert.equal(result.run.status, "COMPLETED");
+  assert.deepEqual(actions,
+    ["full:STOPPED", "source:STOPPED", "triage:PAUSED", "audit"]);
+});
+
+function scopeForStop() {
+  return { campaignId, workspaceId, ownerId,
+    provider: "gemini", model: "gemini-3-flash-preview",
+    priceVersion: price.priceVersion,
+    maxTasks: discovery.maxTasks,
+    maxWorstCaseCents: discovery.maxWorstCaseCents,
+  };
+}
