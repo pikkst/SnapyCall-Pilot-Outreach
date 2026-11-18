@@ -33,7 +33,7 @@ const job = {
   id: scope.jobId, campaignId: scope.campaignId,
   observationId: observation.id,
   evidenceFingerprint: personSourceFingerprint(observation),
-  proposedSourceUrl: url, status: "COMPLETED",
+  proposedSourceUrl: url, status: "COMPLETED", cycleIndex: 0,
 };
 function fixture({ approval = true, shared = false,
   memberAfterFetch = true, original = observation } = {}) {
