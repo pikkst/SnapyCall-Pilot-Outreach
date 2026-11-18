@@ -416,6 +416,11 @@ function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [adminRemovedView, setAdminRemovedView] = useState(false);
+  const [workspaceRemovedView, setWorkspaceRemovedView] = useState(false);
+  const [pendingRemoveCandidateId, setPendingRemoveCandidateId] =
+    useState<string | null>(null);
+  const [candidateRemovalBusy, setCandidateRemovalBusy] = useState(false);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [setting, setSetting] = useState<AiSetting>({ provider: "gemini", model: "gemini-3-flash-preview", keyConfigured: false });
   const [apiKey, setApiKey] = useState("");
@@ -453,7 +458,7 @@ function App() {
 
   async function load() {
     const [c, d, s, workspaces, invitations] = await Promise.all([
-      api<Candidate[]>("/candidates"),
+      api<Candidate[]>("/candidates" + (adminRemovedView ? "?removed=true" : "")),
       api<Draft[]>("/drafts"),
       api<AiSetting>("/ai-settings"),
       api<{ partners: Array<{ id: string; name: string }> }>("/admin/partners"),
@@ -641,6 +646,9 @@ function App() {
     setResearchResult(null);
     setResearchStatus("idle");
     setResearchError("");
+    setWorkspaceRemovedView(false);
+    setPendingRemoveCandidateId(null);
+    setCandidateRemovalBusy(false);
     setWorkspaceCandidates([]);
     setWorkspaceDrafts([]);
     setWorkspaceCampaigns([]);
@@ -2023,6 +2031,86 @@ function App() {
       await load();
       setNotice(result.changed ? "Workspace access revoked." : "Workspace access was already revoked.");
     });
+  }
+
+  async function switchCandidateRemovalView(workspaceId: string | null,
+    removed: boolean) {
+    const generation = workspaceRequest.current;
+    setError("");
+    setPendingRemoveCandidateId(null);
+    setCandidateRemovalBusy(true);
+    try {
+      const q = workspaceId === null ? "" :
+        "?workspaceId=" + encodeURIComponent(workspaceId) + "&";
+      const path = "/candidates" + (workspaceId === null
+        ? removed ? "?removed=true" : ""
+        : q.slice(0, -1) + (removed ? "&removed=true" : ""));
+      const rows = await api<Candidate[]>(path);
+      if (workspaceId === null) {
+        setCandidates(rows);
+        setAdminRemovedView(removed);
+      } else if (generation === workspaceRequest.current &&
+        workspaceId === activeWorkspaceId) {
+        setWorkspaceCandidates(rows);
+        setWorkspaceRemovedView(removed);
+      }
+    } catch (err) {
+      if (workspaceId === null || (generation === workspaceRequest.current &&
+          workspaceId === activeWorkspaceId)) {
+        setError(err instanceof Error ? err.message : "Could not load contacts");
+      }
+    } finally {
+      if (workspaceId === null || generation === workspaceRequest.current) {
+        setCandidateRemovalBusy(false);
+      }
+    }
+  }
+
+  async function changeCandidateRemovalFromUI(workspaceId: string | null,
+    contact: Candidate, remove: boolean) {
+    if (candidateRemovalBusy || (remove &&
+      pendingRemoveCandidateId !== contact.id) ||
+      (workspaceId !== null && workspaceId !== activeWorkspaceId)) return;
+    const generation = workspaceRequest.current;
+    setError("");
+    setCandidateRemovalBusy(true);
+    try {
+      const path = "/candidates/" + encodeURIComponent(contact.id) +
+        (remove ? "" : "/restore") +
+        (workspaceId === null ? "" :
+          "?workspaceId=" + encodeURIComponent(workspaceId));
+      const result = await api<{ changed: boolean; removed: boolean }>(
+        path, {
+          method: remove ? "DELETE" : "POST",
+          body: JSON.stringify(remove
+            ? { confirmRemove: true } : { confirmRestore: true }),
+        });
+      if (workspaceId !== null && (generation !== workspaceRequest.current ||
+          workspaceId !== activeWorkspaceId)) return;
+      if (workspaceId === null) {
+        setCandidates(rows => rows.filter(c => c.id !== contact.id));
+        setDrafts(rows => rows.filter(d => d.candidate?.id !== contact.id));
+      } else {
+        setWorkspaceCandidates(rows => rows.filter(c => c.id !== contact.id));
+        setWorkspaceDrafts(rows => rows.filter(d => d.candidate?.id !== contact.id));
+        if (partnerEvidenceId === contact.id) setPartnerEvidenceId(null);
+        if (personEmailCandidateId === contact.id) setPersonEmailCandidateId(null);
+      }
+      if (evidenceId === contact.id) setEvidenceId(null);
+      setPendingRemoveCandidateId(null);
+      setNotice(remove
+        ? "Contact removed from the active list. Research and audit history remain saved."
+        : "Contact restored to the active list. Review eligibility before outreach.");
+    } catch (err) {
+      if (workspaceId === null || (generation === workspaceRequest.current &&
+          workspaceId === activeWorkspaceId)) {
+        setError(err instanceof Error ? err.message : "Could not update contact");
+      }
+    } finally {
+      if (workspaceId === null || generation === workspaceRequest.current) {
+        setCandidateRemovalBusy(false);
+      }
+    }
   }
 
   async function saveCandidate(event: React.FormEvent) {
