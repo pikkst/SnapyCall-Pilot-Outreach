@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runOneCampaignTask, ResearchWorkerPreflightError
+import { runOneCampaignTask, ResearchWorkerPreflightError,
+  calculateCampaignVerifiedSpendCents
 } from "../server/research-campaign-worker.js";
 
 const campaignId = "cmabcdefghijklmnopqrstu";
@@ -454,4 +455,69 @@ test("Gemini 3 remains fail-closed in the real campaign worker before DB claim o
     "task-claimed", "run-allowance-reserved", "concurrency-reserved"]) {
     assert.equal(events.includes(event), false, event);
   }
+});
+
+
+test("campaign worker uses exact dual-provider settlement tariff only when fully attested", () => {
+  const price = {
+    enforcementReady: true, provider: "gemini",
+    model: "gemini-3-flash-preview", retrievalProvider: "tavily",
+    billingContractVersion: "tavily-basic-gemini3-text-v1",
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 800 },
+    textModel: {
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+    worstCaseCents: 3,
+  };
+  const base = { price, provider: "gemini", model: "gemini-3-flash-preview" };
+  const usage = {
+    retrievalCredits: 1, inputTokens: 850,
+    outputTokens: 150, thinkingTokens: 100,
+    billingEvidence: {
+      source: "trusted_provider_adapters", complete: true,
+      contractVersion: price.billingContractVersion,
+      retrievalProvider: "tavily", textProvider: "gemini",
+      model: "gemini-3-flash-preview",
+    },
+  };
+  assert.equal(calculateCampaignVerifiedSpendCents({ ...base, usage }), 3);
+  for (const changed of [
+    { ...base, usage: { ...usage, billingEvidence: null } },
+    { ...base, usage: { ...usage, thinkingTokens: null } },
+    { ...base, usage: { ...usage, retrievalCredits: 0 } },
+    { ...base, provider: "openai", usage },
+    { ...base, model: "gemini-2.5-flash", usage },
+  ]) assert.equal(calculateCampaignVerifiedSpendCents(changed), null);
+  // This isn't a real price authorization: the registry blocks Gemini 3
+  // independently, before this helper can ever be used for a live task.
+});
+
+test("worker does not accept an injected dual-provider stage on a legacy model", async () => {
+  const { BoundedResearchStageError } =
+    await import("../server/research-provider-adapters.js");
+  const { db, events, getReservation } = fakeDatabase();
+  const original = db.auditEvent.create;
+  const metadata = [];
+  db.auditEvent.create = async args => {
+    if (args.data.action === "research.campaign.execution.paused") {
+      metadata.push(args.data.metadata);
+    }
+    return original(args);
+  };
+  const output = await runOneCampaignTask(db, input, {
+    search: async () => {
+      events.push("provider-called");
+      throw new BoundedResearchStageError(
+        "DUAL_PROVIDER_OUTCOME_UNCERTAIN", "GEMINI_GENERATE_CONTENT_DISPATCHED");
+    },
+    decrypt: () => "test-only-provider-key",
+    now: () => now,
+  });
+  assert.equal(output.status, "PAUSED");
+  assert.equal(output.code, "BILLING_UNCERTAIN");
+  assert.equal(getReservation().chargedCents, 200);
+  assert.equal(metadata.length, 1);
+  assert.equal(Object.hasOwn(metadata[0], "dualProviderStage"), false);
+  assert.equal(metadata[0].automaticRetryAllowed, false);
 });
