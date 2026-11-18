@@ -727,8 +727,8 @@ function App() {
     const generation = workspaceRequest.current;
     // One approval covers only the currently queued work on this campaign.
     // Server-side cost/identity/lease checks remain authoritative per call.
-    const approvedMaxTasks = Math.min(24, campaignProgress?.id === campaignId ?
-      campaignProgress.tasks.queued : 24);
+    const approvedMaxTasks = Math.min(250, campaignProgress?.id === campaignId ?
+      campaignProgress.tasks.queued : 250);
     if (approvedMaxTasks < 1) return;
     batchInFlight.current = true;
     batchStopRequested.current = false;
@@ -2476,11 +2476,11 @@ function App() {
                               any uncertain billing response, or an expired lease.
                               This does not search emails or send outreach.</p>
                             <label>Maximum paid research requests
-                              <input type="number" min={1} max={24} step={1}
+                              <input type="number" min={1} max={250} step={1}
                                 value={campaignMaxTasks}
                                 disabled={campaignRunApprovalBusy}
                                 onChange={event => setCampaignMaxTasks(
-                                  Math.max(1, Math.min(24, Math.trunc(
+                                  Math.max(1, Math.min(250, Math.trunc(
                                     Number(event.target.value) || 1))))}/>
                             </label>
                             <p>Maximum conservative approved spend:
