@@ -372,24 +372,61 @@ export async function stopApprovedCampaignRun(db, {
     if (!run || run.workspaceId !== workspaceId || run.ownerId !== ownerId) {
       return { status: 404, code: "RUN_NOT_FOUND" };
     }
-    if (["PAUSED", "COMPLETED"].includes(run.status)) {
+    const charter = await tx.researchFullRun.findUnique({
+      where: { campaignId },
+    });
+    if (charter && (charter.ownerId !== ownerId ||
+        charter.workspaceId !== workspaceId)) {
+      return { status: 403, code: "FULL_RUN_SCOPE_MISMATCH" };
+    }
+    const fullActive = charter && ["DISCOVERY", "EMAIL_TRIAGE",
+      "SOURCE_PREPARE", "SOURCE_RUNNING"].includes(charter.status);
+    const discoveryActive = ["APPROVED", "RUNNING"].includes(run.status);
+    if (!fullActive && !discoveryActive) {
       return { status: 200, code: "RUN_ALREADY_TERMINAL",
         run: publicRunStatus(run) };
     }
-    const saved = await tx.researchCampaignRun.update({
-      where: { id: run.id }, data: {
-        status: "PAUSED", lastCode: "USER_STOPPED",
-      },
-    });
+    // All staged claims acquire the same campaign lock. A stop revokes new
+    // paid starts and further page inspections atomically across stages.
+    if (fullActive) {
+      const stopped = await tx.researchFullRun.updateMany({
+        where: { id: charter.id, campaignId, workspaceId, ownerId,
+          status: { in: ["DISCOVERY", "EMAIL_TRIAGE",
+            "SOURCE_PREPARE", "SOURCE_RUNNING"] } },
+        data: { status: "STOPPED", lastCode: "USER_STOPPED" },
+      });
+      if (stopped.count !== 1) throw new Error("FULL_RUN_STOP_CAS_CONFLICT");
+      await tx.researchPersonSourceApproval.updateMany({
+        where: { campaignId, workspaceId, ownerId,
+          status: { in: ["APPROVED", "RUNNING"] } },
+        data: { status: "STOPPED" },
+      });
+      await tx.researchCampaign.updateMany({
+        where: { id: campaignId, workspaceId, ownerId,
+          emailTriageStatus: "RUNNING" },
+        data: { emailTriageStatus: "PAUSED" },
+      });
+    }
+    let saved = run;
+    if (discoveryActive) {
+      saved = await tx.researchCampaignRun.update({
+        where: { id: run.id }, data: {
+          status: "PAUSED", lastCode: "USER_STOPPED",
+        },
+      });
+    }
     await tx.auditEvent.create({ data: {
       actorId: ownerId, action: "research.campaign.run.stopped",
       entityId: campaignId, metadata: {
         workspaceId, runId: run.id,
+        fullRunStopped: !!fullActive,
+        futureSourceCallsStopped: !!fullActive,
         inFlightMayStillBeBilled: true, automaticRetryAllowed: false,
         sendingEnabled: false,
       },
     } });
     return { status: 200, code: "RUN_STOPPED",
-      run: publicRunStatus(saved) };
+      run: publicRunStatus(saved),
+      fullRunStopped: !!fullActive, sendingEnabled: false };
   });
 }
