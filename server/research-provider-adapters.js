@@ -502,7 +502,8 @@ function requireBoundedTavilyTransportConfig({ apiKey, observedAt, post }) {
       !Number.isFinite(Date.parse(observedAt)) ||
       new Date(observedAt).toISOString() !== observedAt) {
     throw new TypeError("Trusted bounded Tavily retrieval configuration required");
-  }\n}
+  }
+}
 
 export async function searchWithBoundedTavily({
   query, maxResults, observedAt, apiKey,
