@@ -305,7 +305,9 @@ export function normalizeBoundedTavilySearch({ response, maxResults, observedAt 
   const seen = new Set();
   for (const result of response.results) {
     const url = publicCitationUrl(result?.url);
-    if (!url || typeof result?.title !== "string" ||
+    if (!url || (new URL(url).hostname === "vertexaisearch.cloud.google.com" &&
+        new URL(url).pathname.startsWith("/grounding-api-redirect/")) ||
+        typeof result?.title !== "string" ||
         !result.title.trim() || typeof result?.content !== "string" ||
         !result.content.trim() || seen.has(url)) continue;
     seen.add(url);
