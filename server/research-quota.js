@@ -2,9 +2,9 @@
 // The Prisma transaction holds active membership lock while reserving both
 // scopes; either scope hitting its limit rolls back both reservations.
 export const RESEARCH_DAILY_USER_WORKSPACE_LIMIT = 2;
-export const RESEARCH_DAILY_WORKSPACE_LIMIT = 100;
+export const RESEARCH_DAILY_WORKSPACE_LIMIT = 1000;
 // Absolute backend safety ceilings, independent of any user preference.
-export const RESEARCH_MAX_USER_DAILY_LIMIT = 100;
+export const RESEARCH_MAX_USER_DAILY_LIMIT = 1000;
 export const RESEARCH_MAX_CANDIDATES = 20;
 export const RESEARCH_MAX_USER_CONCURRENCY = 3;
 export const RESEARCH_MAX_WORKSPACE_CONCURRENCY = 5;
@@ -37,6 +37,16 @@ export async function lockedResearchPreferences(tx, userId) {
     { dailyLimit: RESEARCH_DAILY_USER_WORKSPACE_LIMIT, maxCandidates: 10, maxConcurrent: 1 };
 }
 
+// Workspace quotas are administrator-owned, bounded server-side, never
+// accepted from a user's run approval or request payload.
+export function validateWorkspaceDailyLimit(value) {
+  if (!Number.isSafeInteger(value) || value < 1 ||
+      value > RESEARCH_DAILY_WORKSPACE_LIMIT) {
+    throw new TypeError("Invalid workspace daily research limit");
+  }
+  return value;
+}
+
 export class ResearchQuotaExceeded extends Error {
   constructor() {
     super("Daily AI research attempt limit reached");
@@ -59,9 +69,15 @@ export async function reserveResearchAttempt(tx, {
       !/^[a-z0-9]{20,36}$/.test(userId)) {
     throw new TypeError("Verified workspace and user identifiers required");
   }
+  // The Partner row is already locked by the lease claim on paid paths;
+  // an administrator updating this limit cannot race that claim.
+  const config = await tx.partner.findUnique({
+    where: { id: workspaceId }, select: { researchDailyLimit: true },
+  });
+  const workspaceLimit = validateWorkspaceDailyLimit(config?.researchDailyLimit);
   const day = utcResearchDay(now);
   const scopes = [
-    { key: "workspace:" + workspaceId, limit: RESEARCH_DAILY_WORKSPACE_LIMIT },
+    { key: "workspace:" + workspaceId, limit: workspaceLimit },
     { key: "workspace-user:" + workspaceId + ":" + userId,
       limit: dailyLimit },
   ];
@@ -98,6 +114,10 @@ export async function readResearchDailyCapacity(db, {
     where: { ownerId: userId }, select: { dailyLimit: true },
   });
   const personalLimit = limits?.dailyLimit ?? RESEARCH_DAILY_USER_WORKSPACE_LIMIT;
+  const workspace = await db.partner.findUnique({
+    where: { id: workspaceId }, select: { researchDailyLimit: true },
+  });
+  const workspaceLimit = validateWorkspaceDailyLimit(workspace?.researchDailyLimit);
   if (!Number.isSafeInteger(personalLimit) || personalLimit < 1 ||
       personalLimit > RESEARCH_MAX_USER_DAILY_LIMIT) {
     throw new TypeError("Invalid persisted daily research limit");
@@ -123,12 +143,12 @@ export async function readResearchDailyCapacity(db, {
     dayUtc: day,
     resetsAt: new Date(Date.parse(day + "T00:00:00.000Z") +
       24 * 60 * 60 * 1000).toISOString(),
-    workspaceLimit: RESEARCH_DAILY_WORKSPACE_LIMIT,
+    workspaceLimit,
     workspaceUsed,
     personalLimit,
     personalUsed,
     remaining: Math.min(
-      Math.max(0, RESEARCH_DAILY_WORKSPACE_LIMIT - workspaceUsed),
+      Math.max(0, workspaceLimit - workspaceUsed),
       Math.max(0, personalLimit - personalUsed),
     ),
   });
