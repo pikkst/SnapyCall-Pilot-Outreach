@@ -86,10 +86,12 @@ export async function finishContactBatchItem(db, claim, outcome, {
     if (campaigns.length !== 1) {
       return { status: "RECONCILIATION_REQUIRED", code: "CAMPAIGN_NOT_FOUND" };
     }
-    const saved = outcome.status === 201 &&
-      outcome.code === "CONTACT_CREATED_REVIEW_PENDING" ||
-      outcome.status === 200 &&
-      outcome.code === "CONTACT_ALREADY_LINKED";
+    const saved = typeof outcome.candidateId === "string" &&
+      /^c[a-z0-9]{10,40}$/.test(outcome.candidateId) &&
+      ((outcome.status === 201 &&
+        outcome.code === "CONTACT_CREATED_REVIEW_PENDING") ||
+       (outcome.status === 200 &&
+        outcome.code === "CONTACT_ALREADY_LINKED"));
     const state = saved ? "SAVED" :
       outcome.status === 409 ? "REVIEW_REQUIRED" : "PAUSED";
     const code = saved ? "CONTACT_SAVED_REVIEW_PENDING" :
