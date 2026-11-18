@@ -551,7 +551,7 @@ export async function runBoundedTavilyGemini3Stages({
   }
   if (retrieved.status === "NO_USABLE_EVIDENCE") {
     return Object.freeze({
-      status: "NO_USABLE_EVIDENCE", candidates: [],
+      status: "NO_USABLE_EVIDENCE", candidates: [], sources: [],
       manifestDigest: null, reportedRetrievalCredits: retrieved.reportedCredits,
       billableCallPossible: true, automaticRetryAllowed: false,
       reviewRequired: true, imported: false, sendingEnabled: false,
