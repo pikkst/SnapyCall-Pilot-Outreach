@@ -206,15 +206,52 @@ export async function finishApprovedRunTask(db, {
         retryWaiting = next !== null;
       }
     }
+    // A bounded run can exhaust its immutable paid approval before the
+    // 100-candidate target, leaving queued tasks that can NEVER be dispatched
+    // under this approval. Finalize the campaign as PARTIAL only after the
+    // last task completed successfully and there is no other in-flight task.
+    // This makes the saved evidence eligible for independently approved
+    // read-only email inspection without replaying any provider calls.
+    const limitExhausted = result?.status === "COMPLETED" &&
+      campaigns[0].status === "RUNNING" &&
+      (run.startedTasks >= run.maxTasks ||
+       run.committedWorstCaseCents + run.worstCasePerCallCents >
+         run.maxWorstCaseCents);
+    let boundedPartial = false;
+    if (limitExhausted) {
+      const inFlight = await tx.researchCampaignTask.count({
+        where: { campaignId, status: "RUNNING" },
+      });
+      if (inFlight === 0) {
+        const saved = await tx.researchCampaign.updateMany({
+          where: { id: campaignId, workspaceId, ownerId, status: "RUNNING" },
+          data: { status: "PARTIAL" },
+        });
+        boundedPartial = saved.count === 1;
+        if (boundedPartial) {
+          await tx.auditEvent.create({ data: {
+            actorId: ownerId, action: "research.campaign.finalized",
+            entityId: campaignId, metadata: {
+              workspaceId, status: "PARTIAL",
+              reason: "IMMUTABLE_APPROVED_RUN_LIMIT_REACHED",
+              approvedCalls: run.maxTasks, startedCalls: run.startedTasks,
+              committedWorstCaseCents: run.committedWorstCaseCents,
+              automaticBillableReplay: false, sendingEnabled: false,
+            },
+          } });
+        }
+      }
+    }
     const status = qualityStopped ? "PAUSED" :
-      ["COMPLETED", "NO_READY_TASK"].includes(result?.status) &&
-      terminal ? "COMPLETED" :
+      boundedPartial || (["COMPLETED", "NO_READY_TASK"].includes(result?.status) &&
+      terminal) ? "COMPLETED" :
       (result?.status === "COMPLETED" || retryWaiting || pacingWaiting) &&
       run.startedTasks < run.maxTasks &&
       run.expiresAt instanceof Date && run.expiresAt.getTime() > Date.now() &&
       run.committedWorstCaseCents + run.worstCasePerCallCents <=
         run.maxWorstCaseCents ? "RUNNING" : "PAUSED";
     const code = qualityStopped ? "QUALITY_STOP" :
+      boundedPartial ? "RUN_LIMIT_REACHED" :
       status === "COMPLETED" ? "CAMPAIGN_FINISHED" :
       status === "RUNNING" ? (pacingWaiting ? "WAITING_RATE_LIMIT" :
         retryWaiting ? "WAITING_RETRY" : null) :
