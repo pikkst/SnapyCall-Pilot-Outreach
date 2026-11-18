@@ -1,8 +1,8 @@
 // One human batch review over an exact, tenant-scoped immutable manifest.
 // No research calls, no email sends and no unchecked Candidate creation.
 import { createHash } from "node:crypto";
-import { isWorkspaceId, lockActiveWorkspaceMembership }
-  from "./workspace-access.js";
+import { isWorkspaceId, lockActiveWorkspaceMembership,
+  requireWorkspaceMembership } from "./workspace-access.js";
 import { observationInspectionSource } from "./research-observation-email.js";
 import { summarizeQualifiedEmailEvidence } from "./research-qualified-evidence.js";
 
@@ -73,6 +73,9 @@ export async function readQualifiedContactManifest(db, {
   if (![campaignId, workspaceId, ownerId].every(isWorkspaceId)) {
     throw new TypeError("Owner-scoped campaign required");
   }
+  if (!await requireWorkspaceMembership(db, {
+    workspaceId, userId: ownerId,
+  })) return { status: 403, code: "WORKSPACE_ACCESS_REVOKED" };
   const campaign = await db.researchCampaign.findFirst({
     where: { id: campaignId, workspaceId, ownerId },
     select: { id: true, status: true },
@@ -85,6 +88,11 @@ export async function readQualifiedContactManifest(db, {
     where: { campaignId }, select, orderBy: { id: "asc" },
     take: MAX_SNAPSHOT + 1,
   });
+  // Revocation can race with the aggregate read. Never leak person-email
+  // pairs to a session whose workspace access has been withdrawn.
+  if (!await requireWorkspaceMembership(db, {
+    workspaceId, userId: ownerId,
+  })) return { status: 403, code: "WORKSPACE_ACCESS_REVOKED" };
   return { status: 200, ...buildQualifiedContactManifest(rows) };
 }
 
