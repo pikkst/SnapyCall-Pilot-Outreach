@@ -354,6 +354,11 @@ model ResearchCampaignObservation {
   emailTriageEmail String?
   emailTriageDigest String?
   emailTriageAt DateTime?
+  // Independently fetched and explicitly person-email-attributed public page.
+  // Never set merely from a provider-generated URL.
+  personSourceUrl String? @db.VarChar(2048)
+  personSourceProvenance String?
+  personSourceVerifiedAt DateTime?
   // A research observation is linked to a workspace contact only after
   // explicit source-backed, named-email review. Never by name alone.
   candidateId String?
@@ -445,6 +450,8 @@ model ResearchPersonSourceApproval {
   eligibleJobCount Int
   // Frozen set of queued source-resolution job fingerprints.
   jobSnapshotHash String @db.Char(64)
+  // Separate explicit scope for bounded robots-respecting public page reads.
+  publicInspectionAuthorized Boolean @default(false)
   status String @default("APPROVED")
   startedCalls Int @default(0)
   committedWorstCaseCents Int @default(0)
