@@ -512,3 +512,74 @@ export async function searchWithBoundedTavily({
     { authorization: "Bearer " + apiKey }, request, signal);
   return normalizeBoundedTavilySearch({ response, maxResults, observedAt });
 }
+
+
+// Composes existing bounded adapters for an eventual authorized worker. This
+// does not establish spending approval: the server-side campaign executor
+// must first atomically reserve the reviewed combined tariff for both calls.
+// There are no retries, even if one provider returns incomplete evidence.
+export async function runBoundedTavilyGemini3Stages({
+  query, limit, maxResults, observedAt, tavilyApiKey, geminiApiKey,
+  model, maxInputTokens,
+}, { tavilyPost, geminiPost, signal } = {}) {
+  // Validate both credentials and all static bounds BEFORE calling Tavily.
+  // In particular, an absent Gemini key must not waste a Tavily credit.
+  buildBoundedTavilySearchRequest({ query, maxResults });
+  if (model !== "gemini-3-flash-preview" ||
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 20 ||
+      !Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
+      maxInputTokens > 1_000_000 ||
+      typeof geminiApiKey !== "string" || geminiApiKey.length < 8 ||
+      typeof tavilyApiKey !== "string" ||
+      !/^tvly-[A-Za-z0-9_-]{8,}$/.test(tavilyApiKey) ||
+      typeof tavilyPost !== "function" ||
+      typeof geminiPost !== "function") {
+    throw new TypeError("Bounded dual-provider execution configuration required");
+  }
+  let retrieved;
+  try {
+    retrieved = await searchWithBoundedTavily({
+      query, maxResults, observedAt, apiKey: tavilyApiKey,
+    }, tavilyPost, signal);
+  } catch {
+    // The upstream request may have been billed. Never automatically replay.
+    throw new BoundedResearchStageError("RETRIEVAL_OUTCOME_UNCERTAIN");
+  }
+  if (retrieved.status === "NO_USABLE_EVIDENCE") {
+    return Object.freeze({
+      status: "NO_USABLE_EVIDENCE", candidates: [],
+      manifestDigest: null, reportedRetrievalCredits: retrieved.reportedCredits,
+      billableCallPossible: true, automaticRetryAllowed: false,
+      reviewRequired: true, imported: false, sendingEnabled: false,
+    });
+  }
+  try {
+    const payload = buildGemini3TextOnlyPayload({
+      query, limit, manifest: retrieved.manifest, maxInputTokens,
+    });
+    const extracted = await extractWithGemini3TextOnly({
+      query, limit, model, payload, manifest: retrieved.manifest,
+      maxInputTokens, apiKey: geminiApiKey,
+    }, geminiPost, signal);
+    return Object.freeze({
+      ...extracted, status: "REVIEW_PENDING",
+      reportedRetrievalCredits: retrieved.reportedCredits,
+      billableCallPossible: true, automaticRetryAllowed: false,
+    });
+  } catch {
+    // After retrieval, even a locally rejected Gemini payload cannot refund
+    // the earlier Tavily call. After countTokens/generateContent, additional
+    // charges are possible. The real worker must settle conservatively.
+    throw new BoundedResearchStageError("DUAL_PROVIDER_OUTCOME_UNCERTAIN");
+  }
+}
+
+export class BoundedResearchStageError extends Error {
+  constructor(code) {
+    super("Bounded multi-provider research requires reconciliation");
+    this.name = "BoundedResearchStageError";
+    this.code = code;
+    this.billableCallPossible = true;
+    this.automaticRetryAllowed = false;
+  }
+}
