@@ -178,6 +178,12 @@ test("one stop after discovery cancels future source and inspection work", async
         return { count: 1 };
       },
     },
+    researchPersonSourceCycle: {
+      updateMany: async ({ data }) => {
+        actions.push("cycle:" + data.status);
+        return { count: 1 };
+      },
+    },
     researchCampaign: {
       updateMany: async ({ data }) => {
         actions.push("triage:" + data.emailTriageStatus);
@@ -197,7 +203,7 @@ test("one stop after discovery cancels future source and inspection work", async
   assert.equal(result.fullRunStopped, true);
   assert.equal(result.run.status, "COMPLETED");
   assert.deepEqual(actions,
-    ["full:STOPPED", "source:STOPPED", "triage:PAUSED", "audit"]);
+    ["full:STOPPED", "source:STOPPED", "cycle:STOPPED", "triage:PAUSED", "audit"]);
 });
 
 function scopeForStop() {
