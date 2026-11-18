@@ -339,7 +339,9 @@ export async function tickFullRunStages(db, {
         full.maxSourceWorstCaseCents < price.worstCaseCents) {
       return move("NEEDS_REVIEW", "APPROVED_PRICE_CHANGED");
     }
-    const maxCalls = Math.min(jobs, full.maxSourceCalls,
+    // One small immutable batch at a time. Unattempted jobs are eligible
+    // for a distinct continuation cycle, not an implicit paid replay.
+    const maxCalls = Math.min(jobs, 25, full.maxSourceCalls,
       Math.floor(full.maxSourceWorstCaseCents / price.worstCaseCents));
     if (maxCalls < 1) return move("PARTIAL", "SOURCE_BUDGET_EXHAUSTED");
     const approval = await approveSource(db, {
