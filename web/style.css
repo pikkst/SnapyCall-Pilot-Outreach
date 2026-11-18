@@ -222,3 +222,12 @@ td button+button{margin-left:6px}
 .research-run-details>summary{cursor:pointer;font-weight:600}
 .research-run-details[open]>summary{margin-bottom:14px}
 @media(max-width:640px){.research-run-window{padding:16px}.research-run-counts{flex-direction:column;gap:8px}.research-run-actions button{width:100%}}
+
+/* AI98: evidence-first bulk review remains inside the existing Research screen. */
+.qualified-contact-review{border:1px solid var(--line,#dbe3f1);border-radius:12px;padding:16px;margin:10px 0;display:grid;gap:12px}
+.qualified-contact-header{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px}
+.qualified-contact-list{list-style:none;margin:0;padding:0;max-height:250px;overflow:auto;border:1px solid var(--line,#dbe3f1);border-radius:8px}
+.qualified-contact-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--line,#dbe3f1);font-size:.88rem}
+.qualified-contact-list li:last-child{border-bottom:0}
+.qualified-contact-list a{overflow-wrap:anywhere}
+@media(max-width:640px){.qualified-contact-list li{display:grid;gap:4px}.qualified-contact-review button{width:100%}}

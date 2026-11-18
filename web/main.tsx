@@ -49,6 +49,17 @@ type CampaignEmailTriageState = {
     eligibleSubsetObservations: number; excludedObservations: number };
   enabled: boolean;
 };
+type QualifiedContactManifest = {
+  status: number; reliable: boolean; totalQualified: number;
+  eligibleForBatch: number; selectedCount: number;
+  manifestHash: string | null; batchEnabled: boolean;
+  sendingEnabled: false;
+  entries: Array<{ observationId: string; name: string; category: string;
+    email: string; sourceUrl: string; evidenceDigest: string;
+    inspectedAt: string }>;
+  batch: { status: string; itemCount: number; saved: number;
+    needsReview: number } | null;
+};
 type CampaignObservationsPage = {
   observations: CampaignObservation[]; nextCursor: string | null;
   verifiedContacts: number; sendingEnabled: false;
@@ -317,6 +328,11 @@ function App() {
   const [campaignTriageBusy, setCampaignTriageBusy] = useState(false);
   const [campaignTriageConfirmed, setCampaignTriageConfirmed] = useState(false);
   const [campaignTriageNotice, setCampaignTriageNotice] = useState("");
+  const [qualifiedManifest, setQualifiedManifest] =
+    useState<QualifiedContactManifest | null>(null);
+  const [qualifiedManifestBusy, setQualifiedManifestBusy] = useState(false);
+  const [qualifiedBatchConfirmed, setQualifiedBatchConfirmed] = useState(false);
+  const [qualifiedBatchNotice, setQualifiedBatchNotice] = useState("");
 
   const [campaignRunApproval, setCampaignRunApproval] =
     useState<CampaignRunApprovalState | null>(null);
@@ -1032,6 +1048,73 @@ function App() {
     }
   }
 
+  async function loadQualifiedContactManifest(workspaceId: string,
+    campaignId: string) {
+    if (workspaceId !== activeWorkspaceId ||
+        campaignId !== campaignProgressId) return;
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    setQualifiedManifestBusy(true);
+    try {
+      const manifest = await api<QualifiedContactManifest>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/qualified-contacts?workspaceId=" + encodeURIComponent(workspaceId));
+      if (generation !== workspaceRequest.current ||
+          request !== campaignProgressRequest.current) return;
+      setQualifiedManifest(manifest);
+      setQualifiedBatchConfirmed(false);
+    } catch (error) {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setQualifiedBatchNotice(error instanceof Error ? error.message :
+          "Unable to load qualified contact evidence.");
+      }
+    } finally {
+      if (generation === workspaceRequest.current) setQualifiedManifestBusy(false);
+    }
+  }
+
+  async function approveQualifiedContactBatchFromManifest(workspaceId: string,
+    campaignId: string) {
+    if (workspaceId !== activeWorkspaceId ||
+        campaignId !== campaignProgressId ||
+        !qualifiedManifest?.batchEnabled || !qualifiedManifest.reliable ||
+        !qualifiedManifest.manifestHash || !qualifiedBatchConfirmed ||
+        qualifiedManifest.batch || qualifiedManifestBusy) return;
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    setQualifiedManifestBusy(true);
+    setQualifiedBatchNotice("");
+    try {
+      await api("/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/qualified-contacts/approve-batch?workspaceId=" +
+        encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify({
+            manifestHash: qualifiedManifest.manifestHash,
+            confirmEveryDisplayedPair: true,
+            confirmNoAutomaticSending: true,
+          }),
+        });
+      if (generation !== workspaceRequest.current ||
+          request !== campaignProgressRequest.current) return;
+      setQualifiedBatchConfirmed(false);
+      setQualifiedBatchNotice(
+        "Batch review approved. Each saved contact is rechecked against " +
+        "public evidence. No onboarding messages will be sent.");
+      // This read is owner-scoped and never runs paid AI research.
+      void loadQualifiedContactManifest(workspaceId, campaignId);
+    } catch (error) {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setQualifiedBatchNotice(error instanceof Error ? error.message :
+          "Could not approve this reviewed contact batch.");
+      }
+    } finally {
+      if (generation === workspaceRequest.current) setQualifiedManifestBusy(false);
+    }
+  }
+
   async function changeCampaignEmailTriage(workspaceId: string,
     campaignId: string, action: "start" | "stop") {
     if (campaignTriageBusy || workspaceId !== activeWorkspaceId ||
@@ -1110,6 +1193,10 @@ function App() {
     setCampaignTriageBusy(false);
     setCampaignTriageConfirmed(false);
     setCampaignTriageNotice("");
+    setQualifiedManifest(null);
+    setQualifiedManifestBusy(false);
+    setQualifiedBatchConfirmed(false);
+    setQualifiedBatchNotice("");
     setCampaignProgressId(campaignId);
     setCampaignProgress(null);
     setCampaignProgressStatus("loading");
@@ -2397,8 +2484,75 @@ function App() {
                               disabled={campaignObservationsStatus === "loading"}>
                               {campaignObservationsStatus === "idle" ? "View findings" : "Refresh findings"}
                             </button>
+                            {["COMPLETED", "PARTIAL"].includes(campaignProgress.status) &&
+                              <button type="button" className="secondary"
+                                disabled={qualifiedManifestBusy}
+                                onClick={() => void loadQualifiedContactManifest(
+                                  p.id, campaignProgress.id)}>
+                                {qualifiedManifest ? "Refresh qualified contacts" :
+                                  "Review qualified emails"}
+                              </button>}
                           </div>
                         </div>
+                        {qualifiedManifest && ["COMPLETED", "PARTIAL"].includes(
+                          campaignProgress.status) && <section
+                            className="qualified-contact-review"
+                            aria-label="Qualified email contacts for batch review">
+                          <div className="qualified-contact-header">
+                            <strong>{qualifiedManifest.selectedCount} verified-source
+                              email pairs</strong>
+                            <span className="muted">Review evidence only — not send-eligible</span>
+                          </div>
+                          {!qualifiedManifest.reliable && <p role="alert">
+                            The saved evidence snapshot is incomplete. No batch can be approved.
+                          </p>}
+                          {qualifiedManifest.batch ? <p role="status">
+                            Batch {qualifiedManifest.batch.status.toLowerCase()}:
+                            {" "}{qualifiedManifest.batch.saved} /
+                            {qualifiedManifest.batch.itemCount} saved,
+                            {" "}{qualifiedManifest.batch.needsReview} require review.
+                            No messages are sent.
+                          </p> : <>
+                            <ul className="qualified-contact-list">
+                              {qualifiedManifest.entries.map(entry => <li
+                                key={entry.observationId}>
+                                <span><strong>{entry.name}</strong>
+                                  {" · "}{entry.category}</span>
+                                <span>{entry.email}</span>
+                                <a href={entry.sourceUrl} target="_blank"
+                                  rel="noopener noreferrer">Public evidence</a>
+                              </li>)}
+                            </ul>
+                            {qualifiedManifest.selectedCount > 0 &&
+                              qualifiedManifest.reliable &&
+                              qualifiedManifest.batchEnabled && <>
+                              <label className="campaign-contact-confirm">
+                                <input type="checkbox"
+                                  checked={qualifiedBatchConfirmed}
+                                  onChange={event => setQualifiedBatchConfirmed(
+                                    event.target.checked)}/>
+                                I have reviewed all {qualifiedManifest.selectedCount}
+                                {" "}displayed name, email and source pairs.
+                                Save them as review-pending contacts. This does
+                                not verify mailbox delivery or authorize sending.
+                              </label>
+                              <button type="button"
+                                disabled={!qualifiedBatchConfirmed ||
+                                  qualifiedManifestBusy}
+                                onClick={() => void approveQualifiedContactBatchFromManifest(
+                                  p.id, campaignProgress.id)}>
+                                {qualifiedManifestBusy ? "Approving…" :
+                                  "Save reviewed contact batch"}
+                              </button>
+                            </>}
+                            {!qualifiedManifest.batchEnabled &&
+                              <p className="muted">Batch contact saving is not
+                                enabled in this environment.</p>}
+                          </>}
+                          {qualifiedBatchNotice && <p role="status">
+                            {qualifiedBatchNotice}
+                          </p>}
+                        </section>}
                         {campaignProgress.operationalState === "QUALITY_STOP" &&
                           <p role="alert" className="campaign-blocker">
                             Research stopped after three consecutive responses
