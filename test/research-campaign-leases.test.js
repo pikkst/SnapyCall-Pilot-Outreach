@@ -167,3 +167,45 @@ test("unresolved paid task prevents another provider claim before reservation", 
   assert.equal(result, null);
   assert.equal(reservationCalled, false);
 });
+
+test("full-run claim may proceed after 100 raw names but never after 250 saved observations", async () => {
+  for (const uniqueCount of [101, 250]) {
+    const actions = [];
+    const db = { $transaction: async handler => handler({
+      researchFullRun: { findUnique: async () => ({
+        status: "DISCOVERY", ownerId: scope.ownerId,
+        workspaceId: scope.workspaceId,
+      }) },
+      $queryRaw: async parts => {
+        const sql = parts.join("?");
+        if (sql.includes('COUNT(o."id")'))
+          return [{ targetCount: 100, uniqueCount }];
+        if (sql.includes('FROM "ResearchCampaignTask"'))
+          return [{ id: "task-25", attempts: 0,
+            query: "Distinct approved public profile search",
+            resultLimit: 10 }];
+        return [{ id: scope.campaignId }];
+      },
+      researchCampaignTask: {
+        count: async () => 0,
+        update: async ({ data }) => {
+          actions.push(data.status);
+        },
+      },
+      researchCampaign: {
+        updateMany: async ({ data }) => {
+          actions.push("campaign:" + data.status);
+          return { count: 1 };
+        },
+      },
+    }) };
+    const result = await claimResearchTask(db, scope);
+    if (uniqueCount === 101) {
+      assert.equal(result.taskId, "task-25");
+      assert.deepEqual(actions, ["RUNNING", "campaign:RUNNING"]);
+    } else {
+      assert.equal(result, null);
+      assert.deepEqual(actions, []);
+    }
+  }
+});
