@@ -46,6 +46,12 @@ function fixture({ approval = true, shared = false,
     expiresAt: new Date("2026-11-19T15:00:00Z"),
   };
   const db = {
+    partnerMembership: {
+      findUnique: async () => ({
+        id: "member-id", role: "MEMBER", revokedAt: null,
+        user: { id: scope.ownerId, googleSub: "google-user-id" },
+      }),
+    },
     researchCampaign: {
       findFirst: async () => ({ id: scope.campaignId }),
     },
