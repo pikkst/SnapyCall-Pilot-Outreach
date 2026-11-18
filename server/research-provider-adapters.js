@@ -314,7 +314,7 @@ export async function countGemini3TextOnlyInput({
   const result = await post(
     "https://generativelanguage.googleapis.com/v1beta/models/" +
       encodeURIComponent(model) + ":countTokens",
-    { "x-goog-api-key": apiKey }, countRequest, signal,
+    { "x-goog-api-key": apiKey }, { contents: countRequest.contents }, signal,
   );
   return requireGemini3CountTokensWithinBudget({
     payload, countRequest, countResponse: result, maxInputTokens,
