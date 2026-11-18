@@ -83,6 +83,57 @@ export async function reserveResearchAttempt(tx, {
   return { dayUtc: day, remaining };
 }
 
+// Read-only preflight for a new full-run. Both discovery and person-source
+// paid searches share these quota counters. The claim transaction remains
+// authoritative: a concurrent search can consume capacity after preflight.
+export async function readResearchDailyCapacity(db, {
+  workspaceId, userId, now = new Date(),
+}) {
+  if (!/^[a-z0-9]{20,36}$/.test(workspaceId) ||
+      !/^[a-z0-9]{20,36}$/.test(userId)) {
+    throw new TypeError("Verified research capacity scope required");
+  }
+  const day = utcResearchDay(now);
+  const limits = await db.researchUserLimits.findUnique({
+    where: { ownerId: userId }, select: { dailyLimit: true },
+  });
+  const personalLimit = limits?.dailyLimit ?? RESEARCH_DAILY_USER_WORKSPACE_LIMIT;
+  if (!Number.isSafeInteger(personalLimit) || personalLimit < 1 ||
+      personalLimit > RESEARCH_MAX_USER_DAILY_LIMIT) {
+    throw new TypeError("Invalid persisted daily research limit");
+  }
+  const workspaceKey = "workspace:" + workspaceId;
+  const userWorkspaceKey = "workspace-user:" + workspaceId + ":" + userId;
+  const rows = await db.researchDailyQuota.findMany({
+    where: { dayUtc: new Date(day + "T00:00:00.000Z"),
+      scopeKey: { in: [workspaceKey, userWorkspaceKey] } },
+    select: { scopeKey: true, attempts: true },
+  });
+  const usage = new Map();
+  for (const row of rows) {
+    if (!Number.isSafeInteger(row.attempts) || row.attempts < 0 ||
+        usage.has(row.scopeKey)) {
+      throw new TypeError("Invalid persisted daily research quota");
+    }
+    usage.set(row.scopeKey, row.attempts);
+  }
+  const workspaceUsed = usage.get(workspaceKey) ?? 0;
+  const personalUsed = usage.get(userWorkspaceKey) ?? 0;
+  return Object.freeze({
+    dayUtc: day,
+    resetsAt: new Date(Date.parse(day + "T00:00:00.000Z") +
+      24 * 60 * 60 * 1000).toISOString(),
+    workspaceLimit: RESEARCH_DAILY_WORKSPACE_LIMIT,
+    workspaceUsed,
+    personalLimit,
+    personalUsed,
+    remaining: Math.min(
+      Math.max(0, RESEARCH_DAILY_WORKSPACE_LIMIT - workspaceUsed),
+      Math.max(0, personalLimit - personalUsed),
+    ),
+  });
+}
+
 // Persisted dispatch pacing shared by manual searches and agent campaigns.
 export const RESEARCH_MIN_DISPATCH_INTERVAL_MS = 35_000;
 
