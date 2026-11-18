@@ -86,6 +86,9 @@ function fakeDatabase({ queued = true, member = true,
       },
     },
     // No historical exclusions exist in this clean fixture.
+    partner: {
+      findUnique: async () => ({ researchDailyLimit: 1000 }),
+    },
     researchSpendAdjustment: {
       aggregate: async () => ({ _sum: { excludedCents: null } }),
     },

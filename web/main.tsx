@@ -413,7 +413,9 @@ function App() {
   const [partnerName, setPartnerName] = useState("");
   const [partnerEmail, setPartnerEmail] = useState("");
   const [partnerTarget, setPartnerTarget] = useState("new");
-  const [partnerWorkspaces, setPartnerWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
+  const [partnerWorkspaces, setPartnerWorkspaces] = useState<Array<{
+    id: string; name: string; researchDailyLimit: number;
+  }>>([]);
   const [partnerInvitations, setPartnerInvitations] = useState<PartnerInvitation[]>([]);
   const [inviteEmailConfigured, setInviteEmailConfigured] = useState(false);
   const [inviteReceipt, setInviteReceipt] = useState("");
@@ -469,7 +471,7 @@ function App() {
       api<Candidate[]>("/candidates" + (adminRemovedView ? "?removed=true" : "")),
       api<Draft[]>("/drafts"),
       api<AiSetting>("/ai-settings"),
-      api<{ partners: Array<{ id: string; name: string }> }>("/admin/partners"),
+      api<{ partners: Array<{ id: string; name: string; researchDailyLimit: number }> }>("/admin/partners"),
       api<{ invitations: PartnerInvitation[]; emailConfigured: boolean }>("/admin/partners/invitations"),
     ]);
     setCandidates(c);
@@ -3784,8 +3786,8 @@ function App() {
               <button type="button" className="secondary"
                 onClick={() => void loadResearchLimits()}>Retry loading limits</button>
             : <form onSubmit={saveResearchLimits}>
-              <label>Daily search attempts (1–100)
-                <input type="number" required min={1} max={100} step={1}
+              <label>Daily search attempts (1–1000)
+                <input type="number" required min={1} max={1000} step={1}
                   value={researchLimits.dailyLimit}
                   onChange={e => setResearchLimits({ ...researchLimits,
                     dailyLimit: Number(e.target.value) })}/>
@@ -3802,8 +3804,9 @@ function App() {
                   onChange={e => setResearchLimits({ ...researchLimits,
                     maxConcurrent: Number(e.target.value) })}/>
               </label>
-              <p className="muted">Server safety ceilings: 100 attempts per
-                workspace/day and five concurrent workspace searches. Active-run
+              <p className="muted">Workspace daily quota is set by the administrator (up to
+                1000 attempts/day). Five concurrent workspace searches remain
+                the global safety ceiling. Active-run
                 slots recover automatically after process failures.
                 Daily attempt limits and server-owned monetary reservations are active
                 for approved exact models. Incomplete provider usage retains the
@@ -4119,6 +4122,43 @@ function App() {
       </section>}
       {tab === "drafts" && <section className="panel"><h2>Saved AI drafts</h2><p className="muted">These are review-only drafts. The system cannot send email.</p>{drafts.map(d => <article className="draft" key={d.id}><div className="draft-top"><strong>{d.candidate.name}</strong><small>{d.provider} / {d.model}</small></div><h3>{d.subject}</h3><pre>{d.body}</pre><button className="secondary" onClick={() => navigator.clipboard.writeText(d.subject + "\n\n" + d.body)}>Copy draft</button></article>)}{!drafts.length && <p className="empty">No generated drafts yet.</p>}</section>}
       {tab === "settings" && <section className="panel setting-panel">
+        <section aria-label="Workspace research quota administration" className="review-panel">
+          <h2>Workspace daily research quotas</h2>
+          <p className="muted">Administrator-owned upper bounds, up to 1000
+            paid attempts per workspace per UTC day. All members share
+            a workspace quota. Personal limits, application budget and
+            full-run cost ceilings continue to apply independently.</p>
+          {partnerWorkspaces.map(workspace => <div key={workspace.id}
+            className="research-technical-details">
+            <label>{workspace.name} · daily workspace quota (1–1000)
+              <input type="number" required min={1} max={1000} step={1}
+                value={workspace.researchDailyLimit}
+                disabled={busy}
+                onChange={event => setPartnerWorkspaces(current =>
+                  current.map(item => item.id === workspace.id
+                    ? { ...item, researchDailyLimit: Number(event.target.value) }
+                    : item))}/>
+            </label>
+            <button type="button" className="secondary"
+              disabled={busy || !Number.isInteger(workspace.researchDailyLimit) ||
+                workspace.researchDailyLimit < 1 ||
+                workspace.researchDailyLimit > 1000}
+              onClick={() => void execute(async () => {
+                const updated = await api<{
+                  id: string; name: string; researchDailyLimit: number;
+                }>("/admin/partners/" + encodeURIComponent(workspace.id) +
+                  "/research-limit", {
+                  method: "PUT",
+                  body: JSON.stringify({
+                    researchDailyLimit: workspace.researchDailyLimit,
+                  }),
+                });
+                setPartnerWorkspaces(current => current.map(item =>
+                  item.id === updated.id ? updated : item));
+                setNotice("Workspace research daily quota saved. No AI call was made.");
+              })}>Save workspace quota</button>
+          </div>)}
+        </section>
         <section aria-label="Research reconciliation diagnostics" className="review-panel">
           <h2>Research charge diagnostics</h2>
           <p className="muted">Read-only application ledger across all partner workspaces.

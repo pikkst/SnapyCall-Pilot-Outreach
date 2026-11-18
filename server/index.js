@@ -62,6 +62,7 @@ import {
   validateResearchPreferences, RESEARCH_DAILY_USER_WORKSPACE_LIMIT,
   reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded,
   ResearchPacingRequired, readResearchDailyCapacity,
+  RESEARCH_MAX_USER_DAILY_LIMIT, validateWorkspaceDailyLimit,
 } from "./research-quota.js";
 import { validateMonthlyBudgetCents, reserveOwnerSpend, settleOwnerSpend,
   ResearchBudgetExceeded, readOwnerBudgetSnapshot,
@@ -548,10 +549,43 @@ app.post("/api/admin/partners/invitations/:id/resend", authenticated, requireOri
   }));
 app.get("/api/admin/partners", authenticated, safe(async (_req, res) => {
   const partners = await prisma.partner.findMany({
-    select: { id: true, name: true }, orderBy: { createdAt: "desc" }, take: 500,
+    select: { id: true, name: true, researchDailyLimit: true },
+    orderBy: { createdAt: "desc" }, take: 500,
   });
   return res.json({ partners });
 }));
+
+// Only the separately authenticated administrator can adjust a workspace's
+// daily safety cap. Preference changes and paid claims both acquire the
+// Partner row lock, so quota changes serialize with paid dispatch.
+app.put("/api/admin/partners/:id/research-limit",
+  authenticated, requireOrigin, safe(async (req, res) => {
+    const parsed = z.string().cuid().safeParse(req.params.id);
+    if (!parsed.success) return res.status(400).json({ code: "WORKSPACE_ID_INVALID" });
+    const input = z.object({
+      researchDailyLimit: z.number().int().min(1).max(1000),
+    }).strict().parse(req.body);
+    validateWorkspaceDailyLimit(input.researchDailyLimit);
+    const updated = await prisma.$transaction(async tx => {
+      const rows = await tx.$queryRaw`
+        SELECT "id" FROM "Partner" WHERE "id" = ${parsed.data} FOR UPDATE`;
+      if (rows.length !== 1) return null;
+      const partner = await tx.partner.update({
+        where: { id: parsed.data },
+        data: { researchDailyLimit: input.researchDailyLimit },
+        select: { id: true, name: true, researchDailyLimit: true },
+      });
+      await tx.auditEvent.create({ data: {
+        actorId: "admin", action: "research.workspace-daily-limit.updated",
+        entityId: partner.id,
+        metadata: { researchDailyLimit: partner.researchDailyLimit },
+      } });
+      return partner;
+    });
+    if (!updated) return res.status(404).json({ code: "WORKSPACE_NOT_FOUND" });
+    res.set("Cache-Control", "no-store");
+    return res.json(updated);
+  }));
 app.get("/api/auth/google/start", loginLimiter, (req, res) => {
   if (!google) return res.status(503).json({ error: "Google login not configured" });
   const flow = createGoogleFlow(google, env.SESSION_SIGNING_KEY);
@@ -769,7 +803,7 @@ app.put("/api/research-limits", aiOwnerAuthenticated, requireOrigin, safe(async 
     return res.status(403).json({ error: "Google partner session required" });
   }
   const input = z.object({
-    dailyLimit: z.number().int().min(1).max(100),
+    dailyLimit: z.number().int().min(1).max(RESEARCH_MAX_USER_DAILY_LIMIT),
     maxCandidates: z.number().int().min(1).max(20),
     maxConcurrent: z.number().int().min(1).max(3),
   }).strict().parse(req.body);

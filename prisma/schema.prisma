@@ -109,6 +109,7 @@ model CandidateEvidence {
 model Partner {
   id String @id @default(cuid())
   name String
+  researchDailyLimit Int @default(1000)
   memberships PartnerMembership[]
   candidates Candidate[]
   researchCampaigns ResearchCampaign[]

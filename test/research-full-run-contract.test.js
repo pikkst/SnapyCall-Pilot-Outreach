@@ -80,6 +80,9 @@ function fixture({ prior = null, priorFull = null, revocation = false,
       researchCampaign: {
         findUnique: async () => ({ targetCount: 100 }),
       },
+      partner: {
+        findUnique: async () => ({ researchDailyLimit: 1000 }),
+      },
       researchUserLimits: {
         findUnique: async () => ({ dailyLimit: personalLimit }),
       },
@@ -118,7 +121,7 @@ test("one approved action commits discovery and source grants atomically", async
 test("new full-run requires today's combined discovery/source quota headroom", async () => {
   // 12 + 30 requests = 42. Workspace cap is 100; user can raise only
   // their personal limit. Approving a new run never reserves quota.
-  const quota = fixture({ workspaceUsed: 65, personalUsed: 40, personalLimit: 100 });
+  const quota = fixture({ workspaceUsed: 965, personalUsed: 40, personalLimit: 100 });
   const denied = await approveCampaignRun(quota.db,
     { campaignId, workspaceId, ownerId, input });
   assert.equal(denied.status, 409);
