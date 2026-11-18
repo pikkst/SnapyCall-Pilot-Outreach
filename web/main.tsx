@@ -132,7 +132,7 @@ type DirectEmailEvidenceResponse = {
     reviewRequired: boolean; personEmailLinked: boolean; inspectedAt: string;
   };
 };
-type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { name: string } };
+type Draft = { id: string; subject: string; body: string; provider: string; model: string; candidate: { id?: string; name: string } };
 type ResearchPreview = {
   workspaceId: string; provider: "anthropic" | "openai" | "gemini"; model: string;
   quota: { dayUtc: string; remaining: { userWorkspace: number; workspace: number } };
@@ -416,6 +416,11 @@ function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [adminRemovedView, setAdminRemovedView] = useState(false);
+  const [workspaceRemovedView, setWorkspaceRemovedView] = useState(false);
+  const [pendingRemoveCandidateId, setPendingRemoveCandidateId] =
+    useState<string | null>(null);
+  const [candidateRemovalBusy, setCandidateRemovalBusy] = useState(false);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [setting, setSetting] = useState<AiSetting>({ provider: "gemini", model: "gemini-3-flash-preview", keyConfigured: false });
   const [apiKey, setApiKey] = useState("");
@@ -453,7 +458,7 @@ function App() {
 
   async function load() {
     const [c, d, s, workspaces, invitations] = await Promise.all([
-      api<Candidate[]>("/candidates"),
+      api<Candidate[]>("/candidates" + (adminRemovedView ? "?removed=true" : "")),
       api<Draft[]>("/drafts"),
       api<AiSetting>("/ai-settings"),
       api<{ partners: Array<{ id: string; name: string }> }>("/admin/partners"),
@@ -641,6 +646,9 @@ function App() {
     setResearchResult(null);
     setResearchStatus("idle");
     setResearchError("");
+    setWorkspaceRemovedView(false);
+    setPendingRemoveCandidateId(null);
+    setCandidateRemovalBusy(false);
     setWorkspaceCandidates([]);
     setWorkspaceDrafts([]);
     setWorkspaceCampaigns([]);
@@ -2025,6 +2033,86 @@ function App() {
     });
   }
 
+  async function switchCandidateRemovalView(workspaceId: string | null,
+    removed: boolean) {
+    const generation = workspaceRequest.current;
+    setError("");
+    setPendingRemoveCandidateId(null);
+    setCandidateRemovalBusy(true);
+    try {
+      const q = workspaceId === null ? "" :
+        "?workspaceId=" + encodeURIComponent(workspaceId) + "&";
+      const path = "/candidates" + (workspaceId === null
+        ? removed ? "?removed=true" : ""
+        : q.slice(0, -1) + (removed ? "&removed=true" : ""));
+      const rows = await api<Candidate[]>(path);
+      if (workspaceId === null) {
+        setCandidates(rows);
+        setAdminRemovedView(removed);
+      } else if (generation === workspaceRequest.current &&
+        workspaceId === activeWorkspaceId) {
+        setWorkspaceCandidates(rows);
+        setWorkspaceRemovedView(removed);
+      }
+    } catch (err) {
+      if (workspaceId === null || (generation === workspaceRequest.current &&
+          workspaceId === activeWorkspaceId)) {
+        setError(err instanceof Error ? err.message : "Could not load contacts");
+      }
+    } finally {
+      if (workspaceId === null || generation === workspaceRequest.current) {
+        setCandidateRemovalBusy(false);
+      }
+    }
+  }
+
+  async function changeCandidateRemovalFromUI(workspaceId: string | null,
+    contact: Candidate, remove: boolean) {
+    if (candidateRemovalBusy || (remove &&
+      pendingRemoveCandidateId !== contact.id) ||
+      (workspaceId !== null && workspaceId !== activeWorkspaceId)) return;
+    const generation = workspaceRequest.current;
+    setError("");
+    setCandidateRemovalBusy(true);
+    try {
+      const path = "/candidates/" + encodeURIComponent(contact.id) +
+        (remove ? "" : "/restore") +
+        (workspaceId === null ? "" :
+          "?workspaceId=" + encodeURIComponent(workspaceId));
+      const result = await api<{ changed: boolean; removed: boolean }>(
+        path, {
+          method: remove ? "DELETE" : "POST",
+          body: JSON.stringify(remove
+            ? { confirmRemove: true } : { confirmRestore: true }),
+        });
+      if (workspaceId !== null && (generation !== workspaceRequest.current ||
+          workspaceId !== activeWorkspaceId)) return;
+      if (workspaceId === null) {
+        setCandidates(rows => rows.filter(c => c.id !== contact.id));
+        setDrafts(rows => rows.filter(d => d.candidate?.id !== contact.id));
+      } else {
+        setWorkspaceCandidates(rows => rows.filter(c => c.id !== contact.id));
+        setWorkspaceDrafts(rows => rows.filter(d => d.candidate?.id !== contact.id));
+        if (partnerEvidenceId === contact.id) setPartnerEvidenceId(null);
+        if (personEmailCandidateId === contact.id) setPersonEmailCandidateId(null);
+      }
+      if (evidenceId === contact.id) setEvidenceId(null);
+      setPendingRemoveCandidateId(null);
+      setNotice(remove
+        ? "Contact removed from the active list. Research and audit history remain saved."
+        : "Contact restored to the active list. Review eligibility before outreach.");
+    } catch (err) {
+      if (workspaceId === null || (generation === workspaceRequest.current &&
+          workspaceId === activeWorkspaceId)) {
+        setError(err instanceof Error ? err.message : "Could not update contact");
+      }
+    } finally {
+      if (workspaceId === null || generation === workspaceRequest.current) {
+        setCandidateRemovalBusy(false);
+      }
+    }
+  }
+
   async function saveCandidate(event: React.FormEvent) {
     event.preventDefault();
     await execute(async () => {
@@ -3311,6 +3399,17 @@ function App() {
                       <div className="metric"><strong>{workspaceCandidates.filter(c =>
                         c.contactVerification?.usableAsContact === true).length}</strong><span>Usable contacts</span></div>
                     </div>
+                    <div className="candidate-removal-toolbar">
+                      <button type="button" className="secondary"
+                        disabled={candidateRemovalBusy}
+                        onClick={() => void switchCandidateRemovalView(
+                          p.id, !workspaceRemovedView)}>
+                        {workspaceRemovedView ? "Show active contacts" : "View removed contacts"}
+                      </button>
+                      <span className="muted">{workspaceRemovedView
+                        ? "Removed contacts are hidden from outreach and can be restored."
+                        : "Remove contacts without deleting saved research evidence."}</span>
+                    </div>
                     <div className="table-scroll candidate-pipeline-scroll"><table className="candidate-pipeline-table"><thead><tr>
                       <th>Candidate</th><th>Category</th><th>Region</th>
                       <th>Person-email</th><th>Mailbox</th><th>Next action</th><th>Review</th>
@@ -3329,27 +3428,57 @@ function App() {
                           {c.outreach.blockers.length > 0 && <small>{c.outreach.blockers.map(r =>
                             reasonNames[r] ?? r).join(" · ")}</small>}</td>
                         <td data-label="Review" className="candidate-pipeline-actions">
-                          {c.expertProfileUrl && <button type="button" className="secondary"
+                          {!workspaceRemovedView && c.expertProfileUrl &&
+                            <button type="button" className="secondary"
                             disabled={busy || personEmailBusy}
                             onClick={() => void inspectCandidatePersonEmail(p.id, c.id)}>
                             Inspect named email
                           </button>}
-                          <button type="button" className="secondary" disabled={busy}
-                            onClick={() => void openPartnerEvidence(p.id, c.id)}>Evidence</button>
-                          <button type="button" className="secondary" disabled={busy}
-                            onClick={() => openIndependentManualSearch(c)}>Search independently</button>
-                          <button type="button" className="secondary" disabled={busy}
-                            onClick={() => prepareIndependentResearch(c)}>Prepare AI criteria</button>
-                          {c.discoveryKey && <button type="button" className="secondary"
+                          {!workspaceRemovedView &&
+                            <button type="button" className="secondary" disabled={busy}
+                              onClick={() => void openPartnerEvidence(p.id, c.id)}>Evidence</button>}
+                          {!workspaceRemovedView &&
+                            <button type="button" className="secondary" disabled={busy}
+                              onClick={() => openIndependentManualSearch(c)}>
+                              Search independently</button>}
+                          {!workspaceRemovedView &&
+                            <button type="button" className="secondary" disabled={busy}
+                              onClick={() => prepareIndependentResearch(c)}>
+                              Prepare AI criteria</button>}
+                          {!workspaceRemovedView && c.discoveryKey &&
+                            <button type="button" className="secondary"
                             disabled={busy || partnerReviewSaving} onClick={() => beginProfileReview(c)}>
                             {c.expertProfileUrl ? "Review profile" : "Set expert profile"}
                           </button>}
-                          {!c.expertProfileUrl && <small className="candidate-pipeline-hint">
-                            Add a verified individual profile URL before inspecting named email.
-                          </small>}
+                          {!workspaceRemovedView && !c.expertProfileUrl &&
+                            <small className="candidate-pipeline-hint">
+                              Add a verified individual profile URL before inspecting named email.
+                            </small>}
+                          {workspaceRemovedView
+                            ? <button type="button" className="secondary"
+                                disabled={candidateRemovalBusy}
+                                onClick={() => void changeCandidateRemovalFromUI(
+                                  p.id, c, false)}>Restore contact</button>
+                            : pendingRemoveCandidateId === c.id ? <>
+                                <p className="muted">Remove {c.name} from this
+                                  workspace's active contacts? Research history stays saved.</p>
+                                <button type="button" className="danger"
+                                  disabled={candidateRemovalBusy}
+                                  onClick={() => void changeCandidateRemovalFromUI(
+                                    p.id, c, true)}>Confirm remove</button>
+                                <button type="button" className="secondary"
+                                  disabled={candidateRemovalBusy}
+                                  onClick={() => setPendingRemoveCandidateId(null)}>
+                                  Cancel</button>
+                              </> : <button type="button" className="secondary"
+                                disabled={candidateRemovalBusy}
+                                onClick={() => setPendingRemoveCandidateId(c.id)}>
+                                Remove contact</button>}
                         </td>
                       </tr>)}
-                      {!workspaceCandidates.length && <tr><td colSpan={7} className="empty">No candidates in this workspace.</td></tr>}
+                      {!workspaceCandidates.length && <tr><td colSpan={7} className="empty">
+                        {workspaceRemovedView ? "No removed contacts in this workspace." :
+                          "No active candidates in this workspace."}</td></tr>}
                     </tbody></table></div>
                     {personEmailCandidateId && <section className="review-panel"
                       aria-label="Direct person-email evidence review">
@@ -3732,7 +3861,18 @@ function App() {
             <button disabled={busy}>Add candidate</button>
           </form>
         </section>
-        <section className="panel"><h2>Candidate pipeline</h2><div className="table-scroll"><table><thead><tr><th>Candidate</th><th>Category</th><th>Region</th><th>Next action</th><th>Action</th></tr></thead><tbody>
+        <section className="panel"><h2>Candidate pipeline</h2>
+          <div className="candidate-removal-toolbar">
+            <button type="button" className="secondary" disabled={candidateRemovalBusy}
+              onClick={() => void switchCandidateRemovalView(
+                null, !adminRemovedView)}>
+              {adminRemovedView ? "Show active contacts" : "View removed contacts"}
+            </button>
+            <span className="muted">{adminRemovedView
+              ? "Removed contacts can be restored. Research history is retained."
+              : "Remove contacts from this list without deleting research history."}</span>
+          </div>
+          <div className="table-scroll"><table><thead><tr><th>Candidate</th><th>Category</th><th>Region</th><th>Next action</th><th>Action</th></tr></thead><tbody>
           {candidates.map(c => <tr key={c.id}><td>
               <strong>{c.name}</strong><small>{c.email ?? "No email"}</small>
               <small>{c.sourceUrl ? <a href={c.sourceUrl} target="_blank" rel="noopener noreferrer">
@@ -3746,11 +3886,35 @@ function App() {
             <td><strong>{stageNames[c.qualification.stage] ?? c.qualification.stage}</strong>
               {c.outreach.blockers.length > 0 && <small>{c.outreach.blockers.map(r => reasonNames[r] ?? r).join(" · ")}</small>}</td>
             <td>
-              <button type="button" className="secondary" disabled={busy} onClick={() => showEvidence(c.id)}>Evidence</button>
-              {c.discoveryKey && <button type="button" className="secondary" disabled={busy} onClick={() => beginProfileReview(c)}>Review profile</button>}
-              <button type="button" disabled={busy || !c.outreach.canDraft || !setting.keyConfigured} onClick={() => makeDraft(c.id)}>Generate draft</button>
+              {!adminRemovedView && <>
+                <button type="button" className="secondary" disabled={busy}
+                  onClick={() => showEvidence(c.id)}>Evidence</button>
+                {c.discoveryKey && <button type="button" className="secondary"
+                  disabled={busy} onClick={() => beginProfileReview(c)}>Review profile</button>}
+                <button type="button"
+                  disabled={busy || !c.outreach.canDraft || !setting.keyConfigured}
+                  onClick={() => makeDraft(c.id)}>Generate draft</button>
+              </>}
+              {adminRemovedView ?
+                <button type="button" className="secondary"
+                  disabled={candidateRemovalBusy}
+                  onClick={() => void changeCandidateRemovalFromUI(null, c, false)}>
+                  Restore contact</button>
+                : pendingRemoveCandidateId === c.id ? <>
+                  <p className="muted">Remove {c.name}? Research history stays saved.</p>
+                  <button type="button" className="danger" disabled={candidateRemovalBusy}
+                    onClick={() => void changeCandidateRemovalFromUI(null, c, true)}>
+                    Confirm remove</button>
+                  <button type="button" className="secondary"
+                    onClick={() => setPendingRemoveCandidateId(null)}>Cancel</button>
+                </> : <button type="button" className="secondary"
+                  disabled={candidateRemovalBusy}
+                  onClick={() => setPendingRemoveCandidateId(c.id)}>
+                  Remove contact</button>}
             </td></tr>)}
-          {!candidates.length && <tr><td colSpan={5} className="empty">No candidates yet. Add one above to start.</td></tr>}
+          {!candidates.length && <tr><td colSpan={5} className="empty">
+            {adminRemovedView ? "No removed contacts." :
+              "No active candidates yet. Add one above to start."}</td></tr>}
         </tbody></table></div>
         {evidenceId && <section className="review-panel" aria-label="Candidate evidence">
           <h3>Source evidence</h3>

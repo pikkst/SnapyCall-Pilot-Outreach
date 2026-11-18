@@ -69,7 +69,7 @@ export async function inspectAndStoreDirectEmailObservation(db, {
     throw new TypeError("Valid candidate scope required");
   }
   const candidate = await db.candidate.findFirst({
-    where: { id: candidateId, workspaceId },
+    where: { id: candidateId, workspaceId, removedAt: null },
     select: { id: true, name: true, email: true, expertProfileUrl: true },
   });
   if (!candidate) return { code: "CANDIDATE_NOT_FOUND", status: 404 };
@@ -97,7 +97,7 @@ export async function inspectAndStoreDirectEmailObservation(db, {
     const rows = await tx.$queryRaw`
       SELECT "id", "name", "email", "expertProfileUrl" FROM "Candidate"
       WHERE "id" = ${candidateId} AND "workspaceId" = ${workspaceId}
-      FOR UPDATE`;
+        AND "removedAt" IS NULL FOR UPDATE`;
     if (rows.length !== 1) return { status: 404, code: "CANDIDATE_NOT_FOUND" };
     const current = rows[0];
     const currentEmail = current.email == null ? null : normalizedEmail(current.email);

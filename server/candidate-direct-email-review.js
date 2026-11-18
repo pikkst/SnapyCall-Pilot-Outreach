@@ -31,7 +31,8 @@ export async function reviewCandidateDirectEmailEvidence(db, {
     const rows = await tx.$queryRaw`
       SELECT "id", "name", "email", "expertProfileUrl", "suppressed"
       FROM "Candidate" WHERE "id" = ${candidateId}
-        AND "workspaceId" = ${workspaceId} FOR UPDATE`;
+        AND "workspaceId" = ${workspaceId}
+        AND "removedAt" IS NULL FOR UPDATE`;
     if (rows.length !== 1) return { status: 404, code: "CANDIDATE_NOT_FOUND" };
     const candidate = rows[0];
     if (candidate.suppressed) return { status: 409, code: "SUPPRESSED_CANDIDATE" };

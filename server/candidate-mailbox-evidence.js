@@ -51,7 +51,7 @@ export async function persistCandidateMailboxEvidence(db, {
     const rows = await tx.$queryRaw`
       SELECT "id", "email" FROM "Candidate"
       WHERE "id" = ${candidateId} AND "workspaceId" = ${workspaceId}
-      FOR UPDATE`;
+        AND "removedAt" IS NULL FOR UPDATE`;
     if (rows.length !== 1) return { status: 404, code: "CANDIDATE_NOT_FOUND" };
     const email = normalizeVerificationAddress(rows[0].email);
     if (!email || checked.email !== email.email) {

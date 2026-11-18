@@ -98,11 +98,17 @@ export async function acceptReviewedCampaignContact(db, {
         { expertProfileUrl: finding.sourceUrl },
       ] },
       select: { id: true, name: true, category: true,
-        emailNormalized: true, expertProfileUrl: true },
+        emailNormalized: true, expertProfileUrl: true, removedAt: true },
     });
     // Never attach evidence to an existing, possibly different identity by
     // matching only name, source or email. Exact idempotent replay is allowed.
     if (existing) {
+      // Research may finish after a user removes the linked contact. Do not
+      // re-promote a removed record or count it as a newly saved contact.
+      if (existing.removedAt != null) {
+        return { status: 409, code: "CONTACT_REMOVED",
+          contactCreated: false, sendingEnabled: false };
+      }
       if (observation.candidateId === existing.id &&
           existing.name === finding.name &&
           existing.category === finding.category &&

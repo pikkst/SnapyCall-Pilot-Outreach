@@ -49,6 +49,7 @@ import { inspectResearchPreview } from "./research-contact-enrichment.js";
 import { inspectAndStoreDirectEmailObservation } from "./candidate-direct-email-evidence.js";
 import { reviewCandidateDirectEmailEvidence, directEmailReviewSnapshot } from "./candidate-direct-email-review.js";
 import { projectCandidateContactReadiness } from "./candidate-contact-readiness.js";
+import { changeCandidateRemoval } from "./candidate-removal.js";
 import { inspectEmailDomain, onboardingEmailEligibility } from "./email-deliverability.js";
 import { inspectAndPersistCandidateDns, visibleCandidateDnsSnapshot } from "./candidate-email-dns.js";
 import { normalizeManualLeadSeed } from "./manual-lead-seed.js";
@@ -1298,7 +1299,7 @@ app.patch("/api/candidates/:id/expert-review", candidateReadScope, requireOrigin
         userId: actorId, workspaceId: req.candidateScope,
       })) return { status: 403, error: "Workspace membership revoked" };
       const row = await tx.candidate.findFirst({
-        where: { id: req.params.id, workspaceId: req.candidateScope },
+        where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null },
       });
       if (!row) return { status: 404, error: "Candidate not found" };
       if (!row.discoveryKey) return { status: 409, error: "Only discovered candidates use this review flow" };
@@ -1337,7 +1338,7 @@ app.patch("/api/candidates/:id/expert-review", candidateReadScope, requireOrigin
 // eligibility, ownership of the identity, or consent to contact.
 app.get("/api/candidates/:id/evidence", candidateReadScope, safe(async (req, res) => {
   const candidate = await prisma.candidate.findFirst({
-    where: { id: req.params.id, workspaceId: req.candidateScope },
+    where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null },
     select: { id: true },
   });
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
@@ -1364,7 +1365,7 @@ app.post("/api/candidates/:id/evidence", candidateReadScope, requireOrigin, safe
       workspaceId: req.candidateScope, userId: actorId,
     })) return { status: 403, body: { error: "Workspace membership revoked" } };
     const row = await tx.candidate.findFirst({
-      where: { id: req.params.id, workspaceId: req.candidateScope }, select: { id: true },
+      where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null }, select: { id: true },
     });
     if (!row) return { status: 404, body: { error: "Candidate not found" } };
     const existing = await tx.candidateEvidence.findUnique({ where: key });
@@ -1387,7 +1388,7 @@ app.post("/api/candidates/:id/evidence", candidateReadScope, requireOrigin, safe
       workspaceId: req.candidateScope, userId: actorId,
     })) return { status: 403, body: { error: "Workspace membership revoked" } };
     const candidate = await prisma.candidate.findFirst({
-      where: { id: req.params.id, workspaceId: req.candidateScope }, select: { id: true },
+      where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null }, select: { id: true },
     });
     if (!candidate) return { status: 404, body: { error: "Candidate not found" } };
     const existing = await prisma.candidateEvidence.findUnique({ where: key });
@@ -1424,7 +1425,7 @@ app.get("/api/candidates/:id/direct-email-evidence", candidateReadScope,
     const identity = await partnerIdentity(req);
     if (!identity) return res.status(401).json({ error: "Unauthorized" });
     const row = await prisma.candidate.findFirst({
-      where: { id: req.params.id, workspaceId: req.candidateScope },
+      where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null },
       select: { id: true, name: true, email: true, expertProfileUrl: true },
     });
     if (!row) return res.status(404).json({ error: "Candidate not found" });
@@ -1475,7 +1476,7 @@ app.get("/api/candidates/:id/email-check", candidateReadScope,
       return res.status(401).json({ error: "Unauthorized" });
     }
     const row = await prisma.candidate.findFirst({
-      where: { id: req.params.id, workspaceId: req.candidateScope },
+      where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null },
       select: { id: true, email: true, suppressed: true,
         contactReviewed: true, legalBasis: true },
     });
@@ -1521,7 +1522,7 @@ app.post("/api/candidates/:id/email-check", candidateReadScope,
 
 app.get("/api/candidates/:id/possible-duplicates", candidateReadScope, safe(async (req, res) => {
   const candidate = await prisma.candidate.findFirst({
-    where: { id: req.params.id, workspaceId: req.candidateScope },
+    where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null },
   });
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
   if (!candidate.expertProfileUrl && !candidate.emailNormalized) {
@@ -2257,9 +2258,15 @@ app.post("/api/research-campaigns/:id/cancel", candidateReadScope,
     return res.json(outcome);
   }));
 
+// Active contacts by default; an explicit archived view is private to the
+// same authenticated workspace (or admin-only legacy scope).
 app.get("/api/candidates", candidateReadScope, safe(async (req, res) => {
+  if (req.query.removed !== undefined && req.query.removed !== "true") {
+    return res.status(400).json({ error: "Invalid removed filter" });
+  }
   const items = await prisma.candidate.findMany({
-    where: { workspaceId: req.candidateScope },
+    where: { workspaceId: req.candidateScope,
+      removedAt: req.query.removed === "true" ? { not: null } : null },
     orderBy: { createdAt: "desc" }, take: 500,
     include: { directEmailObservation: true, mailboxVerification: true },
   });
@@ -2279,6 +2286,38 @@ app.get("/api/candidates", candidateReadScope, safe(async (req, res) => {
     };
   }));
 }));
+// Removing is reversible and does not delete the linked audit, drafts,
+// research evidence or immutable billed research attempts.
+app.delete("/api/candidates/:id", candidateReadScope, requireOrigin,
+  safe(async (req, res) => {
+    z.object({ confirmRemove: z.literal(true) }).strict().parse(
+      req.body ?? {});
+    const identity = req.candidateScope === null ? { id: "admin" } :
+      await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const result = await changeCandidateRemoval(prisma, {
+      candidateId: req.params.id, workspaceId: req.candidateScope,
+      actorId: identity.id, remove: true,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
+app.post("/api/candidates/:id/restore", candidateReadScope, requireOrigin,
+  safe(async (req, res) => {
+    z.object({ confirmRestore: z.literal(true) }).strict().parse(
+      req.body ?? {});
+    const identity = req.candidateScope === null ? { id: "admin" } :
+      await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const result = await changeCandidateRemoval(prisma, {
+      candidateId: req.params.id, workspaceId: req.candidateScope,
+      actorId: identity.id, remove: false,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
 app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, res) => {
   // Ownership comes exclusively from verified session + query membership.
   // Never accept client-submitted ownership fields in candidate payloads.
@@ -2319,8 +2358,10 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
           sourceUrl: candidate.sourceUrl,
           name: { equals: candidate.name, mode: "insensitive" },
         },
-        select: { id: true },
+        select: { id: true, removedAt: true },
       });
+      if (found?.removedAt) return { id: found.id,
+        created: false, archived: true };
       if (found) return { id: found.id, created: false };
     }
     const created = await tx.candidate.create({
@@ -2351,6 +2392,9 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
   });
   if (row === null) return res.status(403).json({ error: "Workspace membership revoked" });
   if (row === "DUPLICATE") return res.status(409).json({ error: "Candidate already exists in workspace" });
+  if (row.archived) return res.status(409).json({
+    code: "CONTACT_REMOVED", error: "This contact was previously removed. Restore it from Removed contacts.",
+  });
   return res.status((manualSeed || discoverySeed) && !row.created ? 200 : 201).json(
     manualSeed || discoverySeed ? { id: row.id, created: row.created } : { id: row.id });
 }));
@@ -2402,7 +2446,9 @@ app.delete("/api/ai-settings", ...aiWrite, safe(async (req, res) => {
 const draftLimiter = rateLimit({ windowMs: 60_000, limit: 6, standardHeaders: "draft-7", legacyHeaders: false });
 app.post("/api/candidates/:id/draft", ...write, draftLimiter, safe(async (req, res) => {
   const candidate = await prisma.candidate.findUnique({ where: { id: req.params.id } });
-  if (!candidate) return res.status(404).json({ error: "Candidate not found" });
+  if (!candidate || candidate.removedAt != null) {
+    return res.status(404).json({ error: "Active candidate not found" });
+  }
   const eligibility = outreachDecision(candidate);
   if (!eligibility.canDraft) return res.status(409).json({ error: "Candidate not draft-ready", stage: eligibility.stage, blockers: eligibility.blockers });
   const setting = await prisma.aiSetting.findUnique({ where: { ownerId: "admin" } });
@@ -2426,7 +2472,7 @@ app.get("/api/drafts", candidateReadScope, safe(async (req, res) => {
     // Guard against a draft accidentally referencing a candidate from a
     // different workspace, even if legacy data was inconsistently migrated.
     where: { workspaceId: req.candidateScope,
-      candidate: { workspaceId: req.candidateScope } },
+      candidate: { workspaceId: req.candidateScope, removedAt: null } },
     take: 200, orderBy: { createdAt: "desc" },
     include: { candidate: { select: { id: true, name: true } } },
   });
