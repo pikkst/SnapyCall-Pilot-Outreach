@@ -24,6 +24,9 @@ import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-cam
 import { approvePersonSourceResearch } from "./research-person-source-approval.js";
 import { enqueuePersonSourceJobs } from "./research-person-source-queue.js";
 import { startPersonSourceWorker } from "./research-person-source-runner.js";
+import { readQualifiedContactManifest, approveQualifiedContactBatch }
+  from "./research-contact-batch.js";
+import { startContactBatchWorker } from "./research-contact-batch-worker.js";
 import { approveCampaignRun, stopApprovedCampaignRun,
   publicRunStatus, ApprovedRunBlocked }
   from "./research-campaign-run-approval.js";
@@ -1920,6 +1923,48 @@ app.post("/api/research-campaigns/:id/observations/:observationId/accept-contact
 // dispatch is wired here. Approval is not an outreach or contact permission.
 // Queue preparation is non-billable, idempotent and explicitly owner-scoped.
 // It does NOT grant source research, public inspection or sending permission.
+// Read-only qualified contacts are private to the authenticated campaign owner.
+// Stored email evidence is NOT send-eligible or mailbox-verified.
+app.get("/api/research-campaigns/:id/qualified-contacts",
+  candidateReadScope, safe(async (req, res) => {
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const result = await readQualifiedContactManifest(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
+// One explicit batch approval, zero per-person clicks, no email sending.
+// Worker still re-inspects each named-email pair before saving a Candidate.
+app.post("/api/research-campaigns/:id/qualified-contacts/approve-batch",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (env.AI_CONTACT_BATCH_ENABLED !== "true") {
+      return res.status(503).json({ code: "CONTACT_BATCH_DISABLED" });
+    }
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const input = z.object({
+      manifestHash: z.string().regex(/^[a-f0-9]{64}$/),
+      confirmEveryDisplayedPair: z.literal(true),
+      confirmNoAutomaticSending: z.literal(true),
+    }).strict().parse(req.body ?? {});
+    const result = await approveQualifiedContactBatch(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id, ...input,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
 app.post("/api/research-campaigns/:id/person-source/queue",
   candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
     if (env.AI_PERSON_SOURCE_APPROVAL_ENABLED !== "true") {
@@ -2398,6 +2443,8 @@ async function start() {
     ? startGroundingResolutionWorker(prisma) : () => {};
   const stopEmailTriageWorker = env.AI_EMAIL_TRIAGE_ENABLED === "true"
     ? startEmailTriageWorker(prisma) : () => {};
+  const stopContactBatchWorker = env.AI_CONTACT_BATCH_ENABLED === "true"
+    ? startContactBatchWorker(prisma) : () => {};
   const stopPersonSourceWorker =
     env.AI_PERSON_SOURCE_EXECUTOR_ENABLED === "true" &&
     env.AI_PERSON_SOURCE_APPROVAL_ENABLED === "true"
@@ -2414,6 +2461,7 @@ async function start() {
     shuttingDown = true;
     stopApprovedWorker();
     stopPersonSourceWorker();
+    stopContactBatchWorker();
     stopGroundingWorker();
     stopEmailTriageWorker();
     server.close(async () => {
