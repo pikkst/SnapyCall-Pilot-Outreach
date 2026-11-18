@@ -33,7 +33,7 @@ export function summarizeQualifiedEmailEvidence(rows, { complete = true } = {}) 
   if (!complete || rows.length > 250) {
     return Object.freeze({ qualifiedEvidence: 0, reviewRequired: 0,
       ambiguous: 0, countReliable: false, contactsAccepted: 0,
-      sendEligible: 0, sendingEnabled: false });
+      sendingEnabled: false });
   }
   const sourceCounts = new Map();
   const emailCounts = new Map();
@@ -61,6 +61,6 @@ export function summarizeQualifiedEmailEvidence(rows, { complete = true } = {}) 
     qualifiedEvidence++;
   }
   return Object.freeze({ qualifiedEvidence, reviewRequired, ambiguous,
-    countReliable: true, contactsAccepted: 0, sendEligible: 0,
+    countReliable: true, sendEligible: 0,
     sendingEnabled: false });
 }
