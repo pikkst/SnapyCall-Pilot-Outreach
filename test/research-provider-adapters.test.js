@@ -304,3 +304,87 @@ test("Gemini 3 Flash preview uses supported minimal thinking and never certifies
   assert.equal(result.usage.groundedPrompts, undefined);
   assert.equal(result.sendingEnabled, false);
 });
+
+const textOnlyManifestFixture = async () => {
+  const { buildBoundedRetrievalManifest } = await import("../server/research-evidence.js");
+  return buildBoundedRetrievalManifest({
+    provider: "contract_test",
+    observedAt: "2026-11-18T00:00:00.000Z",
+    records: [{
+      sourceId: "profile-1",
+      url: "https://consultants.example.org/experts/verified",
+      title: "Verified professional profile",
+      excerpt: "Verified Professional offers AI automation consultation.",
+    }],
+  });
+};
+
+test("Gemini 3 text-only contract has no search tools, external call or browser URL", async () => {
+  const { buildGemini3TextOnlyPayload } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({ query, limit: 3, manifest });
+  assert.equal(Object.hasOwn(payload, "tools"), false);
+  assert.deepEqual(payload.generationConfig.thinkingConfig, { thinkingLevel: "minimal" });
+  assert.equal(payload.generationConfig.maxOutputTokens, 2048);
+  assert.equal(payload.generationConfig.responseMimeType, "application/json");
+  const prompt = payload.contents[0].parts[0].text;
+  assert.match(prompt, /profile-1/);
+  assert.match(prompt, /untrusted public search excerpts/);
+  assert.doesNotMatch(prompt, /x-goog-api-key|google_search/);
+});
+
+test("Gemini 3 text-only result binds source IDs, not model-created email or URLs", async () => {
+  const { parseGemini3TextOnlyResponse } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const result = parseGemini3TextOnlyResponse({
+    manifest, limit: 3,
+    response: {
+      candidates: [{
+        finishReason: "STOP",
+        content: { parts: [{ text: JSON.stringify({ candidates: [{
+          name: "Verified Professional", category: "AI_AUTOMATION",
+          sourceId: "profile-1", rationale: "Public source describes consulting expertise",
+        }, {
+          name: "Invented Person", category: "AI_AUTOMATION",
+          sourceId: "invented-id", rationale: "Unverified model suggestion only",
+        }] }) }] },
+      }],
+      usageMetadata: { promptTokenCount: 250, candidatesTokenCount: 125, thoughtsTokenCount: 0 },
+    },
+  });
+  assert.deepEqual(result.candidates.map(x => x.name), ["Verified Professional"]);
+  assert.equal(result.candidates[0].sourceUrl, "https://consultants.example.org/experts/verified");
+  assert.equal(result.candidates[0].email, null);
+  assert.equal(result.imported, false);
+  assert.equal(result.reviewRequired, true);
+  assert.equal(result.sendingEnabled, false);
+  assert.equal(result.usage.searchRequests, 0);
+  assert.equal(Object.hasOwn(result.usage, "billingEvidence"), false);
+});
+
+test("Gemini text-only response rejects generated search metadata and incomplete results", async () => {
+  const { parseGemini3TextOnlyResponse, buildGemini3TextOnlyPayload } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const base = {
+    candidates: [{ finishReason: "STOP", content: {
+      parts: [{ text: '{"candidates":[]}' }],
+    } }],
+  };
+  for (const response of [
+    { ...base, candidates: [{ ...base.candidates[0], finishReason: "MAX_TOKENS" }] },
+    { ...base, candidates: [{ ...base.candidates[0], groundingMetadata: { webSearchQueries: [] } }] },
+    { ...base, candidates: [base.candidates[0], base.candidates[0]] },
+    { ...base, candidates: [{ ...base.candidates[0], content: { parts: [] } }] },
+  ]) assert.throws(() => parseGemini3TextOnlyResponse({
+    manifest, limit: 3, response,
+  }));
+  assert.throws(() => buildGemini3TextOnlyPayload({
+    query: "tiny", limit: 3, manifest,
+  }), TypeError);
+  assert.throws(() => buildGemini3TextOnlyPayload({
+    query, limit: 3, manifest: { ...manifest, digest: "0".repeat(64) },
+  }), TypeError);
+});
