@@ -1929,6 +1929,7 @@ app.post("/api/research-campaigns/:id/person-source/approve",
       maxWorstCaseCents: z.number().int().min(1).max(50000),
       confirmPaidSourceResearch: z.literal(true),
       confirmNoAutomaticRetry: z.literal(true),
+      confirmPublicInspection: z.literal(true),
     }).strict().parse(req.body ?? {});
     const result = await approvePersonSourceResearch(prisma, {
       campaignId: req.params.id, workspaceId: req.candidateScope,
