@@ -65,7 +65,16 @@ export async function claimResearchTask(db, { campaignId, workspaceId, ownerId,
       WHERE c."id" = ${campaignId}
       GROUP BY c."id"`;
     if (totals.length !== 1) throw new Error("Campaign count unavailable");
-    if (totals[0].uniqueCount >= totals[0].targetCount) {
+    const full = await tx.researchFullRun?.findUnique({
+      where: { campaignId },
+      select: { status: true, workspaceId: true, ownerId: true },
+    });
+    const adaptive = full?.status === "DISCOVERY" &&
+      full.workspaceId === workspaceId && full.ownerId === ownerId;
+    // Never exceed the approved 250-observation inspection bound. Discovery
+    // targetCount is raw names and cannot end a full-run email goal early.
+    if (adaptive && totals[0].uniqueCount >= 250) return null;
+    if (!adaptive && totals[0].uniqueCount >= totals[0].targetCount) {
       // An already claimed task can be chargeable. Never finalize the
       // campaign while a RUNNING or PAUSED task needs settlement/review.
       const unresolved = await tx.researchCampaignTask.count({

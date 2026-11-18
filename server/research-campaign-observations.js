@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { publicCitationUrl } from "./research-evidence.js";
 import { completeResearchTask } from "./research-campaign-leases.js";
+import { maybeAppendAdaptiveDiscoveryTask } from "./research-adaptive-discovery.js";
 import { consecutiveQualityFailures, shouldStopForQuality } from "./research-quality-gate.js";
 
 const observationSchema = z.object({
@@ -83,8 +84,25 @@ export async function commitCampaignResearchResult(db, claim, preview,
       observedCount: observations.length, completionCode, now,
     });
     if (!applied) throw new CampaignLeaseConflict();
-    const saved = observations.length ? await tx.researchCampaignObservation.createMany({
-      data: observations.map(item => ({
+    const approvedFull = await tx.researchFullRun?.findUnique({
+      where: { campaignId: claim.campaignId },
+      select: { status: true, workspaceId: true, ownerId: true },
+    });
+    const fullDiscovery = approvedFull?.status === "DISCOVERY" &&
+      approvedFull.workspaceId === claim.workspaceId &&
+      approvedFull.ownerId === claim.ownerId;
+    const existingEvidence = fullDiscovery
+      ? await tx.researchCampaignObservation.count({
+        where: { campaignId: claim.campaignId },
+      }) : 0;
+    // Do not write beyond the 250-observation/email-inspection snapshot
+    // supported by this release, including when a single model call returns
+    // more results than remaining room. No claim of 100 validated emails.
+    const bounded = fullDiscovery
+      ? observations.slice(0, Math.max(0, 250 - existingEvidence))
+      : observations;
+    const saved = bounded.length ? await tx.researchCampaignObservation.createMany({
+      data: bounded.map(item => ({
         campaignId: claim.campaignId, taskId: claim.taskId,
         evidenceKey: item.evidenceKey, name: item.name, category: item.category,
         citationUrl: item.citationUrl, rationale: item.rationale,
@@ -130,7 +148,23 @@ export async function commitCampaignResearchResult(db, claim, preview,
       const unique = await tx.researchCampaignObservation.count({
         where: { campaignId: claim.campaignId },
       });
-      if (unique >= campaign.targetCount) {
+      const full = await tx.researchFullRun?.findUnique({
+        where: { campaignId: claim.campaignId },
+        select: { status: true, workspaceId: true, ownerId: true },
+      });
+      const adaptive = full?.status === "DISCOVERY" &&
+        full.workspaceId === claim.workspaceId &&
+        full.ownerId === claim.ownerId;
+      if (adaptive && unique >= 250) {
+        // The immutable email-inspection snapshot cannot exceed 250 persons.
+        // Cancel future queued tasks under the same campaign lock so the
+        // autorun and full-run stage controller can progress to verification.
+        await tx.researchCampaignTask.updateMany({
+          where: { campaignId: claim.campaignId, status: "QUEUED" },
+          data: { status: "CANCELLED" },
+        });
+        terminalStatus = "PARTIAL";
+      } else if (unique >= campaign.targetCount && !adaptive) {
         // Prevent another paid claim after the threshold has been reached.
         await tx.researchCampaignTask.updateMany({
           where: { campaignId: claim.campaignId, status: "QUEUED" },
@@ -146,7 +180,25 @@ export async function commitCampaignResearchResult(db, claim, preview,
         const queued = await tx.researchCampaignTask.count({
           where: { campaignId: claim.campaignId, status: "QUEUED" },
         });
-        if (queued === 0) terminalStatus = "PARTIAL";
+        if (queued === 0) {
+          // Qualified-email research must not stop at the raw name count.
+          // Append exactly one deterministic task under the SAME campaign
+          // lock and immutable approved spend limit. Existing campaigns
+          // preserve their original observation-based finalization.
+          const expansion = adaptive
+            ? await maybeAppendAdaptiveDiscoveryTask(tx, {
+              campaignId: claim.campaignId,
+              workspaceId: claim.workspaceId,
+              ownerId: claim.ownerId,
+              campaign: await tx.researchCampaign.findUnique({
+                where: { id: claim.campaignId },
+                select: { query: true, targetCount: true,
+                  planVersion: true, idempotencyKey: true },
+              }),
+              observedCount: unique, now,
+            }) : { appended: false };
+          if (!expansion.appended) terminalStatus = "PARTIAL";
+        }
       }
     }
     if (terminalStatus) {
@@ -171,6 +223,8 @@ export async function commitCampaignResearchResult(db, claim, preview,
       observed: observations.length,
       uniqueAdded: saved.count,
       duplicates: observations.length - saved.count,
+      ...(fullDiscovery ? { inspectionCap: 250,
+        omittedAtInspectionCap: observations.length - bounded.length } : {}),
       ...(terminalStatus ? { campaignStatus: terminalStatus } : {}),
     });
   });
