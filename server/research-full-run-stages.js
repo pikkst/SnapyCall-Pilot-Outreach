@@ -8,6 +8,7 @@ import { enqueuePersonSourceJobs } from "./research-person-source-queue.js";
 import { approvePersonSourceResearch } from "./research-person-source-approval.js";
 import { summarizeQualifiedEmailEvidence } from "./research-qualified-evidence.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
+import { createNextSourceCycle } from "./research-person-source-cycles.js";
 
 const ACTIVE_STAGES = new Set([
   "DISCOVERY", "EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING",
@@ -154,6 +155,13 @@ export async function stopFullRunSourceAtGoal(db, scope) {
       });
       if (stopped.count !== 1) throw new Error("SOURCE_STOP_CAS_CONFLICT");
     }
+    // Stop active continuation-cycle dispatch in the same campaign lock.
+    await tx.researchPersonSourceCycle.updateMany({
+      where: { campaignId: scope.campaignId,
+        workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+        status: { in: ["APPROVED", "RUNNING"] } },
+      data: { status: "TARGET_REACHED" },
+    });
     const finished = await tx.researchFullRun.updateMany({
       where: { id: full.id, campaignId: scope.campaignId,
         workspaceId: scope.workspaceId, ownerId: scope.ownerId,
@@ -360,7 +368,17 @@ export async function tickFullRunStages(db, {
       return { status: "WAITING", code: "SOURCE_RESEARCH_RUNNING" };
     }
     if (["COMPLETED", "PARTIAL_BUDGET"].includes(approval.status)) {
-      return move("PARTIAL", "QUALIFIED_TARGET_NOT_REACHED");
+      // The original approval is immutable. Continuation receives only
+      // previously unattempted jobs and whatever source budget remains.
+      const next = await createNextSourceCycle(db, scope, { now: clock });
+      if (next.status === "CREATED" || next.status === "WAITING") {
+        return { status: "WAITING", code: next.code };
+      }
+      if (next.status === "EXHAUSTED") {
+        return move("PARTIAL", next.code);
+      }
+      return move("NEEDS_REVIEW",
+        next.code ?? "SOURCE_CONTINUATION_RECONCILIATION_REQUIRED");
     }
     return move("NEEDS_REVIEW", "SOURCE_RESEARCH_NEEDS_RECONCILIATION");
   }
