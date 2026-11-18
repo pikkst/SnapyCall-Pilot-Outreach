@@ -518,6 +518,52 @@ export async function searchWithBoundedTavily({
 }
 
 
+// Tavily may return up to 20 full excerpts that are individually valid yet
+// collectively exceed the independently approved Gemini input ceiling.
+// Compact the ALREADY retrieved evidence deterministically. This is local
+// transformation only: it never repeats retrieval, invents a sourceId or
+// weakens provider countTokens preflight. Provider-ranked sources are retained
+// in order, and the resulting manifest is rehashed before any Gemini call.
+export function fitGemini3RetrievalEvidence({
+  query, limit, manifest, maxInputTokens,
+}) {
+  if (!manifest || !Array.isArray(manifest.records) ||
+      manifest.records.length < 1 || manifest.records.length > 20) {
+    throw new TypeError("Trusted bounded retrieval manifest required");
+  }
+  // Prefer source coverage to longer excerpts. On unusually large escaped or
+  // Unicode text, shrink excerpts and finally source count; never expand.
+  for (let count = manifest.records.length; count >= 1; count--) {
+    for (const excerptChars of [600, 400, 240, 120, 60]) {
+      const selected = buildBoundedRetrievalManifest({
+        provider: "tavily",
+        observedAt: manifest.records[0].observedAt,
+        records: manifest.records.slice(0, count).map(record => ({
+          sourceId: record.sourceId,
+          url: record.url,
+          title: record.title.slice(0, 100),
+          excerpt: record.excerpt.slice(0, excerptChars),
+        })),
+      });
+      try {
+        const payload = buildGemini3TextOnlyPayload({
+          query, limit, manifest: selected, maxInputTokens,
+        });
+        return Object.freeze({ manifest: selected, payload });
+      } catch (error) {
+        // Only the local prompt-size guard can be addressed by compaction.
+        // A malformed manifest, unsafe request or unrelated error must stop.
+        if (!(error instanceof TypeError) ||
+            !["Text-only input exceeds approved token ceiling",
+              "Text-only prompt exceeds size limit"].includes(error.message)) {
+          throw error;
+        }
+      }
+    }
+  }
+  throw new TypeError("Retrieval sources cannot fit approved Gemini input ceiling");
+}
+
 // Composes existing bounded adapters for an eventual authorized worker. This
 // does not establish spending approval: the server-side campaign executor
 // must first atomically reserve the reviewed combined tariff for both calls.
@@ -560,9 +606,10 @@ export async function runBoundedTavilyGemini3Stages({
   }
   let failedStage = "GEMINI_INPUT_PREPARATION";
   try {
-    const payload = buildGemini3TextOnlyPayload({
+    const prepared = fitGemini3RetrievalEvidence({
       query, limit, manifest: retrieved.manifest, maxInputTokens,
     });
+    const { payload } = prepared;
     // Stage is recorded immediately before invoking the trusted transport,
     // not after a successful response. A timeout can still be billable.
     // Store only static phase labels; never log keys, prompt or provider JSON.
@@ -575,7 +622,7 @@ export async function runBoundedTavilyGemini3Stages({
       return geminiPost(url, headers, body, requestSignal);
     };
     const extracted = await extractWithGemini3TextOnly({
-      query, limit, model, payload, manifest: retrieved.manifest,
+      query, limit, model, payload, manifest: prepared.manifest,
       maxInputTokens, apiKey: geminiApiKey,
     }, trackedPost, signal);
     return Object.freeze({
