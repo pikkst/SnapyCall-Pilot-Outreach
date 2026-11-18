@@ -278,6 +278,7 @@ model ResearchCampaign {
   manualSources ResearchCampaignSource[]
   personSourceJobs ResearchPersonSourceJob[]
   personSourceApproval ResearchPersonSourceApproval?
+  contactBatch ResearchContactBatch?
   approvedRun ResearchCampaignRun?
   // This is a separate no-provider-call authorization for reading public profiles.
   emailTriageStatus String @default("IDLE")
@@ -364,6 +365,7 @@ model ResearchCampaignObservation {
   candidateId String?
   candidate Candidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
   personSourceJob ResearchPersonSourceJob?
+  contactBatchItem ResearchContactBatchItem?
   observedAt DateTime @default(now())
   @@unique([campaignId, evidenceKey])
   @@index([campaignId, observedAt, id])
@@ -434,6 +436,43 @@ model CandidateDirectEmailObservation {
   @@index([workspaceId, inspectedAt])
 }
 
+
+model ResearchContactBatch {
+  id String @id @default(cuid())
+  campaignId String @unique
+  campaign ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  workspaceId String
+  ownerId String
+  // User reviewed an exact stable list of names, emails, source URLs and digests.
+  manifestHash String @db.Char(64)
+  itemCount Int
+  status String @default("APPROVED")
+  approvedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  items ResearchContactBatchItem[]
+
+  @@index([status, updatedAt])
+  @@index([workspaceId, ownerId])
+}
+
+model ResearchContactBatchItem {
+  id String @id @default(cuid())
+  batchId String
+  batch ResearchContactBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  observationId String @unique
+  observation ResearchCampaignObservation @relation(fields: [observationId], references: [id], onDelete: Restrict)
+  expectedDigest String @db.Char(64)
+  status String @default("QUEUED")
+  attempts Int @default(0)
+  leaseToken String? @db.Uuid
+  leaseUntil DateTime?
+  resultCode String?
+  candidateId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([batchId, status, createdAt])
+}
 
 model ResearchPersonSourceApproval {
   id String @id @default(cuid())
