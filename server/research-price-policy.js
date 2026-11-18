@@ -49,6 +49,28 @@ const approvedResearchPrices = Object.freeze({
       maxSearchRequests: 3,
     }),
   }),
+  // Staged dual-provider tariff. Deliberately NOT approved for dispatch.
+  // Provider account credit ceilings, contractual rights and owner-level
+  // allocation have not been independently confirmed. A public price alone
+  // cannot enable a paid campaign. No environment flag overrides this gate.
+  "gemini:gemini-3-flash-preview": Object.freeze({
+    provider: "gemini",
+    model: "gemini-3-flash-preview",
+    retrievalProvider: "tavily",
+    enforcementReady: false,
+    priceVersion: "tavily-basic-gemini3-flash-preview-staged-2026-11-18",
+    expiresAt: new Date("2026-12-01T00:00:00Z"),
+    billingContractVersion: "tavily-basic-gemini3-text-v1",
+    worstCaseCents: 3,
+    retrieval: Object.freeze({
+      maxRequests: 1,
+      centsPerThousandRequests: 800,
+    }),
+    textModel: Object.freeze({
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    }),
+  }),
   "gemini:gemini-2.5-flash": Object.freeze({
     provider: "gemini",
     enforcementReady: true,
@@ -91,6 +113,24 @@ export function calculateBoundedWorstCaseCents(pricing, limits) {
   return Number(rounded);
 }
 
+// Exact dual-provider billing shape. This validates a *candidate* server-owned
+// tariff; it does not register it or authorize any billable execution. Existing
+// single-provider policy behavior is unchanged.
+export function calculateResearchPricePolicyCeilingCents(policy) {
+  if (policy?.billingContractVersion === "tavily-basic-gemini3-text-v1") {
+    if (policy.provider !== "gemini" ||
+        policy.model !== "gemini-3-flash-preview" ||
+        policy.retrievalProvider !== "tavily" ||
+        policy.retrieval?.maxRequests !== 1 ||
+        policy.textModel?.maxOutputTokens !== 2048 ||
+        policy.textModel?.maxInputTokens > 16_384) return null;
+    return calculateCombinedRetrievalAndTextCeilingCents({
+      retrieval: policy.retrieval, textModel: policy.textModel,
+    })?.worstCaseCents ?? null;
+  }
+  return calculateBoundedWorstCaseCents(policy?.pricing, policy?.usageLimits);
+}
+
 export class ResearchPricingUnavailable extends Error {
   constructor() {
     super("Paid AI research pricing and monetary enforcement are not available");
@@ -112,9 +152,8 @@ export function requireResearchPriceEnvelope({ provider, model }) {
       policy.worstCaseCents <= 0 ||
       // A positive client-independent amount alone proves nothing. Require
       // the reviewed tariff's conservative worst-case calculation.
-      calculateBoundedWorstCaseCents(policy.pricing, policy.usageLimits) === null ||
-      policy.worstCaseCents <
-        calculateBoundedWorstCaseCents(policy.pricing, policy.usageLimits) ||
+      calculateResearchPricePolicyCeilingCents(policy) === null ||
+      policy.worstCaseCents < calculateResearchPricePolicyCeilingCents(policy) ||
       typeof policy.priceVersion !== "string" || !policy.priceVersion ||
       !(policy.expiresAt instanceof Date) ||
       policy.expiresAt.getTime() <= Date.now()) {
@@ -223,16 +262,20 @@ export function calculateCombinedRetrievalAndTextCeilingCents({
       !valid(textModel.inputCentsPerMillion, 1_000_000) ||
       !valid(textModel.outputCentsPerMillion, 1_000_000)) return null;
 
-  // Round each independently charged provider upward BEFORE summing. Using
-  // floating-point dollars or rounding once after addition can under-reserve.
-  const retrievalCents =
-    (BigInt(retrieval.maxRequests) *
-      BigInt(retrieval.centsPerThousandRequests) + 999n) / 1000n;
-  const modelCents =
-    (BigInt(textModel.maxInputTokens) *
-      BigInt(textModel.inputCentsPerMillion) +
-     BigInt(textModel.maxOutputTokens) *
-      BigInt(textModel.outputCentsPerMillion) + 999999n) / 1000000n;
+  // Round each independently billable component upward before adding it.
+  // Individual input/output components may be rounded on the invoice;
+  // rounding only their sum can under-reserve one cent.
+  const ceilDiv = (amount, divisor) => (amount + divisor - 1n) / divisor;
+  const retrievalCents = ceilDiv(
+    BigInt(retrieval.maxRequests) *
+      BigInt(retrieval.centsPerThousandRequests), 1000n);
+  const inputCents = ceilDiv(
+    BigInt(textModel.maxInputTokens) *
+      BigInt(textModel.inputCentsPerMillion), 1000000n);
+  const outputCents = ceilDiv(
+    BigInt(textModel.maxOutputTokens) *
+      BigInt(textModel.outputCentsPerMillion), 1000000n);
+  const modelCents = inputCents + outputCents;
   const total = retrievalCents + modelCents;
   if (total < 1n || total > BigInt(Number.MAX_SAFE_INTEGER)) return null;
   return Object.freeze({
@@ -242,4 +285,62 @@ export function calculateCombinedRetrievalAndTextCeilingCents({
     // This structural quote must never be treated as a price-policy approval.
     enforcementReady: false,
   });
+}
+
+
+// Settlement contract for a future versioned Tavily Basic + Gemini 3 text-only
+// price policy. It cannot authorize dispatch. The existing campaign worker
+// must call this ONLY with a server-owned reviewed policy and usage attested
+// by BOTH trusted provider adapters. Null retains the ENTIRE reservation.
+// Current dual-provider adapter returns diagnostic usage only; consequently
+// current responses cannot pass this gate and must settle conservatively.
+export function calculateVerifiedCombinedSpendCents(policy, usage) {
+  if (!policy || policy.enforcementReady !== true ||
+      policy.provider !== "gemini" || policy.model !== "gemini-3-flash-preview" ||
+      policy.retrievalProvider !== "tavily" ||
+      policy.billingContractVersion !== "tavily-basic-gemini3-text-v1" ||
+      !Number.isSafeInteger(policy.worstCaseCents) ||
+      policy.worstCaseCents <= 0 || !usage ||
+      usage.billingEvidence?.source !== "trusted_provider_adapters" ||
+      usage.billingEvidence?.contractVersion !== policy.billingContractVersion ||
+      usage.billingEvidence?.complete !== true ||
+      usage.billingEvidence?.retrievalProvider !== "tavily" ||
+      usage.billingEvidence?.textProvider !== "gemini" ||
+      usage.billingEvidence?.model !== policy.model) return null;
+
+  const retrieval = policy.retrieval;
+  const textModel = policy.textModel;
+  const modeled = calculateCombinedRetrievalAndTextCeilingCents({
+    retrieval, textModel,
+  });
+  if (!modeled || policy.worstCaseCents < modeled.worstCaseCents) return null;
+
+  const bounds = [
+    [usage.retrievalCredits, retrieval.maxRequests],
+    [usage.inputTokens, textModel.maxInputTokens],
+    // Gemini thinking tokens are part of paid OUTPUT, not free metadata.
+    [usage.outputTokens, textModel.maxOutputTokens],
+    [usage.thinkingTokens, textModel.maxOutputTokens],
+  ];
+  if (bounds.some(([value, max]) => !Number.isSafeInteger(value) ||
+      value < 0 || value > max) ||
+      usage.retrievalCredits !== 1 ||
+      usage.inputTokens === 0 ||
+      usage.outputTokens + usage.thinkingTokens > textModel.maxOutputTokens) {
+    return null;
+  }
+
+  const ceil = (n, d) => (n + d - 1n) / d;
+  const retrievalCents = ceil(
+    BigInt(usage.retrievalCredits) *
+      BigInt(retrieval.centsPerThousandRequests), 1000n);
+  const inputCents = ceil(
+    BigInt(usage.inputTokens) *
+      BigInt(textModel.inputCentsPerMillion), 1000000n);
+  const outputCents = ceil(
+    BigInt(usage.outputTokens + usage.thinkingTokens) *
+      BigInt(textModel.outputCentsPerMillion), 1000000n);
+  const total = retrievalCents + inputCents + outputCents;
+  return total <= BigInt(policy.worstCaseCents) &&
+    total <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(total) : null;
 }

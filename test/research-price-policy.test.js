@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
-  researchPriceReadiness, calculateBoundedWorstCaseCents } from "../server/research-price-policy.js";
+  researchPriceReadiness, calculateBoundedWorstCaseCents , calculateResearchPricePolicyCeilingCents
+} from "../server/research-price-policy.js";
 
 test("only Claude Sonnet 4.6 has a dated server-authorized bounded pricing envelope", () => {
   const policy = requireResearchPriceEnvelope({
@@ -237,13 +238,13 @@ const syntheticCombinedTariff = {
 test("two independent providers are rounded upward before reserving combined spend", () => {
   assert.deepEqual(
     calculateCombinedRetrievalAndTextCeilingCents(syntheticCombinedTariff),
-    { retrievalCents: 1, textModelCents: 1,
-      worstCaseCents: 2, enforcementReady: false });
+    { retrievalCents: 1, textModelCents: 2,
+      worstCaseCents: 3, enforcementReady: false });
   assert.equal(
     calculateCombinedRetrievalAndTextCeilingCents({
       ...syntheticCombinedTariff,
       retrieval: { ...syntheticCombinedTariff.retrieval, maxRequests: 3 },
-    }).worstCaseCents, 3);
+    }).worstCaseCents, 4);
 });
 
 test("combined quote fails closed on missing, negative, fractional or excessive limits", () => {
@@ -286,4 +287,162 @@ test("a mathematical quote never unlocks Gemini 3 paid discovery", () => {
   });
   assert.equal(state.enforcedForPaidSearch, false);
   assert.equal(state.pricingStatus, "MODEL_PRICING_UNAVAILABLE");
+});
+
+test("combined quote rounds both Gemini input and output components upward independently", () => {
+  const quote = calculateCombinedRetrievalAndTextCeilingCents({
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 1 },
+    textModel: {
+      maxInputTokens: 1, maxOutputTokens: 1,
+      inputCentsPerMillion: 1, outputCentsPerMillion: 1,
+    },
+  });
+  assert.deepEqual(quote, {
+    retrievalCents: 1, textModelCents: 2,
+    worstCaseCents: 3, enforcementReady: false,
+  });
+  // The prior one-shot rounding returned one model cent here, which is not
+  // conservative when the provider rounds its two charge categories separately.
+  const nearBoundary = calculateCombinedRetrievalAndTextCeilingCents({
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 1000 },
+    textModel: {
+      maxInputTokens: 100_000, maxOutputTokens: 100_000,
+      inputCentsPerMillion: 10, outputCentsPerMillion: 10,
+    },
+  });
+  assert.deepEqual(nearBoundary, {
+    retrievalCents: 1, textModelCents: 2,
+    worstCaseCents: 3, enforcementReady: false,
+  });
+});
+
+
+test("published Nov 2026 Tavily Basic plus Gemini 3 Flash quote stays non-authorizing", () => {
+  // Official published standard rates, checked 2026-11-18:
+  // Tavily pay-as-you-go Basic Search: 1 credit = USD 0.008 per request.
+  // Gemini 3 Flash Preview: USD 0.50 / 1M input, USD 3 / 1M output
+  // (including thinking). These are public reference prices, NOT a verified
+  // owner tariff, provider credit hard-stop, exchange rate or license grant.
+  // https://docs.tavily.com/documentation/api-credits
+  // https://ai.google.dev/gemini-api/docs/pricing
+  const quote = calculateCombinedRetrievalAndTextCeilingCents({
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 800 },
+    textModel: {
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+  });
+  assert.deepEqual(quote, {
+    retrievalCents: 1,
+    textModelCents: 2,
+    worstCaseCents: 3,
+    enforcementReady: false,
+  });
+  assert.throws(() => requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-3-flash-preview", ...quote,
+  }), ResearchPricingUnavailable);
+  assert.equal(researchPriceReadiness({
+    setting: { provider: "gemini", model: "gemini-3-flash-preview" },
+    enabled: true, remainingCents: 50_000,
+  }).pricingStatus, "MODEL_PRICING_UNAVAILABLE");
+});
+
+
+test("combined settlement fails closed without complete attested dual-provider usage", async () => {
+  const { calculateVerifiedCombinedSpendCents } =
+    await import("../server/research-price-policy.js");
+  const base = {
+    enforcementReady: true, provider: "gemini",
+    model: "gemini-3-flash-preview", retrievalProvider: "tavily",
+    billingContractVersion: "tavily-basic-gemini3-text-v1",
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 800 },
+    textModel: {
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+    worstCaseCents: 3,
+  };
+  const usage = {
+    retrievalCredits: 1, inputTokens: 1000,
+    outputTokens: 400, thinkingTokens: 100,
+    billingEvidence: {
+      source: "trusted_provider_adapters",
+      contractVersion: base.billingContractVersion, complete: true,
+      retrievalProvider: "tavily", textProvider: "gemini",
+      model: base.model,
+    },
+  };
+  assert.equal(calculateVerifiedCombinedSpendCents(base, usage), 3);
+  for (const changed of [
+    { ...base, enforcementReady: false },
+    { ...base, worstCaseCents: 2 },
+    { ...base, billingContractVersion: "other" },
+    { ...base, model: "gemini-2.5-flash" },
+    { ...base, retrievalProvider: "google_search" },
+  ]) assert.equal(calculateVerifiedCombinedSpendCents(changed, usage), null);
+  for (const bad of [
+    null,
+    { ...usage, billingEvidence: undefined },
+    { ...usage, retrievalCredits: null },
+    { ...usage, retrievalCredits: 0 },
+    { ...usage, retrievalCredits: 2 },
+    { ...usage, inputTokens: "1000" },
+    { ...usage, inputTokens: 16_385 },
+    { ...usage, outputTokens: 2048, thinkingTokens: 1 },
+    { ...usage, outputTokens: 400, thinkingTokens: undefined },
+    { ...usage, billingEvidence: { ...usage.billingEvidence, complete: false } },
+    { ...usage, billingEvidence: { ...usage.billingEvidence, source: "browser" } },
+    { ...usage, billingEvidence: { ...usage.billingEvidence, model: "gemini-2.5-flash" } },
+  ]) assert.equal(calculateVerifiedCombinedSpendCents(base, bad), null);
+});
+
+test("existing dual-provider adapter telemetry cannot certify a budget refund", async () => {
+  const { calculateVerifiedCombinedSpendCents } =
+    await import("../server/research-price-policy.js");
+  const fakeFuturePolicy = {
+    enforcementReady: true, provider: "gemini",
+    model: "gemini-3-flash-preview", retrievalProvider: "tavily",
+    billingContractVersion: "tavily-basic-gemini3-text-v1",
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 800 },
+    textModel: {
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+    worstCaseCents: 3,
+  };
+  // The current adapter only returns diagnostic counts and reportedCredits;
+  // it does not attest provider-signed complete billing units or thinking.
+  assert.equal(calculateVerifiedCombinedSpendCents(fakeFuturePolicy, {
+    retrievalCredits: 1, inputTokens: 800, outputTokens: 200,
+    thinkingTokens: 0,
+  }), null);
+  assert.equal(calculateVerifiedCombinedSpendCents(fakeFuturePolicy, {
+    reportedRetrievalCredits: 1,
+    usage: { inputTokens: 800, outputTokens: 200, thinkingTokens: 0 },
+  }), null);
+  assert.throws(() => requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-3-flash-preview",
+  }), ResearchPricingUnavailable);
+});
+
+
+test("staged dual-provider tariff remains disabled even if external account switches are on", () => {
+  const shape = calculateResearchPricePolicyCeilingCents({
+    provider: "gemini", model: "gemini-3-flash-preview",
+    retrievalProvider: "tavily",
+    billingContractVersion: "tavily-basic-gemini3-text-v1",
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 800 },
+    textModel: {
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+  });
+  assert.equal(shape, 3);
+  assert.throws(() => requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-3-flash-preview",
+  }), ResearchPricingUnavailable);
+  assert.equal(researchPriceReadiness({
+    setting: { provider: "gemini", model: "gemini-3-flash-preview" },
+    enabled: true, remainingCents: 100_000,
+  }).enforcedForPaidSearch, false);
 });

@@ -189,9 +189,11 @@ export async function searchWithGemini({ query, limit, model, apiKey }, post, si
 // pricing authorization. A future worker must reserve a reviewed combined
 // retrieval + text-only tariff, preflight actual input tokens and then send
 // this payload once under its existing tenant/task lease.
-export function buildGemini3TextOnlyPayload({ query, limit, manifest }) {
+export function buildGemini3TextOnlyPayload({ query, limit, manifest, maxInputTokens }) {
   if (typeof query !== "string" || query.trim().length < 12 ||
-      query.length > 350 || !Number.isInteger(limit) || limit < 1 || limit > 20) {
+      query.length > 350 || !Number.isInteger(limit) || limit < 1 || limit > 20 ||
+      !Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
+      maxInputTokens > 1_000_000) {
     throw new TypeError("Invalid text-only research criteria");
   }
   // Verify the manifest digest using the existing canonical evidence contract,
@@ -218,7 +220,7 @@ export function buildGemini3TextOnlyPayload({ query, limit, manifest }) {
     JSON.stringify(references),
   ].join("\n");
   if (prompt.length > 40_000) throw new TypeError("Text-only prompt exceeds size limit");
-  return {
+  const payload = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       maxOutputTokens: 2048,
@@ -228,6 +230,158 @@ export function buildGemini3TextOnlyPayload({ query, limit, manifest }) {
     // No native Google Search, function tools, URL context, or dynamic tools.
     // Do not add a tools property to this payload.
   };
+  // Text character count does not bound Gemini input tokens. UTF-8 request
+  // bytes plus fixed headroom are a conservative local rejection bound for
+  // text-only BPE input, including non-ASCII snippets and JSON escaping.
+  // This is NOT provider-certified token counting or dispatch authorization.
+  // A future paid worker must also enforce the reviewed model tariff and
+  // provider countTokens preflight before consuming its reserved call.
+  const conservativeInputUnits = Buffer.byteLength(JSON.stringify(payload), "utf8") + 256;
+  if (conservativeInputUnits > maxInputTokens) {
+    throw new TypeError("Text-only input exceeds approved token ceiling");
+  }
+  // Keep the exact bounded generation payload immutable across token counting.
+  Object.freeze(payload.contents[0].parts[0]);
+  Object.freeze(payload.contents[0].parts);
+  Object.freeze(payload.contents[0]);
+  Object.freeze(payload.contents);
+  Object.freeze(payload.generationConfig.thinkingConfig);
+  Object.freeze(payload.generationConfig);
+  return Object.freeze(payload);
+}
+
+
+
+// Use the exact same contents as generateContent. Callers must send this
+// request to models/gemini-3-flash-preview:countTokens through the existing
+// trusted HTTP client, before a separately approved paid generation call.
+function exactKeys(value, keys) {
+  return value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).length === keys.length &&
+    keys.every(key => Object.hasOwn(value, key));
+}
+
+function validGemini3TextOnlyPayload(payload) {
+  return exactKeys(payload, ["contents", "generationConfig"]) &&
+    Array.isArray(payload.contents) && payload.contents.length === 1 &&
+    exactKeys(payload.contents[0], ["parts"]) &&
+    Array.isArray(payload.contents[0].parts) &&
+    payload.contents[0].parts.length === 1 &&
+    exactKeys(payload.contents[0].parts[0], ["text"]) &&
+    typeof payload.contents[0].parts[0].text === "string" &&
+    payload.contents[0].parts[0].text.length > 0 &&
+    exactKeys(payload.generationConfig,
+      ["maxOutputTokens", "responseMimeType", "thinkingConfig"]) &&
+    payload.generationConfig.maxOutputTokens === 2048 &&
+    payload.generationConfig.responseMimeType === "application/json" &&
+    exactKeys(payload.generationConfig.thinkingConfig, ["thinkingLevel"]) &&
+    payload.generationConfig.thinkingConfig.thinkingLevel === "minimal";
+}
+
+export function buildGemini3CountTokensRequest({ model, payload }) {
+  if (model !== "gemini-3-flash-preview" ||
+      !validGemini3TextOnlyPayload(payload)) {
+    throw new TypeError("Unapproved Gemini 3 text-only token count request");
+  }
+  // Copy the exact counted input. A later mutation of the generation payload
+  // must not silently change the already-counted request in place.
+  return {
+    model: "gemini-3-flash-preview",
+    contents: JSON.parse(JSON.stringify(payload.contents)),
+  };
+}
+
+// Must be invoked with a response received from the trusted provider client,
+// never with a browser-supplied count. Reject missing, fractional, zero or
+// unexpectedly large counts. Counting input does not certify output/thinking
+// charges, price versions or paid dispatch authorization.
+export function requireGemini3CountTokensWithinBudget({
+  payload, countRequest, countResponse, maxInputTokens,
+}) {
+  if (!Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
+      maxInputTokens > 1_000_000 ||
+      countRequest?.model !== "gemini-3-flash-preview" ||
+      JSON.stringify(countRequest?.contents) !==
+        JSON.stringify(buildGemini3CountTokensRequest({
+          model: "gemini-3-flash-preview", payload,
+        }).contents)) {
+    throw new TypeError("Invalid Gemini token budget envelope");
+  }
+  const actual = countResponse?.totalTokens;
+  if (!Number.isSafeInteger(actual) || actual <= 0 ||
+      actual > maxInputTokens) {
+    throw new TypeError("Gemini input token count unavailable or over budget");
+  }
+  return Object.freeze({ model: countRequest.model, inputTokens: actual,
+    maxInputTokens });
+}
+
+
+
+// The existing trusted HTTP client (see ai-research.js) owns transport,
+// timeout and error sanitation. This preflight intentionally performs ONLY
+// countTokens. The paid generateContent request is not authorized here.
+export async function countGemini3TextOnlyInput({
+  model, payload, maxInputTokens, apiKey,
+}, post, signal) {
+  if (typeof post !== "function" ||
+      typeof apiKey !== "string" || apiKey.length < 8 ||
+      !Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
+      maxInputTokens > 1_000_000) {
+    throw new TypeError("Trusted Gemini 3 countTokens preflight required");
+  }
+  const countRequest = buildGemini3CountTokensRequest({ model, payload });
+  // Snapshot must be stable across the await; otherwise token accounting for
+  // one prompt could mistakenly approve a different prompt at dispatch.
+  const result = await post(
+    "https://generativelanguage.googleapis.com/v1beta/models/" +
+      encodeURIComponent(model) + ":countTokens",
+    { "x-goog-api-key": apiKey }, { contents: countRequest.contents }, signal,
+  );
+  return requireGemini3CountTokensWithinBudget({
+    payload, countRequest, countResponse: result, maxInputTokens,
+  });
+}
+
+// Controlled two-step Gemini 3 text-only transport. It is NOT a public
+// execution entrypoint: a future campaign worker must authorize and reserve
+// BOTH retrieval and generation cost before invoking it. No retry is safe
+// after either provider request, even when the response is incomplete.
+export async function extractWithGemini3TextOnly({
+  query, model, payload, manifest, limit, maxInputTokens, apiKey,
+}, post, signal) {
+  // Reject malformed payload, model, identity or billing envelope before
+  // any provider call. The manifest check also binds the output evidence IDs.
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20 ||
+      typeof apiKey !== "string" || apiKey.length < 8 ||
+      typeof post !== "function") {
+    throw new TypeError("Gemini 3 text-only extraction preflight required");
+  }
+  const trusted = normalizeBoundedRetrievalEvidence({
+    text: '{"candidates":[]}', manifest, limit,
+  });
+  if (trusted.manifestDigest !== manifest.digest) {
+    throw new TypeError("Untrusted Gemini 3 extraction manifest");
+  }
+  // Prevent a caller from presenting a valid manifest while asking Gemini
+  // to answer a different, untrusted or expanded prompt.
+  const expected = buildGemini3TextOnlyPayload({
+    query, limit, manifest, maxInputTokens,
+  });
+  if (JSON.stringify(payload) !== JSON.stringify(expected)) {
+    throw new TypeError("Gemini 3 extraction payload does not match sources");
+  }
+  // The same immutable generation payload is counted, then submitted once.
+  const preflight = await countGemini3TextOnlyInput({
+    model, payload, maxInputTokens, apiKey,
+  }, post, signal);
+  const response = await post(
+    "https://generativelanguage.googleapis.com/v1beta/models/" +
+      encodeURIComponent(model) + ":generateContent",
+    { "x-goog-api-key": apiKey }, payload, signal,
+  );
+  const extracted = parseGemini3TextOnlyResponse({ response, manifest, limit });
+  return Object.freeze({ ...extracted, preflightInputTokens: preflight.inputTokens });
 }
 
 // Interpret a response only AFTER an independently authorized provider call.
@@ -333,4 +487,119 @@ export function normalizeBoundedTavilySearch({ response, maxResults, observedAt 
     reportedCredits,
     billableCallPossible: true,
   });
+}
+
+
+// Transport adapter for a single independently approved retrieval call.
+// Caller MUST hold the owner-scoped task lease, approved search entitlement
+// and combined monetary reservation before calling this function. It is not
+// reachable from campaign execution until those server-side gates exist.
+function requireBoundedTavilyTransportConfig({ apiKey, observedAt, post }) {
+  if (typeof post !== "function" || typeof apiKey !== "string" ||
+      !/^tvly-[A-Za-z0-9_-]{8,}$/.test(apiKey) ||
+      typeof observedAt !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(observedAt) ||
+      !Number.isFinite(Date.parse(observedAt)) ||
+      new Date(observedAt).toISOString() !== observedAt) {
+    throw new TypeError("Trusted bounded Tavily retrieval configuration required");
+  }
+}
+
+export async function searchWithBoundedTavily({
+  query, maxResults, observedAt, apiKey,
+}, post, signal) {
+  // Validate the complete local request BEFORE any potentially charged call.
+  const request = buildBoundedTavilySearchRequest({ query, maxResults });
+  requireBoundedTavilyTransportConfig({ apiKey, observedAt, post });
+  // A second call after a transport error could charge again: no retry here.
+  const response = await post("https://api.tavily.com/search",
+    { authorization: "Bearer " + apiKey }, request, signal);
+  return normalizeBoundedTavilySearch({ response, maxResults, observedAt });
+}
+
+
+// Composes existing bounded adapters for an eventual authorized worker. This
+// does not establish spending approval: the server-side campaign executor
+// must first atomically reserve the reviewed combined tariff for both calls.
+// There are no retries, even if one provider returns incomplete evidence.
+export async function runBoundedTavilyGemini3Stages({
+  query, limit, maxResults, observedAt, tavilyApiKey, geminiApiKey,
+  model, maxInputTokens,
+}, { tavilyPost, geminiPost, signal } = {}) {
+  // Validate both credentials and all static bounds BEFORE calling Tavily.
+  // In particular, an absent Gemini key must not waste a Tavily credit.
+  buildBoundedTavilySearchRequest({ query, maxResults });
+  requireBoundedTavilyTransportConfig({
+    apiKey: tavilyApiKey, observedAt, post: tavilyPost,
+  });
+  if (model !== "gemini-3-flash-preview" ||
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 20 ||
+      !Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
+      maxInputTokens > 1_000_000 ||
+      typeof geminiApiKey !== "string" || geminiApiKey.length < 8 ||
+      typeof geminiPost !== "function") {
+    throw new TypeError("Bounded dual-provider execution configuration required");
+  }
+  let retrieved;
+  try {
+    retrieved = await searchWithBoundedTavily({
+      query, maxResults, observedAt, apiKey: tavilyApiKey,
+    }, tavilyPost, signal);
+  } catch {
+    // The upstream request may have been billed. Never automatically replay.
+    throw new BoundedResearchStageError(
+      "RETRIEVAL_OUTCOME_UNCERTAIN", "TAVILY_SEARCH_DISPATCHED");
+  }
+  if (retrieved.status === "NO_USABLE_EVIDENCE") {
+    return Object.freeze({
+      status: "NO_USABLE_EVIDENCE", candidates: [], sources: [],
+      manifestDigest: null, reportedRetrievalCredits: retrieved.reportedCredits,
+      billableCallPossible: true, automaticRetryAllowed: false,
+      reviewRequired: true, imported: false, sendingEnabled: false,
+    });
+  }
+  let failedStage = "GEMINI_INPUT_PREPARATION";
+  try {
+    const payload = buildGemini3TextOnlyPayload({
+      query, limit, manifest: retrieved.manifest, maxInputTokens,
+    });
+    // Stage is recorded immediately before invoking the trusted transport,
+    // not after a successful response. A timeout can still be billable.
+    // Store only static phase labels; never log keys, prompt or provider JSON.
+    const trackedPost = (url, headers, body, requestSignal) => {
+      failedStage = url.endsWith(":countTokens")
+        ? "GEMINI_COUNT_TOKENS_DISPATCHED"
+        : url.endsWith(":generateContent")
+        ? "GEMINI_GENERATE_CONTENT_DISPATCHED"
+        : "GEMINI_UNKNOWN_DISPATCH";
+      return geminiPost(url, headers, body, requestSignal);
+    };
+    const extracted = await extractWithGemini3TextOnly({
+      query, limit, model, payload, manifest: retrieved.manifest,
+      maxInputTokens, apiKey: geminiApiKey,
+    }, trackedPost, signal);
+    return Object.freeze({
+      ...extracted, status: "REVIEW_PENDING",
+      reportedRetrievalCredits: retrieved.reportedCredits,
+      billableCallPossible: true, automaticRetryAllowed: false,
+    });
+  } catch {
+    // After retrieval, even a locally rejected Gemini payload cannot refund
+    // the earlier Tavily call. After countTokens/generateContent, additional
+    // charges are possible. The real worker must settle conservatively.
+    throw new BoundedResearchStageError(
+      "DUAL_PROVIDER_OUTCOME_UNCERTAIN", failedStage);
+  }
+}
+
+export class BoundedResearchStageError extends Error {
+  constructor(code, stage) {
+    super("Bounded multi-provider research requires reconciliation");
+    this.name = "BoundedResearchStageError";
+    this.code = code;
+    // Only controlled internal phase identifiers, not upstream error details.
+    this.stage = stage;
+    this.billableCallPossible = true;
+    this.automaticRetryAllowed = false;
+  }
 }

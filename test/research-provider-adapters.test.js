@@ -323,7 +323,7 @@ test("Gemini 3 text-only contract has no search tools, external call or browser 
   const { buildGemini3TextOnlyPayload } =
     await import("../server/research-provider-adapters.js");
   const manifest = await textOnlyManifestFixture();
-  const payload = buildGemini3TextOnlyPayload({ query, limit: 3, manifest });
+  const payload = buildGemini3TextOnlyPayload({ maxInputTokens: 16_384, query, limit: 3, manifest });
   assert.equal(Object.hasOwn(payload, "tools"), false);
   assert.deepEqual(payload.generationConfig.thinkingConfig, { thinkingLevel: "minimal" });
   assert.equal(payload.generationConfig.maxOutputTokens, 2048);
@@ -381,10 +381,10 @@ test("Gemini text-only response rejects generated search metadata and incomplete
   ]) assert.throws(() => parseGemini3TextOnlyResponse({
     manifest, limit: 3, response,
   }));
-  assert.throws(() => buildGemini3TextOnlyPayload({
+  assert.throws(() => buildGemini3TextOnlyPayload({ maxInputTokens: 16_384,
     query: "tiny", limit: 3, manifest,
   }), TypeError);
-  assert.throws(() => buildGemini3TextOnlyPayload({
+  assert.throws(() => buildGemini3TextOnlyPayload({ maxInputTokens: 16_384,
     query, limit: 3, manifest: { ...manifest, digest: "0".repeat(64) },
   }), TypeError);
 });
@@ -437,7 +437,7 @@ test("bounded Tavily normalization yields only provider-returned HTTPS evidence"
   assert.equal(result.manifest.records[0].sourceId.length, 64);
   assert.equal(result.reportedCredits, 1);
   assert.equal(result.billableCallPossible, true);
-  const prompt = buildGemini3TextOnlyPayload({
+  const prompt = buildGemini3TextOnlyPayload({ maxInputTokens: 16_384,
     query, limit: 3, manifest: result.manifest,
   });
   assert.equal(Object.hasOwn(prompt, "tools"), false);
@@ -512,7 +512,7 @@ test("bounded research stages compose without external calls or contact promotio
     maxResults: retrievalRequest.max_results,
     observedAt: "2026-11-18T00:00:00.000Z",
   });
-  const request = buildGemini3TextOnlyPayload({
+  const request = buildGemini3TextOnlyPayload({ maxInputTokens: 16_384,
     query, limit: 2, manifest: retrieval.manifest,
   });
   assert.equal(Object.hasOwn(request, "tools"), false);
@@ -556,4 +556,710 @@ test("bounded research stages compose without external calls or contact promotio
     provider: "gemini", model: "gemini-3-flash-preview",
     ...quote,
   }), ResearchPricingUnavailable);
+});
+
+test("Gemini text-only preflight requires a server-owned max input ceiling", async () => {
+  const { buildGemini3TextOnlyPayload } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  for (const maxInputTokens of [undefined, null, -1, 0, 256, 1.5, "16384", 1_000_001]) {
+    assert.throws(() => buildGemini3TextOnlyPayload({
+      query, limit: 3, manifest, maxInputTokens,
+    }), TypeError);
+  }
+  assert.throws(() => buildGemini3TextOnlyPayload({
+    query, limit: 3, manifest, maxInputTokens: 257,
+  }), /exceeds approved token ceiling/);
+});
+
+test("Gemini text-only preflight bounds UTF-8 and escaped source excerpts", async () => {
+  const { buildGemini3TextOnlyPayload } =
+    await import("../server/research-provider-adapters.js");
+  const { buildBoundedRetrievalManifest } =
+    await import("../server/research-evidence.js");
+  const manifest = buildBoundedRetrievalManifest({
+    provider: "synthetic_test",
+    observedAt: "2026-11-18T00:00:00.000Z",
+    records: [{
+      sourceId: "oversized-1",
+      url: "https://consultants.example.org/oversized",
+      title: "Unicode excerpts",
+      excerpt: "🤖".repeat(350),
+    }],
+  });
+  assert.throws(() => buildGemini3TextOnlyPayload({
+    query, limit: 3, manifest, maxInputTokens: 1500,
+  }), /exceeds approved token ceiling/);
+  const result = buildGemini3TextOnlyPayload({
+    query, limit: 3, manifest, maxInputTokens: 16_384,
+  });
+  assert.equal(Object.hasOwn(result, "tools"), false);
+  assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") + 256 <= 16_384);
+});
+
+
+test("Gemini countTokens preflight matches the exact generation contents", async () => {
+  const { buildGemini3TextOnlyPayload, buildGemini3CountTokensRequest,
+    requireGemini3CountTokensWithinBudget } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const countRequest = buildGemini3CountTokensRequest({
+    model: "gemini-3-flash-preview", payload,
+  });
+  assert.deepEqual(countRequest, {
+    model: "gemini-3-flash-preview",
+    contents: payload.contents,
+  });
+  const approved = requireGemini3CountTokensWithinBudget({
+    payload, countRequest,
+    countResponse: { totalTokens: 850 }, maxInputTokens: 16_384,
+  });
+  assert.deepEqual(approved, {
+    model: "gemini-3-flash-preview",
+    inputTokens: 850, maxInputTokens: 16_384,
+  });
+  assert.equal(Object.isFrozen(approved), true);
+  assert.equal(Object.hasOwn(payload, "tools"), false);
+});
+
+test("Gemini countTokens preflight denies mismatched contents and invalid responses", async () => {
+  const { buildGemini3TextOnlyPayload, buildGemini3CountTokensRequest,
+    requireGemini3CountTokensWithinBudget } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const countRequest = buildGemini3CountTokensRequest({
+    model: "gemini-3-flash-preview", payload,
+  });
+  const check = (countResponse, change = {}) =>
+    requireGemini3CountTokensWithinBudget({
+      payload, countRequest, countResponse, maxInputTokens: 16_384,
+      ...change,
+    });
+  for (const countResponse of [
+    null, {}, { totalTokens: 0 }, { totalTokens: -1 },
+    { totalTokens: "850" }, { totalTokens: 1.5 },
+    { totalTokens: 16_385 },
+  ]) assert.throws(() => check(countResponse), TypeError);
+  assert.throws(() => check({ totalTokens: 850 }, {
+    countRequest: { ...countRequest, contents: [{
+      parts: [{ text: "Different prompt" }],
+    }] },
+  }), TypeError);
+  assert.throws(() => buildGemini3CountTokensRequest({
+    model: "gemini-2.5-flash", payload,
+  }), TypeError);
+  assert.throws(() => buildGemini3CountTokensRequest({
+    model: "gemini-3-flash-preview", payload: {
+      ...payload, tools: [{ google_search: {} }],
+    },
+  }), TypeError);
+  assert.throws(() => {
+    payload.contents[0].parts[0].text += " Tampered after count";
+  }, TypeError, "The generation payload is immutable after local sizing");
+  const mutableClone = JSON.parse(JSON.stringify(payload));
+  mutableClone.contents[0].parts[0].text += " Tampered after count";
+  assert.throws(() => check({ totalTokens: 850 }, {
+    payload: mutableClone,
+  }), TypeError, "Untrusted mutable copies cannot reuse an old token count");
+});
+
+
+test("trusted Gemini 3 token preflight sends countTokens, never generateContent", async () => {
+  const { buildGemini3TextOnlyPayload, countGemini3TextOnlyInput } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const signal = new AbortController().signal;
+  let calls = 0;
+  const result = await countGemini3TextOnlyInput({
+    model: "gemini-3-flash-preview", payload,
+    maxInputTokens: 16_384, apiKey: "test-only-user-key",
+  }, async (url, headers, body, passedSignal) => {
+    calls++;
+    assert.equal(url,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:countTokens");
+    assert.equal(headers["x-goog-api-key"], "test-only-user-key");
+    assert.deepEqual(body, { contents: payload.contents });
+    assert.equal(passedSignal, signal);
+    assert.equal(Object.hasOwn(body, "tools"), false);
+    return { totalTokens: 975 };
+  }, signal);
+  assert.equal(calls, 1);
+  assert.equal(result.inputTokens, 975);
+  assert.equal(result.maxInputTokens, 16_384);
+});
+
+test("trusted Gemini 3 token preflight never authorizes invalid or drifting requests", async () => {
+  const { buildGemini3TextOnlyPayload, countGemini3TextOnlyInput } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  let countCalls = 0;
+  const post = async () => {
+    countCalls++;
+    return { totalTokens: 975 };
+  };
+  for (const override of [
+    { apiKey: "tiny" },
+    { maxInputTokens: 0 },
+    { model: "gemini-2.5-flash" },
+    { payload: { ...payload, tools: [{ google_search: {} }] } },
+  ]) {
+    await assert.rejects(() => countGemini3TextOnlyInput({
+      model: "gemini-3-flash-preview", payload, maxInputTokens: 16_384,
+      apiKey: "test-only-user-key", ...override,
+    }, post), TypeError);
+  }
+  assert.equal(countCalls, 0, "Invalid envelopes must reject before HTTP");
+  await assert.rejects(() => countGemini3TextOnlyInput({
+    model: "gemini-3-flash-preview", payload, maxInputTokens: 16_384,
+    apiKey: "test-only-user-key",
+  }, async () => ({ totalTokens: 20_000 })), TypeError);
+
+  await assert.rejects(() => countGemini3TextOnlyInput({
+    model: "gemini-3-flash-preview", payload, maxInputTokens: 16_384,
+    apiKey: "test-only-user-key",
+  }, async () => {
+    payload.contents[0].parts[0].text += " Unexpected mutation";
+    return { totalTokens: 975 };
+  }), TypeError);
+});
+
+
+test("Gemini countTokens rejects every uncounted generation field before HTTP", async () => {
+  const { buildGemini3TextOnlyPayload, countGemini3TextOnlyInput } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  let calls = 0;
+  for (const bad of [
+    { ...payload, systemInstruction: { parts: [{ text: "Hidden extra tokens" }] } },
+    { ...payload, cachedContent: "cachedContents/other" },
+    { ...payload, toolConfig: {} },
+    { ...payload, tools: [{ google_search: {} }] },
+    { ...payload, generationConfig: {
+      ...payload.generationConfig, topK: 30,
+    } },
+    { ...payload, generationConfig: {
+      ...payload.generationConfig,
+      thinkingConfig: {
+        ...payload.generationConfig.thinkingConfig, thinkingBudget: 8192,
+      },
+    } },
+    { ...payload, contents: [{
+      parts: [{ text: "Valid source", inlineData: { mimeType: "text/plain", data: "abc" } }],
+    }] },
+  ]) {
+    await assert.rejects(() => countGemini3TextOnlyInput({
+      model: "gemini-3-flash-preview", payload: bad,
+      maxInputTokens: 16_384, apiKey: "test-only-user-key",
+    }, async () => {
+      calls++;
+      return { totalTokens: 2 };
+    }), TypeError);
+  }
+  assert.equal(calls, 0, "Uncounted fields must never reach the provider");
+});
+
+
+test("bounded Tavily transport performs one approved-shape HTTP call and binds source evidence", async () => {
+  const { searchWithBoundedTavily } =
+    await import("../server/research-provider-adapters.js");
+  let calls = 0;
+  const signal = new AbortController().signal;
+  const observedAt = "2026-11-18T00:00:00.000Z";
+  const output = await searchWithBoundedTavily({
+    query, maxResults: 2, observedAt, apiKey: "tvly-test-only-key",
+  }, async (url, headers, body, receivedSignal) => {
+    calls++;
+    assert.equal(url, "https://api.tavily.com/search");
+    assert.deepEqual(headers, { authorization: "Bearer tvly-test-only-key" });
+    assert.equal(body.search_depth, "basic");
+    assert.equal(body.max_results, 2);
+    assert.equal(body.auto_parameters, false);
+    assert.equal(body.include_answer, false);
+    assert.equal(body.include_raw_content, false);
+    assert.equal(body.include_images, false);
+    assert.equal(receivedSignal, signal);
+    return { results: [{
+      url: source, title: "Verified expert",
+      content: "Verified Professional offers AI automation consulting",
+    }], usage: { credits: 1 } };
+  }, signal);
+  assert.equal(calls, 1);
+  assert.equal(output.status, "EVIDENCE_AVAILABLE");
+  assert.equal(output.reportedCredits, 1);
+  assert.equal(output.manifest.records.length, 1);
+  assert.equal(output.manifest.records[0].sourceProvider, "tavily");
+  assert.equal(output.manifest.records[0].url, source);
+});
+
+test("bounded Tavily transport fails closed before HTTP for invalid configuration", async () => {
+  const { searchWithBoundedTavily } =
+    await import("../server/research-provider-adapters.js");
+  let calls = 0;
+  const post = async () => {
+    calls++;
+    return { results: [] };
+  };
+  const base = {
+    query, maxResults: 2, observedAt: "2026-11-18T00:00:00.000Z",
+    apiKey: "tvly-test-only-key",
+  };
+  for (const override of [
+    { apiKey: "" }, { apiKey: "not-a-tavily-key" },
+    { maxResults: 21 }, { maxResults: "2" },
+    { observedAt: "2026-11-18" },
+    { observedAt: "2026-13-18T00:00:00.000Z" },
+    { query: "short" },
+  ]) await assert.rejects(
+    () => searchWithBoundedTavily({ ...base, ...override }, post),
+    TypeError,
+  );
+  assert.equal(calls, 0);
+});
+
+test("bounded Tavily transport propagates uncertain errors without retrying", async () => {
+  const { searchWithBoundedTavily } =
+    await import("../server/research-provider-adapters.js");
+  let calls = 0;
+  const run = post => searchWithBoundedTavily({
+    query, maxResults: 2, observedAt: "2026-11-18T00:00:00.000Z",
+    apiKey: "tvly-test-only-key",
+  }, post);
+  await assert.rejects(() => run(async () => {
+    calls++;
+    throw new Error("Synthetic upstream transport timeout");
+  }), /Synthetic upstream transport timeout/);
+  assert.equal(calls, 1);
+  const empty = await run(async () => {
+    calls++;
+    return { results: [] };
+  });
+  assert.equal(empty.status, "NO_USABLE_EVIDENCE");
+  assert.equal(empty.manifest, null);
+  assert.equal(empty.billableCallPossible, true);
+  assert.equal(calls, 2);
+});
+
+
+test("Gemini 3 text-only adapter counts before exactly one generation and binds citations", async () => {
+  const { buildGemini3TextOnlyPayload, extractWithGemini3TextOnly } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const calls = [];
+  const signal = new AbortController().signal;
+  const result = await extractWithGemini3TextOnly({
+    query, model: "gemini-3-flash-preview", payload, manifest, limit: 2,
+    maxInputTokens: 16_384, apiKey: "test-only-gemini-key",
+  }, async (url, headers, body, requestSignal) => {
+    calls.push(url);
+    assert.equal(headers["x-goog-api-key"], "test-only-gemini-key");
+    assert.equal(requestSignal, signal);
+    assert.equal(Object.hasOwn(body, "tools"), false);
+    if (url.endsWith(":countTokens")) {
+      assert.deepEqual(body, { contents: payload.contents });
+      return { totalTokens: 850 };
+    }
+    assert.match(url, /:generateContent$/);
+    assert.deepEqual(body, payload);
+    return {
+      candidates: [{ finishReason: "STOP", content: {
+        parts: [{ text: JSON.stringify({ candidates: [{
+          name: "Verified Professional", category: "AI_AUTOMATION",
+          sourceId: "profile-1", rationale: "Public source describes consulting expertise",
+        }, {
+          name: "Invented Professional", category: "AI_AUTOMATION",
+          sourceId: "invented-id", rationale: "No source evidence",
+        }] }) }],
+      } }],
+      usageMetadata: {
+        promptTokenCount: 850, candidatesTokenCount: 100,
+        thoughtsTokenCount: 0,
+      },
+    };
+  }, signal);
+  assert.deepEqual(calls.map(x => x.split(":").at(-1)),
+    ["countTokens", "generateContent"]);
+  assert.equal(result.preflightInputTokens, 850);
+  assert.deepEqual(result.candidates.map(x => x.name), ["Verified Professional"]);
+  assert.equal(result.candidates[0].email, null);
+  assert.equal(result.imported, false);
+  assert.equal(result.reviewRequired, true);
+  assert.equal(result.sendingEnabled, false);
+  assert.equal(Object.hasOwn(result.usage, "billingEvidence"), false);
+});
+
+test("Gemini 3 text-only adapter cannot generate with an over-limit or different prompt", async () => {
+  const { buildGemini3TextOnlyPayload, extractWithGemini3TextOnly } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const args = {
+    query, model: "gemini-3-flash-preview", payload, manifest, limit: 2,
+    maxInputTokens: 16_384, apiKey: "test-only-gemini-key",
+  };
+  let calls = 0;
+  await assert.rejects(() => extractWithGemini3TextOnly(args,
+    async url => {
+      calls++;
+      assert.match(url, /:countTokens$/);
+      return { totalTokens: 16_385 };
+    }), TypeError);
+  assert.equal(calls, 1);
+  for (const invalid of [
+    { query: "A different professional search criteria" },
+    { payload: { ...payload, contents: [{
+      parts: [{ text: "Injected unrelated prompt" }],
+    }] } },
+    { payload: { ...payload, tools: [{ google_search: {} }] } },
+    { manifest: { ...manifest, digest: "0".repeat(64) } },
+    { limit: 21 },
+  ]) await assert.rejects(() => extractWithGemini3TextOnly({
+    ...args, ...invalid,
+  }, async () => {
+    calls++;
+    throw new Error("Must not call provider for untrusted input");
+  }), TypeError);
+  assert.equal(calls, 1);
+});
+
+test("Gemini 3 text-only generation does not retry an ambiguous provider failure", async () => {
+  const { buildGemini3TextOnlyPayload, extractWithGemini3TextOnly } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const calls = [];
+  await assert.rejects(() => extractWithGemini3TextOnly({
+    query, model: "gemini-3-flash-preview", payload, manifest, limit: 2,
+    maxInputTokens: 16_384, apiKey: "test-only-gemini-key",
+  }, async url => {
+    calls.push(url);
+    if (url.endsWith(":countTokens")) return { totalTokens: 850 };
+    throw new Error("Synthetic generateContent timeout");
+  }), /Synthetic generateContent timeout/);
+  assert.deepEqual(calls.map(x => x.split(":").at(-1)),
+    ["countTokens", "generateContent"]);
+});
+
+
+test("bounded dual-provider pipeline uses one Tavily, countTokens and Gemini call", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const { createHash } = await import("node:crypto");
+  const sourceId = createHash("sha256").update(source, "utf8").digest("hex");
+  const calls = [];
+  const result = await runBoundedTavilyGemini3Stages({
+    query, limit: 2, maxResults: 2,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  }, {
+    tavilyPost: async (url, headers, body) => {
+      calls.push("tavily");
+      assert.equal(url, "https://api.tavily.com/search");
+      assert.equal(body.search_depth, "basic");
+      assert.equal(body.auto_parameters, false);
+      return { results: [{
+        url: source, title: "Professional profile",
+        content: "Verified Professional offers AI automation services",
+      }], usage: { credits: 1 } };
+    },
+    geminiPost: async (url, headers, body) => {
+      assert.equal(headers["x-goog-api-key"], "gemini-test-only-key");
+      if (url.endsWith(":countTokens")) {
+        calls.push("count");
+        assert.ok(body.contents[0].parts[0].text.includes(sourceId));
+        return { totalTokens: 900 };
+      }
+      calls.push("generate");
+      assert.equal(Object.hasOwn(body, "tools"), false);
+      return {
+        candidates: [{ finishReason: "STOP", content: {
+          parts: [{ text: JSON.stringify({ candidates: [{
+            name: "Verified Professional", category: "AI_AUTOMATION",
+            sourceId, rationale: "Cited provider profile",
+          }, {
+            name: "Unverified", category: "AI_AUTOMATION",
+            sourceId: "made-up", rationale: "Not in source evidence",
+          }] }) }],
+        } }],
+        usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 110,
+          thoughtsTokenCount: 0 },
+      };
+    },
+  });
+  assert.deepEqual(calls, ["tavily", "count", "generate"]);
+  assert.equal(result.status, "REVIEW_PENDING");
+  assert.deepEqual(result.candidates.map(x => x.name), ["Verified Professional"]);
+  assert.equal(result.candidates[0].email, null);
+  assert.equal(result.reportedRetrievalCredits, 1);
+  assert.equal(result.billableCallPossible, true);
+  assert.equal(result.automaticRetryAllowed, false);
+  assert.equal(result.sendingEnabled, false);
+  assert.equal(result.imported, false);
+  assert.equal(Object.hasOwn(result.usage, "billingEvidence"), false);
+});
+
+test("bounded dual-provider pipeline stops after unusable Tavily results", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const events = [];
+  const result = await runBoundedTavilyGemini3Stages({
+    query, limit: 2, maxResults: 2,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  }, {
+    tavilyPost: async () => {
+      events.push("tavily");
+      return { results: [], usage: { credits: 1 } };
+    },
+    geminiPost: async () => {
+      events.push("gemini");
+      throw new Error("Must not dispatch generation after no evidence");
+    },
+  });
+  assert.deepEqual(events, ["tavily"]);
+  assert.equal(result.status, "NO_USABLE_EVIDENCE");
+  assert.equal(result.candidates.length, 0);
+  assert.deepEqual(result.sources, []);
+  assert.equal(result.reportedRetrievalCredits, 1);
+  assert.equal(result.billableCallPossible, true);
+  assert.equal(result.automaticRetryAllowed, false);
+  assert.equal(result.sendingEnabled, false);
+});
+
+test("bounded dual-provider preflight rejects invalid second-provider settings before Tavily", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const base = {
+    query, limit: 2, maxResults: 2,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  };
+  let calls = 0;
+  for (const bad of [
+    { geminiApiKey: "" }, { tavilyApiKey: "invalid" },
+    { model: "gemini-2.5-flash" }, { maxInputTokens: 0 },
+    { maxResults: 21 }, { query: "too short" },
+    { observedAt: "2026-11-18" },
+    { observedAt: "2026-13-18T00:00:00.000Z" },
+  ]) await assert.rejects(() => runBoundedTavilyGemini3Stages({
+    ...base, ...bad,
+  }, {
+    tavilyPost: async () => { calls++; return { results: [] }; },
+    geminiPost: async () => { calls++; return {}; },
+  }), TypeError);
+  assert.equal(calls, 0);
+});
+
+test("bounded dual-provider pipeline marks ambiguous provider calls non-retryable", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const config = {
+    query, limit: 2, maxResults: 2,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  };
+  let calls = 0;
+  await assert.rejects(() => runBoundedTavilyGemini3Stages(config, {
+    tavilyPost: async () => {
+      calls++;
+      throw new Error("Synthetic transport timed out");
+    },
+    geminiPost: async () => {
+      calls++;
+      throw new Error("Must not run");
+    },
+  }), error => error.code === "RETRIEVAL_OUTCOME_UNCERTAIN" &&
+    error.stage === "TAVILY_SEARCH_DISPATCHED" &&
+    error.billableCallPossible && !error.automaticRetryAllowed);
+  assert.equal(calls, 1);
+  await assert.rejects(() => runBoundedTavilyGemini3Stages(config, {
+    tavilyPost: async () => {
+      calls++;
+      return { results: [{
+        url: source, title: "Verified expert",
+        content: "Verified Professional profile",
+      }] };
+    },
+    geminiPost: async url => {
+      calls++;
+      assert.match(url, /:countTokens$/);
+      throw new Error("Synthetic countTokens error");
+    },
+  }), error => error.code === "DUAL_PROVIDER_OUTCOME_UNCERTAIN" &&
+    error.stage === "GEMINI_COUNT_TOKENS_DISPATCHED" &&
+    error.billableCallPossible && !error.automaticRetryAllowed);
+  assert.equal(calls, 3);
+});
+
+test("dual-provider results are compatible with the existing worker observation contract", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const { normalizeCampaignObservations } =
+    await import("../server/research-campaign-observations.js");
+  const { createHash } = await import("node:crypto");
+  const sourceId = createHash("sha256").update(source, "utf8").digest("hex");
+  const config = {
+    query, limit: 2, maxResults: 2, observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  };
+  const noEvidence = await runBoundedTavilyGemini3Stages(config, {
+    tavilyPost: async () => ({ results: [], usage: { credits: 1 } }),
+    geminiPost: async () => {
+      throw new Error("Gemini must not run without retrieval evidence");
+    },
+  });
+  assert.deepEqual(normalizeCampaignObservations(noEvidence, 2), []);
+  assert.equal(noEvidence.reportedRetrievalCredits, 1);
+  assert.equal(noEvidence.billableCallPossible, true);
+  assert.equal(noEvidence.automaticRetryAllowed, false);
+
+  const evidence = await runBoundedTavilyGemini3Stages(config, {
+    tavilyPost: async () => ({ results: [{
+      url: source,
+      title: "Source-cited professional",
+      content: "Verified Professional provides AI automation consulting.",
+    }], usage: { credits: 1 } }),
+    geminiPost: async url => url.endsWith(":countTokens")
+      ? { totalTokens: 850 }
+      : {
+        candidates: [{ finishReason: "STOP", content: { parts: [{
+          text: JSON.stringify({ candidates: [{
+            name: "Verified Professional",
+            category: "AI_AUTOMATION",
+            sourceId, rationale: "Public profile confirms consulting work",
+          }] }),
+        }] } }],
+      },
+  });
+  const normalized = normalizeCampaignObservations(evidence, 2);
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0].name, "Verified Professional");
+  assert.equal(normalized[0].citationUrl, source);
+  assert.equal(normalized[0].status, "UNVERIFIED");
+  assert.equal(evidence.sendingEnabled, false);
+  assert.equal(evidence.imported, false);
+});
+
+
+test("dual-provider orchestration preserves sanitized generation and local rejection stages", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const input = {
+    query, limit: 2, maxResults: 2,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key",
+    geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview",
+    maxInputTokens: 16_384,
+  };
+  const tavilyPost = async () => ({
+    results: [{
+      url: source, title: "Verified professional",
+      content: "Professional profile with publicly described work",
+    }],
+  });
+  const apiCalls = [];
+  await assert.rejects(() => runBoundedTavilyGemini3Stages(input, {
+    tavilyPost,
+    geminiPost: async url => {
+      apiCalls.push(url);
+      if (url.endsWith(":countTokens")) return { totalTokens: 850 };
+      throw new Error("Secret provider diagnostic must not reach browser");
+    },
+  }), error => error.code === "DUAL_PROVIDER_OUTCOME_UNCERTAIN" &&
+    error.stage === "GEMINI_GENERATE_CONTENT_DISPATCHED" &&
+    error.message === "Bounded multi-provider research requires reconciliation" &&
+    error.billableCallPossible && error.automaticRetryAllowed === false &&
+    !error.message.includes("Secret"));
+  assert.equal(apiCalls.length, 2);
+  const calls = [];
+  await assert.rejects(() => runBoundedTavilyGemini3Stages({
+    ...input, maxInputTokens: 257,
+  }, {
+    tavilyPost: async (...args) => {
+      calls.push("tavily");
+      return tavilyPost(...args);
+    },
+    geminiPost: async () => {
+      calls.push("gemini");
+      throw new Error("Should not call Gemini with oversized prompt");
+    },
+  }), error => error.code === "DUAL_PROVIDER_OUTCOME_UNCERTAIN" &&
+    error.stage === "GEMINI_INPUT_PREPARATION" &&
+    error.billableCallPossible && error.automaticRetryAllowed === false);
+  assert.deepEqual(calls, ["tavily"]);
+});
+
+
+test("campaign dual-provider transport reuses trusted posts with one shared deadline", async () => {
+  const { researchTavilyGeminiCandidates } =
+    await import("../server/ai-research.js");
+  const { createHash } = await import("node:crypto");
+  const sourceId = createHash("sha256").update(source, "utf8").digest("hex");
+  const calls = [];
+  const found = await researchTavilyGeminiCandidates({
+    query, limit: 2, model: "gemini-3-flash-preview",
+    apiKey: "test-only-gemini-user-key",
+    tavilyApiKey: "tvly-test-only-server-key",
+    maxInputTokens: 16_384, maxResults: 2,
+  }, {
+    observedAt: () => "2026-11-18T00:00:00.000Z",
+    tavilyPost: async (url, headers, body, signal) => {
+      calls.push("tavily");
+      assert.equal(headers.authorization, "Bearer tvly-test-only-server-key");
+      assert.equal(body.max_results, 2);
+      assert.equal(signal.aborted, false);
+      return { results: [{
+        url: source, title: "Verified professional",
+        content: "Verified Professional offers AI automation consulting",
+      }], usage: { credits: 1 } };
+    },
+    geminiPost: async (url, headers, body, signal) => {
+      assert.equal(headers["x-goog-api-key"], "test-only-gemini-user-key");
+      assert.equal(signal.aborted, false);
+      if (url.endsWith(":countTokens")) {
+        calls.push("count");
+        return { totalTokens: 850 };
+      }
+      calls.push("generate");
+      return {
+        candidates: [{ finishReason: "STOP", content: {
+          parts: [{ text: JSON.stringify({ candidates: [{
+            name: "Verified Professional", category: "AI_AUTOMATION",
+            sourceId, rationale: "Public profile describes consulting services",
+          }] }) }],
+        } }],
+      };
+    },
+  });
+  assert.deepEqual(calls, ["tavily", "count", "generate"]);
+  assert.equal(found.candidates.length, 1);
+  assert.equal(found.sendingEnabled, false);
+  assert.equal(found.automaticRetryAllowed, false);
 });

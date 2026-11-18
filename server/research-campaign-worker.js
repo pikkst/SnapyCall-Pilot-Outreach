@@ -8,11 +8,59 @@ import { lockActiveWorkspaceMembership, requireWorkspaceMembership } from "./wor
 import { lockedResearchPreferences, reserveResearchLease, reserveResearchAttempt,
   releaseResearchLease } from "./research-quota.js";
 import { reserveOwnerSpend, settleOwnerSpend } from "./research-budget.js";
-import { requireResearchPriceEnvelope, calculateVerifiedSpendCents } from "./research-price-policy.js";
-import { assertWebResearchModel } from "./research-provider-adapters.js";
-import { researchCandidates } from "./ai-research.js";
+import { requireResearchPriceEnvelope, calculateVerifiedSpendCents,
+  calculateVerifiedCombinedSpendCents } from "./research-price-policy.js";
+import { assertWebResearchModel, BoundedResearchStageError } from "./research-provider-adapters.js";
+import { researchCandidates, researchTavilyGeminiCandidates } from "./ai-research.js";
 import { decryptKey } from "./security.js";
 import { reserveApprovedRunCall, ApprovedRunBlocked } from "./research-campaign-run-approval.js";
+
+// One settlement decision for the existing campaign worker. This is not a
+// dispatch gate: requireResearchPriceEnvelope must already have authorized
+// the exact model before claim, reservation, or any provider request.
+export function calculateCampaignVerifiedSpendCents({ price, provider, model, usage }) {
+  if (price?.billingContractVersion === "tavily-basic-gemini3-text-v1") {
+    return provider === "gemini" && model === "gemini-3-flash-preview"
+      ? calculateVerifiedCombinedSpendCents(price, usage) : null;
+  }
+  return calculateVerifiedSpendCents(price, usage);
+}
+
+// Validate the server-owned retrieval key and operator entitlement only for
+// an ALREADY approved exact-model dual tariff. This is not price approval.
+export function resolveCampaignResearchExecution({
+  provider, model, price, search = researchCandidates,
+  tavilyApiKey, tavilyEnabled, accountCapVerified,
+}) {
+  if (price?.billingContractVersion !== "tavily-basic-gemini3-text-v1") {
+    return Object.freeze({ search, dualProvider: false });
+  }
+  if (provider !== "gemini" || model !== "gemini-3-flash-preview" ||
+      price?.provider !== provider || price?.model !== model ||
+      price?.retrievalProvider !== "tavily" ||
+      price?.retrieval?.maxRequests !== 1 ||
+      price?.textModel?.maxOutputTokens !== 2048 ||
+      !Number.isSafeInteger(price?.textModel?.maxInputTokens) ||
+      price.textModel.maxInputTokens < 257 ||
+      price.textModel.maxInputTokens > 16_384 ||
+      price?.enforcementReady !== true) {
+    throw new ResearchWorkerPreflightError("DUAL_PROVIDER_PRICE_INVALID");
+  }
+  // Both values must be provided by the server operator, never a browser.
+  // The account cap is an explicit operational prerequisite, not something
+  // this software can independently verify with the API.
+  if (tavilyEnabled !== true || accountCapVerified !== true ||
+      typeof tavilyApiKey !== "string" ||
+      !/^tvly-[A-Za-z0-9_-]{8,}$/.test(tavilyApiKey)) {
+    throw new ResearchWorkerPreflightError("TAVILY_ACCOUNT_NOT_VERIFIED");
+  }
+  return Object.freeze({
+    search: search === researchCandidates ? researchTavilyGeminiCandidates : search,
+    dualProvider: true, tavilyApiKey,
+    maxResults: 20,
+    maxInputTokens: price.textModel.maxInputTokens,
+  });
+}
 
 export class ResearchWorkerPreflightError extends Error {
   constructor(code) {
@@ -29,6 +77,9 @@ export async function runOneCampaignTask(db, {
   search = researchCandidates, now = () => new Date(),
   membership = requireWorkspaceMembership,
   decrypt = decryptKey,
+  tavilyApiKey = process.env.TAVILY_API_KEY,
+  tavilyEnabled = process.env.TAVILY_DUAL_PROVIDER_ENABLED === "true",
+  accountCapVerified = process.env.TAVILY_ACCOUNT_CAP_VERIFIED === "true",
 } = {}) {
   // Callers must require an explicit server-side feature flag and active,
   // authenticated partner scope before invoking this executor.
@@ -49,6 +100,10 @@ export async function runOneCampaignTask(db, {
   }
   const price = requireResearchPriceEnvelope({
     provider: setting.provider, model: setting.model,
+  });
+  const plan = resolveCampaignResearchExecution({
+    provider: setting.provider, model: setting.model, price, search,
+    tavilyApiKey, tavilyEnabled, accountCapVerified,
   });
   let apiKey;
   try { apiKey = decrypt(setting.encryptedApiKey, encryptionKey); }
@@ -134,13 +189,23 @@ export async function runOneCampaignTask(db, {
       outcome = { status: "PAUSED", attempted: false, code: failure };
     } else {
       invoked = true;
-      const result = await search({
+      const result = await plan.search({
         query: claim.query, limit: claim.limit,
         provider: setting.provider, model: setting.model, apiKey,
+        ...(plan.dualProvider ? {
+          tavilyApiKey: plan.tavilyApiKey,
+          maxResults: plan.maxResults,
+          maxInputTokens: plan.maxInputTokens,
+        } : {}),
       });
       providerReturned = true;
-      // Missing certified billing evidence keeps the full reserved ceiling.
-      await settle(calculateVerifiedSpendCents(price, result.usage));
+      // A future reviewed dual-provider policy uses its own complete Tavily
+      // + Gemini billing contract. Never apply legacy single-provider tool
+      // rates to the combined call. Missing receipts retain the full ceiling.
+      await settle(calculateCampaignVerifiedSpendCents({
+        price, provider: setting.provider, model: setting.model,
+        usage: result.usage,
+      }));
       const write = await commitCampaignResearchResult(db, claim, result, now(), {
         beforeCommit: tx => lockActiveWorkspaceMembership(tx, {
           workspaceId, userId: ownerId,
@@ -216,12 +281,25 @@ export async function runOneCampaignTask(db, {
         : error?.name === "AbortError"
         ? "UPSTREAM_ABORTED"
         : "UPSTREAM_DISPATCH_UNCERTAIN";
+      // Only the locally constructed adapter error may supply a phase.
+      // Never accept a provider-supplied or forged stage from arbitrary JSON.
+      const trustedDualStage = setting.provider === "gemini" &&
+        setting.model === "gemini-3-flash-preview" &&
+        error instanceof BoundedResearchStageError &&
+        [
+          "TAVILY_SEARCH_DISPATCHED",
+          "GEMINI_INPUT_PREPARATION",
+          "GEMINI_COUNT_TOKENS_DISPATCHED",
+          "GEMINI_GENERATE_CONTENT_DISPATCHED",
+          "GEMINI_UNKNOWN_DISPATCH",
+        ].includes(error.stage) ? error.stage : null;
       try {
         await db.auditEvent.create({ data: {
           actorId: ownerId, action: "research.campaign.execution.paused",
           entityId: claim.taskId,
           metadata: { workspaceId, campaignId, provider: setting.provider,
             code: "BILLING_UNCERTAIN", safeReason,
+            ...(trustedDualStage ? { dualProviderStage: trustedDualStage } : {}),
             billedCallPossible: true, automaticRetryAllowed: false },
         } });
       } catch {
