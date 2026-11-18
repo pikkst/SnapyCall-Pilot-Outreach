@@ -348,7 +348,7 @@ export async function countGemini3TextOnlyInput({
 // BOTH retrieval and generation cost before invoking it. No retry is safe
 // after either provider request, even when the response is incomplete.
 export async function extractWithGemini3TextOnly({
-  model, payload, manifest, limit, maxInputTokens, apiKey,
+  query, model, payload, manifest, limit, maxInputTokens, apiKey,
 }, post, signal) {
   // Reject malformed payload, model, identity or billing envelope before
   // any provider call. The manifest check also binds the output evidence IDs.
@@ -362,6 +362,14 @@ export async function extractWithGemini3TextOnly({
   });
   if (trusted.manifestDigest !== manifest.digest) {
     throw new TypeError("Untrusted Gemini 3 extraction manifest");
+  }
+  // Prevent a caller from presenting a valid manifest while asking Gemini
+  // to answer a different, untrusted or expanded prompt.
+  const expected = buildGemini3TextOnlyPayload({
+    query, limit, manifest, maxInputTokens,
+  });
+  if (JSON.stringify(payload) !== JSON.stringify(expected)) {
+    throw new TypeError("Gemini 3 extraction payload does not match sources");
   }
   // The same immutable generation payload is counted, then submitted once.
   const preflight = await countGemini3TextOnlyInput({
