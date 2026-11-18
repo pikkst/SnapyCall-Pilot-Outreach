@@ -659,9 +659,14 @@ test("Gemini countTokens preflight denies mismatched contents and invalid respon
       ...payload, tools: [{ google_search: {} }],
     },
   }), TypeError);
-  payload.contents[0].parts[0].text += " Tampered after count";
-  assert.throws(() => check({ totalTokens: 850 }), TypeError,
-    "Changes to generation contents after countTokens must invalidate preflight");
+  assert.throws(() => {
+    payload.contents[0].parts[0].text += " Tampered after count";
+  }, TypeError, "The generation payload is immutable after local sizing");
+  const mutableClone = JSON.parse(JSON.stringify(payload));
+  mutableClone.contents[0].parts[0].text += " Tampered after count";
+  assert.throws(() => check({ totalTokens: 850 }, {
+    payload: mutableClone,
+  }), TypeError, "Untrusted mutable copies cannot reuse an old token count");
 });
 
 
@@ -721,7 +726,6 @@ test("trusted Gemini 3 token preflight never authorizes invalid or drifting requ
     apiKey: "test-only-user-key",
   }, async () => ({ totalTokens: 20_000 })), TypeError);
 
-  const original = payload.contents[0].parts[0].text;
   await assert.rejects(() => countGemini3TextOnlyInput({
     model: "gemini-3-flash-preview", payload, maxInputTokens: 16_384,
     apiKey: "test-only-user-key",
@@ -729,5 +733,42 @@ test("trusted Gemini 3 token preflight never authorizes invalid or drifting requ
     payload.contents[0].parts[0].text += " Unexpected mutation";
     return { totalTokens: 975 };
   }), TypeError);
-  payload.contents[0].parts[0].text = original;
+});
+
+
+test("Gemini countTokens rejects every uncounted generation field before HTTP", async () => {
+  const { buildGemini3TextOnlyPayload, countGemini3TextOnlyInput } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  let calls = 0;
+  for (const bad of [
+    { ...payload, systemInstruction: { parts: [{ text: "Hidden extra tokens" }] } },
+    { ...payload, cachedContent: "cachedContents/other" },
+    { ...payload, toolConfig: {} },
+    { ...payload, tools: [{ google_search: {} }] },
+    { ...payload, generationConfig: {
+      ...payload.generationConfig, topK: 30,
+    } },
+    { ...payload, generationConfig: {
+      ...payload.generationConfig,
+      thinkingConfig: {
+        ...payload.generationConfig.thinkingConfig, thinkingBudget: 8192,
+      },
+    } },
+    { ...payload, contents: [{
+      parts: [{ text: "Valid source", inlineData: { mimeType: "text/plain", data: "abc" } }],
+    }] },
+  ]) {
+    await assert.rejects(() => countGemini3TextOnlyInput({
+      model: "gemini-3-flash-preview", payload: bad,
+      maxInputTokens: 16_384, apiKey: "test-only-user-key",
+    }, async () => {
+      calls++;
+      return { totalTokens: 2 };
+    }), TypeError);
+  }
+  assert.equal(calls, 0, "Uncounted fields must never reach the provider");
 });
