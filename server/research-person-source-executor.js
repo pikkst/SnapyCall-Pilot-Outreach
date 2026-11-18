@@ -63,13 +63,40 @@ export async function claimPersonSourceJob(db, {
     if (!["PARTIAL", "COMPLETED"].includes(campaigns[0].status)) {
       return { status: "BLOCKED", code: "DISCOVERY_NOT_TERMINAL" };
     }
-    const approval = await tx.researchPersonSourceApproval.findUnique({
+    const initial = await tx.researchPersonSourceApproval.findUnique({
       where: { campaignId },
     });
+    // A new cycle is eligible only after the initial approval has reached
+    // a terminal state. Never reauthorize an old attempted job.
+    const continuation = initial &&
+      ["COMPLETED", "PARTIAL_BUDGET"].includes(initial.status)
+      ? await tx.researchPersonSourceCycle.findFirst({
+        where: { campaignId, status: { in: ["APPROVED", "RUNNING"] } },
+        orderBy: { cycleIndex: "desc" },
+      }) : null;
+    const approval = continuation ?? initial;
+    const cycleIndex = continuation?.cycleIndex ?? 0;
     if (!approval || approval.workspaceId !== workspaceId ||
         approval.ownerId !== ownerId ||
         !["APPROVED", "RUNNING"].includes(approval.status)) {
       return { status: "BLOCKED", code: "PERSON_SOURCE_APPROVAL_REQUIRED" };
+    }
+    if (continuation) {
+      const full = await tx.researchFullRun.findUnique({
+        where: { campaignId },
+      });
+      if (!full || full.workspaceId !== workspaceId ||
+          full.ownerId !== ownerId || full.status !== "SOURCE_RUNNING" ||
+          !(full.expiresAt instanceof Date) || full.expiresAt <= now) {
+        return { status: "BLOCKED", code: "SOURCE_CONTINUATION_NOT_ACTIVE" };
+      }
+      // All prior cycles are immutable and only one can dispatch at a time.
+      const otherActive = await tx.researchPersonSourceCycle.count({
+        where: { campaignId, cycleIndex: { not: cycleIndex },
+          status: { in: ["APPROVED", "RUNNING"] } },
+      });
+      if (otherActive) return { status: "BLOCKED",
+        code: "MULTIPLE_SOURCE_CYCLES_ACTIVE" };
     }
     if (!(approval.expiresAt instanceof Date) || approval.expiresAt <= now) {
       return { status: "BLOCKED", code: "PERSON_SOURCE_APPROVAL_EXPIRED" };
@@ -80,7 +107,9 @@ export async function claimPersonSourceJob(db, {
       return { status: "BLOCKED", code: "PERSON_SOURCE_PRICE_CHANGED" };
     }
     const jobs = await tx.researchPersonSourceJob.findMany({
-      where: { campaignId }, select: jobFields,
+      where: continuation
+        ? { campaignId, cycleIndex }
+        : { campaignId }, select: jobFields,
       orderBy: { observationId: "asc" }, take: MAX_JOBS + 1,
     });
     if (jobs.length !== approval.eligibleJobCount || jobs.length > MAX_JOBS) {
@@ -97,6 +126,14 @@ export async function claimPersonSourceJob(db, {
     // finished and been reconciled. Expired leases are NOT auto-retried.
     if (jobs.some(job => ["RUNNING", "PAUSED"].includes(job.status))) {
       return { status: "BLOCKED", code: "SOURCE_JOB_UNSETTLED" };
+    }
+    if (continuation) {
+      // Earlier uncertain billing is globally blocking, not just blocking
+      // a single cycle's job selection.
+      const unresolved = await tx.researchPersonSourceJob.count({
+        where: { campaignId, status: { in: ["RUNNING", "PAUSED"] } },
+      });
+      if (unresolved) return { status: "BLOCKED", code: "SOURCE_JOB_UNSETTLED" };
     }
     if (approval.startedCalls >= approval.maxCalls ||
         approval.committedWorstCaseCents + price.worstCaseCents >
@@ -149,7 +186,7 @@ export async function claimPersonSourceJob(db, {
     const leaseUntil = new Date(now.getTime() + LEASE_MS);
     const claimed = await tx.researchPersonSourceJob.updateMany({
       where: { id: queued.id, campaignId, observationId: queued.observationId,
-        status: "QUEUED", attempts: 0, leaseToken: null,
+        cycleIndex, status: "QUEUED", attempts: 0, leaseToken: null,
         evidenceFingerprint: queued.evidenceFingerprint },
       data: { status: "RUNNING", attempts: { increment: 1 },
         leaseToken, leaseUntil, spendReservationId: reservationId,
@@ -163,7 +200,7 @@ export async function claimPersonSourceJob(db, {
       action: "research.person-source.spend.reserved",
       metadata: { workspaceId, campaignId, provider, model,
         priceVersion: price.priceVersion, worstCaseCents: price.worstCaseCents,
-        reservationId, automaticBillableReplay: false,
+        reservationId, cycleIndex, automaticBillableReplay: false,
         contactCreated: false, sendingEnabled: false },
     } });
     return {
