@@ -280,6 +280,7 @@ model ResearchCampaign {
   personSourceApproval ResearchPersonSourceApproval?
   contactBatch ResearchContactBatch?
   approvedRun ResearchCampaignRun?
+  fullRun ResearchFullRun?
   // This is a separate no-provider-call authorization for reading public profiles.
   emailTriageStatus String @default("IDLE")
   emailTriageAuthorizedAt DateTime?
@@ -540,6 +541,36 @@ model ResearchCampaignSource {
   createdAt DateTime @default(now())
   @@unique([campaignId, normalizedUrlHash])
   @@index([campaignId, status, createdAt])
+}
+
+// One explicit approval covers bounded discovery, source lookup and public
+// inspection. This never authorizes Candidate acceptance or email sending.
+model ResearchFullRun {
+  id String @id @default(cuid())
+  campaignId String @unique
+  campaign ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  workspaceId String
+  ownerId String
+  provider String
+  model String
+  priceVersion String
+  targetQualifiedContacts Int
+  maxDiscoveryCalls Int
+  maxSourceCalls Int
+  maxEmailInspectionPages Int
+  maxDiscoveryWorstCaseCents Int
+  maxSourceWorstCaseCents Int
+  maxTotalWorstCaseCents Int
+  // These are distinct from Candidate acceptance and mail-send permissions.
+  publicInspectionAuthorized Boolean @default(false)
+  status String @default("DISCOVERY")
+  lastCode String?
+  approvedAt DateTime @default(now())
+  expiresAt DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([workspaceId, ownerId])
 }
 
 model ResearchCampaignRun {
