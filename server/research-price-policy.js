@@ -205,3 +205,41 @@ export function calculateVerifiedSpendCents(policy, usage) {
       cents > BigInt(Number.MAX_SAFE_INTEGER)) return null;
   return Number(cents);
 }
+
+
+// Pure math for an eventual independently billed retrieval + Gemini text-only
+// task. It is NOT an authorization or an approved tariff. Only a future exact
+// server-owned, reviewed policy and upstream-enforced request/token caps can
+// make a quote eligible for reserveOwnerSpend. Never call this on user prices.
+export function calculateCombinedRetrievalAndTextCeilingCents({
+  retrieval, textModel,
+} = {}) {
+  const valid = (v, max) => Number.isSafeInteger(v) && v > 0 && v <= max;
+  if (!retrieval || !textModel ||
+      !valid(retrieval.maxRequests, 100) ||
+      !valid(retrieval.centsPerThousandRequests, 1_000_000) ||
+      !valid(textModel.maxInputTokens, 1_000_000) ||
+      !valid(textModel.maxOutputTokens, 100_000) ||
+      !valid(textModel.inputCentsPerMillion, 1_000_000) ||
+      !valid(textModel.outputCentsPerMillion, 1_000_000)) return null;
+
+  // Round each independently charged provider upward BEFORE summing. Using
+  // floating-point dollars or rounding once after addition can under-reserve.
+  const retrievalCents =
+    (BigInt(retrieval.maxRequests) *
+      BigInt(retrieval.centsPerThousandRequests) + 999n) / 1000n;
+  const modelCents =
+    (BigInt(textModel.maxInputTokens) *
+      BigInt(textModel.inputCentsPerMillion) +
+     BigInt(textModel.maxOutputTokens) *
+      BigInt(textModel.outputCentsPerMillion) + 999999n) / 1000000n;
+  const total = retrievalCents + modelCents;
+  if (total < 1n || total > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Object.freeze({
+    retrievalCents: Number(retrievalCents),
+    textModelCents: Number(modelCents),
+    worstCaseCents: Number(total),
+    // This structural quote must never be treated as a price-policy approval.
+    enforcementReady: false,
+  });
+}

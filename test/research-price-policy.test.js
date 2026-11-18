@@ -220,3 +220,70 @@ test("server pricing readiness never authorizes absent keys, disabled research o
     }).enforcedForPaidSearch, false);
   }
 });
+
+
+const { calculateCombinedRetrievalAndTextCeilingCents } =
+  await import("../server/research-price-policy.js");
+
+const syntheticCombinedTariff = {
+  // Synthetic test numbers only, not an approved search provider price.
+  retrieval: { maxRequests: 2, centsPerThousandRequests: 500 },
+  textModel: {
+    maxInputTokens: 1000, maxOutputTokens: 2048,
+    inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+  },
+};
+
+test("two independent providers are rounded upward before reserving combined spend", () => {
+  assert.deepEqual(
+    calculateCombinedRetrievalAndTextCeilingCents(syntheticCombinedTariff),
+    { retrievalCents: 1, textModelCents: 1,
+      worstCaseCents: 2, enforcementReady: false });
+  assert.equal(
+    calculateCombinedRetrievalAndTextCeilingCents({
+      ...syntheticCombinedTariff,
+      retrieval: { ...syntheticCombinedTariff.retrieval, maxRequests: 3 },
+    }).worstCaseCents, 3);
+});
+
+test("combined quote fails closed on missing, negative, fractional or excessive limits", () => {
+  const badRetrieval = [
+    { maxRequests: 0, centsPerThousandRequests: 500 },
+    { maxRequests: 2.5, centsPerThousandRequests: 500 },
+    { maxRequests: 101, centsPerThousandRequests: 500 },
+    { maxRequests: 2, centsPerThousandRequests: 0 },
+    { maxRequests: 2, centsPerThousandRequests: "500" },
+  ];
+  for (const retrieval of badRetrieval) {
+    assert.equal(calculateCombinedRetrievalAndTextCeilingCents({
+      ...syntheticCombinedTariff, retrieval,
+    }), null);
+  }
+  for (const change of [
+    { maxInputTokens: null },
+    { maxInputTokens: 1_000_001 },
+    { maxOutputTokens: 0 },
+    { maxOutputTokens: 100_001 },
+    { outputCentsPerMillion: -1 },
+    { inputCentsPerMillion: NaN },
+  ]) assert.equal(calculateCombinedRetrievalAndTextCeilingCents({
+    ...syntheticCombinedTariff,
+    textModel: { ...syntheticCombinedTariff.textModel, ...change },
+  }), null);
+  assert.equal(calculateCombinedRetrievalAndTextCeilingCents({}), null);
+});
+
+test("a mathematical quote never unlocks Gemini 3 paid discovery", () => {
+  const quote = calculateCombinedRetrievalAndTextCeilingCents(syntheticCombinedTariff);
+  assert.equal(quote.enforcementReady, false);
+  assert.throws(() => requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-3-flash-preview",
+    ...quote,
+  }), ResearchPricingUnavailable);
+  const state = researchPriceReadiness({
+    setting: { provider: "gemini", model: "gemini-3-flash-preview" },
+    enabled: true, remainingCents: 100_000,
+  });
+  assert.equal(state.enforcedForPaidSearch, false);
+  assert.equal(state.pricingStatus, "MODEL_PRICING_UNAVAILABLE");
+});
