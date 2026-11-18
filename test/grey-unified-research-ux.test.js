@@ -12,7 +12,7 @@ test("Research exposes one server-managed campaign, not multiple paid search lau
   assert.match(researchPanel, /aria-label="Campaign navigation"/);
   assert.match(researchPanel, /<div className="campaign-overview">/);
   assert.match(researchPanel, /aria-label="Campaign research progress"/);
-  assert.match(researchPanel, /Approve single run/);
+  assert.match(researchPanel, /Approve full pipeline/);
   assert.doesNotMatch(researchPanel, /Run one search|Run ONE Gemini 3 Search cost test/);
   assert.doesNotMatch(researchPanel, /Run campaign until target or safety stop/);
   assert.doesNotMatch(researchPanel, /executeManualCampaignTask\(/);
