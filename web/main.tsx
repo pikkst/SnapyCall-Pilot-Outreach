@@ -1048,6 +1048,73 @@ function App() {
     }
   }
 
+  async function loadQualifiedContactManifest(workspaceId: string,
+    campaignId: string) {
+    if (workspaceId !== activeWorkspaceId ||
+        campaignId !== campaignProgressId) return;
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    setQualifiedManifestBusy(true);
+    try {
+      const manifest = await api<QualifiedContactManifest>(
+        "/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/qualified-contacts?workspaceId=" + encodeURIComponent(workspaceId));
+      if (generation !== workspaceRequest.current ||
+          request !== campaignProgressRequest.current) return;
+      setQualifiedManifest(manifest);
+      setQualifiedBatchConfirmed(false);
+    } catch (error) {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setQualifiedBatchNotice(error instanceof Error ? error.message :
+          "Unable to load qualified contact evidence.");
+      }
+    } finally {
+      if (generation === workspaceRequest.current) setQualifiedManifestBusy(false);
+    }
+  }
+
+  async function approveQualifiedContactBatchFromManifest(workspaceId: string,
+    campaignId: string) {
+    if (workspaceId !== activeWorkspaceId ||
+        campaignId !== campaignProgressId ||
+        !qualifiedManifest?.batchEnabled || !qualifiedManifest.reliable ||
+        !qualifiedManifest.manifestHash || !qualifiedBatchConfirmed ||
+        qualifiedManifest.batch || qualifiedManifestBusy) return;
+    const generation = workspaceRequest.current;
+    const request = campaignProgressRequest.current;
+    setQualifiedManifestBusy(true);
+    setQualifiedBatchNotice("");
+    try {
+      await api("/research-campaigns/" + encodeURIComponent(campaignId) +
+        "/qualified-contacts/approve-batch?workspaceId=" +
+        encodeURIComponent(workspaceId), {
+          method: "POST",
+          body: JSON.stringify({
+            manifestHash: qualifiedManifest.manifestHash,
+            confirmEveryDisplayedPair: true,
+            confirmNoAutomaticSending: true,
+          }),
+        });
+      if (generation !== workspaceRequest.current ||
+          request !== campaignProgressRequest.current) return;
+      setQualifiedBatchConfirmed(false);
+      setQualifiedBatchNotice(
+        "Batch review approved. Each saved contact is rechecked against " +
+        "public evidence. No onboarding messages will be sent.");
+      // This read is owner-scoped and never runs paid AI research.
+      void loadQualifiedContactManifest(workspaceId, campaignId);
+    } catch (error) {
+      if (generation === workspaceRequest.current &&
+          request === campaignProgressRequest.current) {
+        setQualifiedBatchNotice(error instanceof Error ? error.message :
+          "Could not approve this reviewed contact batch.");
+      }
+    } finally {
+      if (generation === workspaceRequest.current) setQualifiedManifestBusy(false);
+    }
+  }
+
   async function changeCampaignEmailTriage(workspaceId: string,
     campaignId: string, action: "start" | "stop") {
     if (campaignTriageBusy || workspaceId !== activeWorkspaceId ||
