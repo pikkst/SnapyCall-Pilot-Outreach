@@ -7,6 +7,7 @@ import { runOnePersonSourceJob }
   from "./research-person-source-executor.js";
 import { verifyPersonSourceProposal }
   from "./research-person-source-evidence.js";
+import { finalizeSourceCycle } from "./research-person-source-cycles.js";
 
 const REVIEW_CODES = new Set([
   "SHARED_SOURCE_REQUIRES_REVIEW", "SOURCE_OBSERVATION_CHANGED",
@@ -144,9 +145,18 @@ export async function tickPersonSourcePipeline(db, {
     select: { campaignId: true, workspaceId: true, ownerId: true },
     orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
   });
-  if (!approval) return { status: "IDLE" };
-  const scope = { campaignId: approval.campaignId,
-    workspaceId: approval.workspaceId, ownerId: approval.ownerId };
+  const cycle = approval ? null :
+    await db.researchPersonSourceCycle.findFirst({
+      where: { status: { in: ["APPROVED", "RUNNING"] },
+        expiresAt: { gt: new Date() } },
+      select: { campaignId: true, workspaceId: true,
+        ownerId: true, cycleIndex: true },
+      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+    });
+  const active = approval ?? cycle;
+  if (!active) return { status: "IDLE" };
+  const scope = { campaignId: active.campaignId,
+    workspaceId: active.workspaceId, ownerId: active.ownerId };
   // Non-billable proof goes first. Restart rehydrates a persisted provider
   // proposal instead of repeating the paid provider call.
   const pending = await db.researchPersonSourceJob.findFirst({
@@ -171,7 +181,7 @@ export async function tickPersonSourcePipeline(db, {
         (paid.status === "BLOCKED" &&
         ["SOURCE_APPROVED_SPEND_EXHAUSTED", "NO_SOURCE_JOB_READY"].includes(
           paid.code))) {
-      return finalize(db, scope);
+      return cycle ? finalizeSourceCycle(db, scope) : finalize(db, scope);
     }
     return { status: paid.status, code: paid.code ?? null };
   } catch (error) {
