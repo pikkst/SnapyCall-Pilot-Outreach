@@ -1215,3 +1215,51 @@ test("dual-provider orchestration preserves sanitized generation and local rejec
     error.billableCallPossible && error.automaticRetryAllowed === false);
   assert.deepEqual(calls, ["tavily"]);
 });
+
+
+test("campaign dual-provider transport reuses trusted posts with one shared deadline", async () => {
+  const { researchTavilyGeminiCandidates } =
+    await import("../server/ai-research.js");
+  const { createHash } = await import("node:crypto");
+  const sourceId = createHash("sha256").update(source, "utf8").digest("hex");
+  const calls = [];
+  const found = await researchTavilyGeminiCandidates({
+    query, limit: 2, model: "gemini-3-flash-preview",
+    apiKey: "test-only-gemini-user-key",
+    tavilyApiKey: "tvly-test-only-server-key",
+    maxInputTokens: 16_384, maxResults: 2,
+  }, {
+    observedAt: () => "2026-11-18T00:00:00.000Z",
+    tavilyPost: async (url, headers, body, signal) => {
+      calls.push("tavily");
+      assert.equal(headers.authorization, "Bearer tvly-test-only-server-key");
+      assert.equal(body.max_results, 2);
+      assert.equal(signal.aborted, false);
+      return { results: [{
+        url: source, title: "Verified professional",
+        content: "Verified Professional offers AI automation consulting",
+      }], usage: { credits: 1 } };
+    },
+    geminiPost: async (url, headers, body, signal) => {
+      assert.equal(headers["x-goog-api-key"], "test-only-gemini-user-key");
+      assert.equal(signal.aborted, false);
+      if (url.endsWith(":countTokens")) {
+        calls.push("count");
+        return { totalTokens: 850 };
+      }
+      calls.push("generate");
+      return {
+        candidates: [{ finishReason: "STOP", content: {
+          parts: [{ text: JSON.stringify({ candidates: [{
+            name: "Verified Professional", category: "AI_AUTOMATION",
+            sourceId, rationale: "Public profile describes consulting services",
+          }] }) }],
+        } }],
+      };
+    },
+  });
+  assert.deepEqual(calls, ["tavily", "count", "generate"]);
+  assert.equal(found.candidates.length, 1);
+  assert.equal(found.sendingEnabled, false);
+  assert.equal(found.automaticRetryAllowed, false);
+});
