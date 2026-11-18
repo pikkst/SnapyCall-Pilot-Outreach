@@ -1288,7 +1288,7 @@ test("20 full Tavily excerpts are fitted before Gemini dispatch without repeated
         url: "https://consultants.example.org/experts/overflow-" + i,
         title: "AI automation professional — " + "Q".repeat(130),
         content: "Named AI automation consultant offering online services. " +
-          "🧪 Unicode \\" injected \\" text ".repeat(85),
+          "🧪 Unicode \" injected \" text ".repeat(85),
       })), usage: { credits: 1 } };
     },
     geminiPost: async (url, _headers, body) => {
