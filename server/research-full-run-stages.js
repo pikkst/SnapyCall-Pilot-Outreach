@@ -96,18 +96,88 @@ export async function qualifiedFullRunProgress(db, scope) {
       "QUALIFIED_EVIDENCE_SNAPSHOT_UNRELIABLE" };
 }
 
+// A target reached while source searches are still authorized must STOP
+// future paid claims in the SAME campaign-locked transaction as the full-run
+// completion. An already leased call may settle but can never be replayed.
+export async function stopFullRunSourceAtGoal(db, scope) {
+  return db.$transaction(async tx => {
+    if (!await lockActiveWorkspaceMembership(tx, {
+      workspaceId: scope.workspaceId, userId: scope.ownerId,
+    })) return { status: "BLOCKED", code: "WORKSPACE_ACCESS_REVOKED" };
+    const campaigns = await tx.$queryRaw`
+      SELECT "id" FROM "ResearchCampaign" WHERE "id" = ${scope.campaignId}
+        AND "workspaceId" = ${scope.workspaceId}
+        AND "ownerId" = ${scope.ownerId} FOR UPDATE`;
+    if (campaigns.length !== 1) {
+      return { status: "BLOCKED", code: "CAMPAIGN_NOT_FOUND" };
+    }
+    const full = await tx.researchFullRun.findUnique({
+      where: { campaignId: scope.campaignId },
+    });
+    if (!full || full.status !== "SOURCE_RUNNING" ||
+        full.workspaceId !== scope.workspaceId ||
+        full.ownerId !== scope.ownerId) {
+      return { status: "UNCHANGED", code: "FULL_RUN_STAGE_ALREADY_CHANGED" };
+    }
+    const source = await tx.researchPersonSourceApproval.findUnique({
+      where: { campaignId: scope.campaignId },
+    });
+    if (!source || source.workspaceId !== scope.workspaceId ||
+        source.ownerId !== scope.ownerId ||
+        source.model !== full.model || source.provider !== full.provider ||
+        source.priceVersion !== full.priceVersion ||
+        !["APPROVED", "RUNNING", "COMPLETED", "PARTIAL_BUDGET",
+          "TARGET_REACHED"].includes(source.status)) {
+      return { status: "BLOCKED", code: "SOURCE_APPROVAL_NEEDS_REVIEW" };
+    }
+    const progress = await qualifiedFullRunProgress(tx, scope);
+    if (!progress.reliable) return { status: "BLOCKED", code: progress.code };
+    if (progress.qualifiedEvidence < full.targetQualifiedContacts) {
+      return { status: "WAITING", code: "QUALIFIED_TARGET_NOT_REACHED" };
+    }
+    if (["APPROVED", "RUNNING"].includes(source.status)) {
+      const stopped = await tx.researchPersonSourceApproval.updateMany({
+        where: { id: source.id, campaignId: scope.campaignId,
+          workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+          status: { in: ["APPROVED", "RUNNING"] } },
+        data: { status: "TARGET_REACHED" },
+      });
+      if (stopped.count !== 1) throw new Error("SOURCE_STOP_CAS_CONFLICT");
+    }
+    const finished = await tx.researchFullRun.updateMany({
+      where: { id: full.id, campaignId: scope.campaignId,
+        workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+        status: "SOURCE_RUNNING" },
+      data: { status: "READY_FOR_REVIEW",
+        lastCode: "QUALIFIED_TARGET_REACHED" },
+    });
+    if (finished.count !== 1) throw new Error("FULL_RUN_STOP_CAS_CONFLICT");
+    await tx.auditEvent.create({ data: {
+      actorId: scope.ownerId, entityId: scope.campaignId,
+      action: "research.full-run.qualified-target.reached",
+      metadata: { workspaceId: scope.workspaceId,
+        qualifiedEvidence: progress.qualifiedEvidence,
+        sourceNewPaidClaimsStopped: true,
+        contactAccepted: false, sendingEnabled: false },
+    } });
+    return { status: "READY_FOR_REVIEW", code: "QUALIFIED_TARGET_REACHED",
+      qualifiedEvidence: progress.qualifiedEvidence };
+  });
+}
+
 export async function tickFullRunStages(db, {
   approveTriage = approveEmailTriage,
   enqueue = enqueuePersonSourceJobs,
   approveSource = approvePersonSourceResearch,
   transition = transitionFullRunStage,
   progress = qualifiedFullRunProgress,
+  stopAtGoal = stopFullRunSourceAtGoal,
   now = () => new Date(),
 } = {}) {
   const clock = now();
   if (!(clock instanceof Date) || !Number.isFinite(clock.getTime()) ||
-      [approveTriage, enqueue, approveSource, transition, progress]
-        .some(fn => typeof fn !== "function")) {
+      [approveTriage, enqueue, approveSource, transition,
+        progress, stopAtGoal].some(fn => typeof fn !== "function")) {
     throw new TypeError("Trusted full-run stage controller required");
   }
   const full = await db.researchFullRun.findFirst({
@@ -138,7 +208,9 @@ export async function tickFullRunStages(db, {
   const evidence = await progress(db, scope);
   if (!evidence.reliable) return move("NEEDS_REVIEW", evidence.code);
   if (evidence.qualifiedEvidence >= full.targetQualifiedContacts) {
-    return move("READY_FOR_REVIEW", "QUALIFIED_TARGET_REACHED");
+    return full.status === "SOURCE_RUNNING"
+      ? stopAtGoal(db, scope)
+      : move("READY_FOR_REVIEW", "QUALIFIED_TARGET_REACHED");
   }
   if (full.status === "DISCOVERY") {
     if (campaign.emailTriageStatus === "RUNNING") {
