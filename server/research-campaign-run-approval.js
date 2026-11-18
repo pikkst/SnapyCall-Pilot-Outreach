@@ -427,6 +427,11 @@ export async function stopApprovedCampaignRun(db, {
     } });
     return { status: 200, code: "RUN_STOPPED",
       run: publicRunStatus(saved),
+      fullRun: charter
+        ? { ...publicFullRunStatus(charter),
+            status: fullActive ? "STOPPED" : charter.status,
+            lastCode: fullActive ? "USER_STOPPED" : charter.lastCode }
+        : null,
       fullRunStopped: !!fullActive, sendingEnabled: false };
   });
 }
