@@ -431,13 +431,13 @@ test("existing dual-provider adapter telemetry cannot certify a budget refund", 
     reportedRetrievalCredits: 1,
     usage: { inputTokens: 800, outputTokens: 200, thinkingTokens: 0 },
   }), null);
-  assert.throws(() => requireResearchPriceEnvelope({
+  assert.equal(requireResearchPriceEnvelope({
     provider: "gemini", model: "gemini-3-flash-preview",
-  }), ResearchPricingUnavailable);
+  }).worstCaseCents, 3);
 });
 
 
-test("staged dual-provider tariff remains disabled even if external account switches are on", () => {
+test("approved dual-provider tariff still requires separate operator account gates", () => {
   const shape = calculateResearchPricePolicyCeilingCents({
     provider: "gemini", model: "gemini-3-flash-preview",
     retrievalProvider: "tavily",
