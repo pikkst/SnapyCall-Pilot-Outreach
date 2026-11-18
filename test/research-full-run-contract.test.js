@@ -84,7 +84,8 @@ function fixture({ prior = null, priorFull = null, revocation = false,
       auditEvent: { create: async ({ data }) => {
         calls.push("audit");
         assert.equal(data.metadata.sendingEnabled, false);
-        assert.equal(data.metadata.contactAcceptanceAuthorized, false);
+        // Legacy discovery approvals never claim this new optional permission.
+        assert.equal(data.metadata.contactAcceptanceAuthorized ?? false, false);
       } },
     }),
   };
