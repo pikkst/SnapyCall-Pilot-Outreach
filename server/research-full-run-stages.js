@@ -130,6 +130,16 @@ export async function stopFullRunSourceAtGoal(db, scope) {
           "TARGET_REACHED"].includes(source.status)) {
       return { status: "BLOCKED", code: "SOURCE_APPROVAL_NEEDS_REVIEW" };
     }
+    const uncertain = await tx.researchPersonSourceJob.count({
+      where: { campaignId: scope.campaignId, OR: [
+        { status: "PAUSED" },
+        { status: "RUNNING", leaseUntil: { lte: new Date() } },
+      ] },
+    });
+    if (uncertain) {
+      return { status: "BLOCKED",
+        code: "SOURCE_JOB_BILLING_RECONCILIATION_REQUIRED" };
+    }
     const progress = await qualifiedFullRunProgress(tx, scope);
     if (!progress.reliable) return { status: "BLOCKED", code: progress.code };
     if (progress.qualifiedEvidence < full.targetQualifiedContacts) {
@@ -216,6 +226,17 @@ export async function tickFullRunStages(db, {
       }
     }
     return { status: "WAITING", code: "DISCOVERY_RUNNING" };
+  }
+  if (full.status === "SOURCE_RUNNING") {
+    const uncertain = await db.researchPersonSourceJob.count({
+      where: { campaignId: scope.campaignId, OR: [
+        { status: "PAUSED" },
+        { status: "RUNNING", leaseUntil: { lte: clock } },
+      ] },
+    });
+    if (uncertain) {
+      return move("NEEDS_REVIEW", "SOURCE_JOB_BILLING_RECONCILIATION_REQUIRED");
+    }
   }
   const evidence = await progress(db, scope);
   if (!evidence.reliable) return move("NEEDS_REVIEW", evidence.code);
@@ -327,15 +348,6 @@ export async function tickFullRunStages(db, {
     return move("SOURCE_RUNNING", "SOURCE_STAGE_APPROVED_FROM_FULL_RUN");
   }
   if (full.status === "SOURCE_RUNNING") {
-    const uncertainJobs = await db.researchPersonSourceJob.count({
-      where: { campaignId: scope.campaignId, OR: [
-        { status: "PAUSED" },
-        { status: "RUNNING", leaseUntil: { lte: clock } },
-      ] },
-    });
-    if (uncertainJobs) {
-      return move("NEEDS_REVIEW", "SOURCE_JOB_BILLING_RECONCILIATION_REQUIRED");
-    }
     const approval = await db.researchPersonSourceApproval.findUnique({
       where: { campaignId: scope.campaignId },
       select: { status: true, ownerId: true, workspaceId: true },
