@@ -14,10 +14,10 @@ test("Gemini 3 settings describes approved Tavily text-only pricing, not obsolet
 });
 
 test("Gemini 3 UI retains explicit paid-run consent and conservative no-send warnings", () => {
-  assert.match(ui, /Start one server-managed campaign run/);
+  assert.match(ui, /Start one full contact research pipeline/);
   assert.match(ui, /Maximum paid research requests/);
   assert.match(ui, /I approve this maximum reserve/);
-  assert.match(ui, /Approve single run/);
+  assert.match(ui, /Approve full pipeline/);
   assert.match(ui, /Saving the model never launches research or sends email/);
-  assert.match(ui, /The worker stops at your approved limit/);
+  assert.match(ui, /stops new paid calls without retry/);
 });
