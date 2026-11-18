@@ -247,3 +247,61 @@ export function calculateCombinedRetrievalAndTextCeilingCents({
     enforcementReady: false,
   });
 }
+
+
+// Settlement contract for a future versioned Tavily Basic + Gemini 3 text-only
+// price policy. It cannot authorize dispatch. The existing campaign worker
+// must call this ONLY with a server-owned reviewed policy and usage attested
+// by BOTH trusted provider adapters. Null retains the ENTIRE reservation.
+// Current dual-provider adapter returns diagnostic usage only; consequently
+// current responses cannot pass this gate and must settle conservatively.
+export function calculateVerifiedCombinedSpendCents(policy, usage) {
+  if (!policy || policy.enforcementReady !== true ||
+      policy.provider !== "gemini" || policy.model !== "gemini-3-flash-preview" ||
+      policy.retrievalProvider !== "tavily" ||
+      policy.billingContractVersion !== "tavily-basic-gemini3-text-v1" ||
+      !Number.isSafeInteger(policy.worstCaseCents) ||
+      policy.worstCaseCents <= 0 || !usage ||
+      usage.billingEvidence?.source !== "trusted_provider_adapters" ||
+      usage.billingEvidence?.contractVersion !== policy.billingContractVersion ||
+      usage.billingEvidence?.complete !== true ||
+      usage.billingEvidence?.retrievalProvider !== "tavily" ||
+      usage.billingEvidence?.textProvider !== "gemini" ||
+      usage.billingEvidence?.model !== policy.model) return null;
+
+  const retrieval = policy.retrieval;
+  const textModel = policy.textModel;
+  const modeled = calculateCombinedRetrievalAndTextCeilingCents({
+    retrieval, textModel,
+  });
+  if (!modeled || policy.worstCaseCents < modeled.worstCaseCents) return null;
+
+  const bounds = [
+    [usage.retrievalCredits, retrieval.maxRequests],
+    [usage.inputTokens, textModel.maxInputTokens],
+    // Gemini thinking tokens are part of paid OUTPUT, not free metadata.
+    [usage.outputTokens, textModel.maxOutputTokens],
+    [usage.thinkingTokens, textModel.maxOutputTokens],
+  ];
+  if (bounds.some(([value, max]) => !Number.isSafeInteger(value) ||
+      value < 0 || value > max) ||
+      usage.retrievalCredits !== 1 ||
+      usage.inputTokens === 0 ||
+      usage.outputTokens + usage.thinkingTokens > textModel.maxOutputTokens) {
+    return null;
+  }
+
+  const ceil = (n, d) => (n + d - 1n) / d;
+  const retrievalCents = ceil(
+    BigInt(usage.retrievalCredits) *
+      BigInt(retrieval.centsPerThousandRequests), 1000n);
+  const inputCents = ceil(
+    BigInt(usage.inputTokens) *
+      BigInt(textModel.inputCentsPerMillion), 1000000n);
+  const outputCents = ceil(
+    BigInt(usage.outputTokens + usage.thinkingTokens) *
+      BigInt(textModel.outputCentsPerMillion), 1000000n);
+  const total = retrievalCents + inputCents + outputCents;
+  return total <= BigInt(policy.worstCaseCents) &&
+    total <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(total) : null;
+}
