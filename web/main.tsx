@@ -2778,19 +2778,16 @@ function App() {
                           campaignProgress.uniqueSourcedCandidates === 0 &&
                           <section className="campaign-approved-run"
                             aria-label="Approve a one-launch campaign">
-                            <strong>Start one server-managed campaign run</strong>
+                            <strong>Start one full contact research pipeline</strong>
                             <p className="muted">Provider: {campaignRunApproval.priceEnvelope.provider}
                               {" · "}{campaignRunApproval.priceEnvelope.model}.
                               The worst-case reserve is
                               {" $"}{(campaignRunApproval.priceEnvelope.worstCasePerCallCents / 100).toFixed(2)}
-                              per attempt. The worker stops at your approved limit,
-                              any uncertain billing response, or an expired lease.
-                              {campaignRunApproval.fullRunEnabled
-                                ? " Opt in to the full run below to include " +
-                                  "email evidence and person-source stages. " +
-                                  "Sending remains disabled."
-                                : " This discovery-only run does not inspect " +
-                                  "email addresses or send outreach."}</p>
+                              per paid attempt. Full pipeline research includes
+                              discovery, public person-email evidence checks and
+                              bounded source enrichment; sending stays disabled.
+                              An uncertain provider charge or expired lease
+                              stops new paid calls without retry.</p>
                             <label>Maximum paid research requests
                               <input type="number" min={1} max={250} step={1}
                                 value={campaignMaxTasks}
@@ -2799,40 +2796,40 @@ function App() {
                                   Math.max(1, Math.min(250, Math.trunc(
                                     Number(event.target.value) || 1))))}/>
                             </label>
-                            {campaignRunApproval.fullRunEnabled &&
-                              <section className="campaign-full-run-option"
-                                aria-label="Full research pipeline approval">
-                                <label className="campaign-contact-confirm">
-                                  <input type="checkbox"
-                                    checked={campaignApproveFullRun}
-                                    onChange={event => setCampaignApproveFullRun(
-                                      event.target.checked)}/>
-                                  One approved full run: discovery, public
-                                  email evidence inspection and bounded
-                                  person-source lookup, without further stage clicks.
-                                </label>
-                                {campaignApproveFullRun && <>
-                                  <label>Maximum additional paid source searches
-                                    <input type="number" min={1} max={250} step={1}
-                                      value={campaignSourceCalls}
-                                      disabled={campaignRunApprovalBusy}
-                                      onChange={event => setCampaignSourceCalls(
-                                        Math.max(1, Math.min(250, Math.trunc(
-                                          Number(event.target.value) || 1))))}/>
-                                  </label>
-                                  <p className="muted">Public profile inspection
-                                    is limited to 250 saved observations and
-                                    does not send email or accept contacts.
-                                    Uncertain charges are not retried.</p>
-                                </>}
-                              </section>}
+                            <section className="campaign-full-run-option"
+                              aria-label="Full research pipeline approval">
+                              <strong>Full pipeline · one approved run</strong>
+                              <label>Maximum additional paid source searches
+                                <input type="number" min={1} max={250} step={1}
+                                  value={campaignSourceCalls}
+                                  disabled={campaignRunApprovalBusy ||
+                                    !campaignRunApproval.fullRunEnabled}
+                                  onChange={event => setCampaignSourceCalls(
+                                    Math.max(1, Math.min(250, Math.trunc(
+                                      Number(event.target.value) || 1))))}/>
+                              </label>
+                              <p className="muted">Public profile inspection
+                                is limited to 250 saved observations. Evidence
+                                does not prove mailbox delivery or permission
+                                to send outreach.</p>
+                              {!campaignRunApproval.fullRunEnabled &&
+                                <p role="alert" className="campaign-blocker">
+                                  Full pipeline is not enabled on this server.
+                                  Starting discovery-only research would spend
+                                  money without verifying email contacts.
+                                  {campaignRunApproval.fullRunMissingStages?.length
+                                    ? " Missing server stages: " +
+                                      campaignRunApproval.fullRunMissingStages.join(", ")
+                                    : " Ask the administrator to enable all stages."}
+                                </p>}
+                            </section>
                             <p>Maximum conservative approved spend:
                               <strong>{" $"}{((campaignMaxTasks +
-                                (campaignApproveFullRun ? campaignSourceCalls : 0)) *
+                                campaignSourceCalls) *
                                 campaignRunApproval.priceEnvelope.worstCasePerCallCents /
                                   100).toFixed(2)}</strong></p>
                             {((campaignMaxTasks +
-                              (campaignApproveFullRun ? campaignSourceCalls : 0)) *
+                              campaignSourceCalls) *
                               campaignRunApproval.priceEnvelope.worstCasePerCallCents) >
                                 50000 && <p role="alert">The total approval
                                   exceeds the $500 hard ceiling. Reduce the
@@ -2846,12 +2843,13 @@ function App() {
                             </label>
                             <button type="button"
                               disabled={!campaignNoReplayConfirmed || campaignRunApprovalBusy ||
+                                !campaignRunApproval.fullRunEnabled ||
                                 ((campaignMaxTasks +
-                                  (campaignApproveFullRun ? campaignSourceCalls : 0)) *
+                                  campaignSourceCalls) *
                                   campaignRunApproval.priceEnvelope.worstCasePerCallCents > 50000)}
                               onClick={() => void approveCampaignAutonomousRun(
                                 p.id, campaignProgress.id)}>
-                              {campaignRunApprovalBusy ? "Saving approval…" : "Approve single run"}
+                              {campaignRunApprovalBusy ? "Saving approval…" : "Approve full pipeline"}
                             </button>
                           </section>}
                         {campaignRunApproval?.fullRun && <p role="status"
