@@ -419,9 +419,6 @@ test("existing dual-provider adapter telemetry cannot certify a budget refund", 
     reportedRetrievalCredits: 1,
     usage: { inputTokens: 800, outputTokens: 200, thinkingTokens: 0 },
   }), null);
-  assert.equal(requireResearchPriceEnvelope.bind(null, {
-    provider: "gemini", model: "gemini-3-flash-preview",
-  }) instanceof Function, true);
   assert.throws(() => requireResearchPriceEnvelope({
     provider: "gemini", model: "gemini-3-flash-preview",
   }), ResearchPricingUnavailable);
