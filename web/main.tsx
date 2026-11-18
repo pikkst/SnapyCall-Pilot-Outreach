@@ -42,6 +42,11 @@ type CampaignEmailTriageState = {
   remaining: number; checking: number; reviewRequired: number;
   noEmail: number; blocked: number; uncertain: number;
   contactsCreated: 0; providerCalls: 0; sendingEnabled: false;
+  qualification?: { qualifiedEvidence: number; reviewRequired: number;
+    ambiguous: number; countReliable: boolean; sendingEnabled: false };
+  preflight?: { eligible: boolean; partialEligible: boolean; code: string;
+    observations: number; inspectableObservations: number; uniqueSources: number;
+    eligibleSubsetObservations: number; excludedObservations: number };
   enabled: boolean;
 };
 type CampaignObservationsPage = {
@@ -727,8 +732,8 @@ function App() {
     const generation = workspaceRequest.current;
     // One approval covers only the currently queued work on this campaign.
     // Server-side cost/identity/lease checks remain authoritative per call.
-    const approvedMaxTasks = Math.min(24, campaignProgress?.id === campaignId ?
-      campaignProgress.tasks.queued : 24);
+    const approvedMaxTasks = Math.min(250, campaignProgress?.id === campaignId ?
+      campaignProgress.tasks.queued : 250);
     if (approvedMaxTasks < 1) return;
     batchInFlight.current = true;
     batchStopRequested.current = false;
@@ -1043,8 +1048,10 @@ function App() {
         encodeURIComponent(workspaceId), {
           method: "POST",
           body: JSON.stringify(action === "start" ? {
-            maxPages: Math.min(campaignProgress?.uniqueSourcedCandidates ?? 0, 250),
+            maxPages: Math.min(campaignEmailTriage?.preflight?.observations ?? 0, 250),
             confirmPublicInspection: true,
+            ...(campaignEmailTriage?.preflight?.partialEligible
+              ? { confirmSkipUninspectable: true } : {}),
           } : { confirmStop: true }),
         });
       if (generation !== workspaceRequest.current ||
@@ -2370,6 +2377,9 @@ function App() {
                               {campaignRunApproval?.run?.maxTasks ??
                                 campaignProgress.plannedTasks}</strong> searches</span>
                             <span><strong>{campaignProgress.uniqueSourcedCandidates}</strong> cited findings</span>
+                            {campaignEmailTriage?.qualification?.countReliable &&
+                              <span><strong>{campaignEmailTriage.qualification.qualifiedEvidence} / 100</strong>
+                                {" "}email evidence ready for review</span>}
                             {campaignRunApproval?.run &&
                               <span><strong>USD {(campaignRunApproval.run.committedWorstCaseCents / 100).toFixed(2)}</strong>
                                 {" "}reserved ceiling</span>}
@@ -2476,11 +2486,11 @@ function App() {
                               any uncertain billing response, or an expired lease.
                               This does not search emails or send outreach.</p>
                             <label>Maximum paid research requests
-                              <input type="number" min={1} max={24} step={1}
+                              <input type="number" min={1} max={250} step={1}
                                 value={campaignMaxTasks}
                                 disabled={campaignRunApprovalBusy}
                                 onChange={event => setCampaignMaxTasks(
-                                  Math.max(1, Math.min(24, Math.trunc(
+                                  Math.max(1, Math.min(250, Math.trunc(
                                     Number(event.target.value) || 1))))}/>
                             </label>
                             <p>Maximum conservative approved spend:
@@ -2731,16 +2741,21 @@ function App() {
                           {campaignEmailTriage.status === "IDLE" &&
                             campaignEmailTriage.enabled &&
                             ["COMPLETED", "PARTIAL"].includes(campaignProgress.status) &&
-                            campaignProgress.uniqueSourcedCandidates > 0 &&
-                            campaignProgress.uniqueSourcedCandidates <= 250 && <>
+                            (campaignEmailTriage.preflight?.eligible ||
+                              campaignEmailTriage.preflight?.partialEligible) && <>
                               <label className="campaign-contact-confirm">
                                 <input type="checkbox"
                                   checked={campaignTriageConfirmed}
                                   onChange={event => setCampaignTriageConfirmed(event.target.checked)}/>
-                                I authorize a single bounded inspection of up to
-                                {" "}{campaignProgress.uniqueSourcedCandidates} saved public
-                                profile URLs (24-hour approval, no paid AI calls,
-                                no automatic retry after an uncertain inspection).
+                                I authorize a single bounded inspection of
+                                {" "}{campaignEmailTriage.preflight?.eligibleSubsetObservations ?? 0}
+                                {" "}independently inspectable public source URLs
+                                (24-hour approval, no paid AI calls, no automatic retry).
+                                {campaignEmailTriage.preflight?.partialEligible &&
+                                  <> I explicitly approve excluding
+                                    {" "}{campaignEmailTriage.preflight.excludedObservations}
+                                    {" "}shared, opaque or uninspectable sources without fetching them.
+                                    Excluded observations remain saved for later source resolution.</>}
                               </label>
                               <button type="button"
                                 disabled={!campaignTriageConfirmed || campaignTriageBusy}
