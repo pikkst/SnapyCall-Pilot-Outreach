@@ -189,9 +189,11 @@ export async function searchWithGemini({ query, limit, model, apiKey }, post, si
 // pricing authorization. A future worker must reserve a reviewed combined
 // retrieval + text-only tariff, preflight actual input tokens and then send
 // this payload once under its existing tenant/task lease.
-export function buildGemini3TextOnlyPayload({ query, limit, manifest }) {
+export function buildGemini3TextOnlyPayload({ query, limit, manifest, maxInputTokens }) {
   if (typeof query !== "string" || query.trim().length < 12 ||
-      query.length > 350 || !Number.isInteger(limit) || limit < 1 || limit > 20) {
+      query.length > 350 || !Number.isInteger(limit) || limit < 1 || limit > 20 ||
+      !Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
+      maxInputTokens > 1_000_000) {
     throw new TypeError("Invalid text-only research criteria");
   }
   // Verify the manifest digest using the existing canonical evidence contract,
@@ -218,7 +220,7 @@ export function buildGemini3TextOnlyPayload({ query, limit, manifest }) {
     JSON.stringify(references),
   ].join("\n");
   if (prompt.length > 40_000) throw new TypeError("Text-only prompt exceeds size limit");
-  return {
+  const payload = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       maxOutputTokens: 2048,
@@ -228,6 +230,17 @@ export function buildGemini3TextOnlyPayload({ query, limit, manifest }) {
     // No native Google Search, function tools, URL context, or dynamic tools.
     // Do not add a tools property to this payload.
   };
+  // Text character count does not bound Gemini input tokens. UTF-8 request
+  // bytes plus fixed headroom are a conservative local rejection bound for
+  // text-only BPE input, including non-ASCII snippets and JSON escaping.
+  // This is NOT provider-certified token counting or dispatch authorization.
+  // A future paid worker must also enforce the reviewed model tariff and
+  // provider countTokens preflight before consuming its reserved call.
+  const conservativeInputUnits = Buffer.byteLength(JSON.stringify(payload), "utf8") + 256;
+  if (conservativeInputUnits > maxInputTokens) {
+    throw new TypeError("Text-only input exceeds approved token ceiling");
+  }
+  return payload;
 }
 
 // Interpret a response only AFTER an independently authorized provider call.
