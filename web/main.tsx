@@ -2484,8 +2484,75 @@ function App() {
                               disabled={campaignObservationsStatus === "loading"}>
                               {campaignObservationsStatus === "idle" ? "View findings" : "Refresh findings"}
                             </button>
+                            {["COMPLETED", "PARTIAL"].includes(campaignProgress.status) &&
+                              <button type="button" className="secondary"
+                                disabled={qualifiedManifestBusy}
+                                onClick={() => void loadQualifiedContactManifest(
+                                  p.id, campaignProgress.id)}>
+                                {qualifiedManifest ? "Refresh qualified contacts" :
+                                  "Review qualified emails"}
+                              </button>}
                           </div>
                         </div>
+                        {qualifiedManifest && ["COMPLETED", "PARTIAL"].includes(
+                          campaignProgress.status) && <section
+                            className="qualified-contact-review"
+                            aria-label="Qualified email contacts for batch review">
+                          <div className="qualified-contact-header">
+                            <strong>{qualifiedManifest.selectedCount} verified-source
+                              email pairs</strong>
+                            <span className="muted">Review evidence only — not send-eligible</span>
+                          </div>
+                          {!qualifiedManifest.reliable && <p role="alert">
+                            The saved evidence snapshot is incomplete. No batch can be approved.
+                          </p>}
+                          {qualifiedManifest.batch ? <p role="status">
+                            Batch {qualifiedManifest.batch.status.toLowerCase()}:
+                            {" "}{qualifiedManifest.batch.saved} /
+                            {qualifiedManifest.batch.itemCount} saved,
+                            {" "}{qualifiedManifest.batch.needsReview} require review.
+                            No messages are sent.
+                          </p> : <>
+                            <ul className="qualified-contact-list">
+                              {qualifiedManifest.entries.map(entry => <li
+                                key={entry.observationId}>
+                                <span><strong>{entry.name}</strong>
+                                  {" · "}{entry.category}</span>
+                                <span>{entry.email}</span>
+                                <a href={entry.sourceUrl} target="_blank"
+                                  rel="noopener noreferrer">Public evidence</a>
+                              </li>)}
+                            </ul>
+                            {qualifiedManifest.selectedCount > 0 &&
+                              qualifiedManifest.reliable &&
+                              qualifiedManifest.batchEnabled && <>
+                              <label className="campaign-contact-confirm">
+                                <input type="checkbox"
+                                  checked={qualifiedBatchConfirmed}
+                                  onChange={event => setQualifiedBatchConfirmed(
+                                    event.target.checked)}/>
+                                I have reviewed all {qualifiedManifest.selectedCount}
+                                {" "}displayed name, email and source pairs.
+                                Save them as review-pending contacts. This does
+                                not verify mailbox delivery or authorize sending.
+                              </label>
+                              <button type="button"
+                                disabled={!qualifiedBatchConfirmed ||
+                                  qualifiedManifestBusy}
+                                onClick={() => void approveQualifiedContactBatchFromManifest(
+                                  p.id, campaignProgress.id)}>
+                                {qualifiedManifestBusy ? "Approving…" :
+                                  "Save reviewed contact batch"}
+                              </button>
+                            </>}
+                            {!qualifiedManifest.batchEnabled &&
+                              <p className="muted">Batch contact saving is not
+                                enabled in this environment.</p>}
+                          </>}
+                          {qualifiedBatchNotice && <p role="status">
+                            {qualifiedBatchNotice}
+                          </p>}
+                        </section>}
                         {campaignProgress.operationalState === "QUALITY_STOP" &&
                           <p role="alert" className="campaign-blocker">
                             Research stopped after three consecutive responses
