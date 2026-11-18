@@ -323,7 +323,7 @@ test("Gemini 3 text-only contract has no search tools, external call or browser 
   const { buildGemini3TextOnlyPayload } =
     await import("../server/research-provider-adapters.js");
   const manifest = await textOnlyManifestFixture();
-  const payload = buildGemini3TextOnlyPayload({ query, limit: 3, manifest });
+  const payload = buildGemini3TextOnlyPayload({ maxInputTokens: 16_384, query, limit: 3, manifest });
   assert.equal(Object.hasOwn(payload, "tools"), false);
   assert.deepEqual(payload.generationConfig.thinkingConfig, { thinkingLevel: "minimal" });
   assert.equal(payload.generationConfig.maxOutputTokens, 2048);
@@ -381,10 +381,10 @@ test("Gemini text-only response rejects generated search metadata and incomplete
   ]) assert.throws(() => parseGemini3TextOnlyResponse({
     manifest, limit: 3, response,
   }));
-  assert.throws(() => buildGemini3TextOnlyPayload({
+  assert.throws(() => buildGemini3TextOnlyPayload({ maxInputTokens: 16_384,
     query: "tiny", limit: 3, manifest,
   }), TypeError);
-  assert.throws(() => buildGemini3TextOnlyPayload({
+  assert.throws(() => buildGemini3TextOnlyPayload({ maxInputTokens: 16_384,
     query, limit: 3, manifest: { ...manifest, digest: "0".repeat(64) },
   }), TypeError);
 });
@@ -437,7 +437,7 @@ test("bounded Tavily normalization yields only provider-returned HTTPS evidence"
   assert.equal(result.manifest.records[0].sourceId.length, 64);
   assert.equal(result.reportedCredits, 1);
   assert.equal(result.billableCallPossible, true);
-  const prompt = buildGemini3TextOnlyPayload({
+  const prompt = buildGemini3TextOnlyPayload({ maxInputTokens: 16_384,
     query, limit: 3, manifest: result.manifest,
   });
   assert.equal(Object.hasOwn(prompt, "tools"), false);
@@ -512,7 +512,7 @@ test("bounded research stages compose without external calls or contact promotio
     maxResults: retrievalRequest.max_results,
     observedAt: "2026-11-18T00:00:00.000Z",
   });
-  const request = buildGemini3TextOnlyPayload({
+  const request = buildGemini3TextOnlyPayload({ maxInputTokens: 16_384,
     query, limit: 2, manifest: retrieval.manifest,
   });
   assert.equal(Object.hasOwn(request, "tools"), false);
@@ -556,4 +556,43 @@ test("bounded research stages compose without external calls or contact promotio
     provider: "gemini", model: "gemini-3-flash-preview",
     ...quote,
   }), ResearchPricingUnavailable);
+});
+
+test("Gemini text-only preflight requires a server-owned max input ceiling", async () => {
+  const { buildGemini3TextOnlyPayload } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  for (const maxInputTokens of [undefined, null, -1, 0, 256, 1.5, "16384", 1_000_001]) {
+    assert.throws(() => buildGemini3TextOnlyPayload({
+      query, limit: 3, manifest, maxInputTokens,
+    }), TypeError);
+  }
+  assert.throws(() => buildGemini3TextOnlyPayload({
+    query, limit: 3, manifest, maxInputTokens: 257,
+  }), /exceeds approved token ceiling/);
+});
+
+test("Gemini text-only preflight bounds UTF-8 and escaped source excerpts", async () => {
+  const { buildGemini3TextOnlyPayload } =
+    await import("../server/research-provider-adapters.js");
+  const { buildBoundedRetrievalManifest } =
+    await import("../server/research-evidence.js");
+  const manifest = buildBoundedRetrievalManifest({
+    provider: "synthetic_test",
+    observedAt: "2026-11-18T00:00:00.000Z",
+    records: [{
+      sourceId: "oversized-1",
+      url: "https://consultants.example.org/oversized",
+      title: "Unicode excerpts",
+      excerpt: "🤖".repeat(350),
+    }],
+  });
+  assert.throws(() => buildGemini3TextOnlyPayload({
+    query, limit: 3, manifest, maxInputTokens: 1500,
+  }), /exceeds approved token ceiling/);
+  const result = buildGemini3TextOnlyPayload({
+    query, limit: 3, manifest, maxInputTokens: 16_384,
+  });
+  assert.equal(Object.hasOwn(result, "tools"), false);
+  assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") + 256 <= 16_384);
 });
