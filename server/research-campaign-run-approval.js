@@ -1,4 +1,4 @@
-// A durable, immutable approval envelope for at most 24 independently
+// A durable, immutable approval envelope for at most 250 independently
 // metered campaign research calls. User approval never authorizes sending.
 import { lockActiveWorkspaceMembership } from "./workspace-access.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
@@ -18,7 +18,7 @@ export function validateCampaignRunApproval(value) {
       Object.keys(value).some(k => !["maxTasks", "maxWorstCaseCents",
         "confirmConservativeBudget", "confirmNoAutomaticRetry"].includes(k)) ||
       !Number.isInteger(value.maxTasks) || value.maxTasks < 1 ||
-      value.maxTasks > 24 || !Number.isSafeInteger(value.maxWorstCaseCents) ||
+      value.maxTasks > 250 || !Number.isSafeInteger(value.maxWorstCaseCents) ||
       value.maxWorstCaseCents < 1 || value.maxWorstCaseCents > 50000 ||
       value.confirmConservativeBudget !== true ||
       value.confirmNoAutomaticRetry !== true) {
