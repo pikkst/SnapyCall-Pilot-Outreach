@@ -1042,6 +1042,7 @@ test("bounded dual-provider pipeline stops after unusable Tavily results", async
   assert.deepEqual(events, ["tavily"]);
   assert.equal(result.status, "NO_USABLE_EVIDENCE");
   assert.equal(result.candidates.length, 0);
+  assert.deepEqual(result.sources, []);
   assert.equal(result.reportedRetrievalCredits, 1);
   assert.equal(result.billableCallPossible, true);
   assert.equal(result.automaticRetryAllowed, false);
@@ -1111,4 +1112,54 @@ test("bounded dual-provider pipeline marks ambiguous provider calls non-retryabl
   }), error => error.code === "DUAL_PROVIDER_OUTCOME_UNCERTAIN" &&
     error.billableCallPossible && !error.automaticRetryAllowed);
   assert.equal(calls, 3);
+});
+
+test("dual-provider results are compatible with the existing worker observation contract", async () => {
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const { normalizeCampaignObservations } =
+    await import("../server/research-campaign-observations.js");
+  const { createHash } = await import("node:crypto");
+  const sourceId = createHash("sha256").update(source, "utf8").digest("hex");
+  const config = {
+    query, limit: 2, maxResults: 2, observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  };
+  const noEvidence = await runBoundedTavilyGemini3Stages(config, {
+    tavilyPost: async () => ({ results: [], usage: { credits: 1 } }),
+    geminiPost: async () => {
+      throw new Error("Gemini must not run without retrieval evidence");
+    },
+  });
+  assert.deepEqual(normalizeCampaignObservations(noEvidence, 2), []);
+  assert.equal(noEvidence.reportedRetrievalCredits, 1);
+  assert.equal(noEvidence.billableCallPossible, true);
+  assert.equal(noEvidence.automaticRetryAllowed, false);
+
+  const evidence = await runBoundedTavilyGemini3Stages(config, {
+    tavilyPost: async () => ({ results: [{
+      url: source,
+      title: "Source-cited professional",
+      content: "Verified Professional provides AI automation consulting.",
+    }], usage: { credits: 1 } }),
+    geminiPost: async url => url.endsWith(":countTokens")
+      ? { totalTokens: 850 }
+      : {
+        candidates: [{ finishReason: "STOP", content: { parts: [{
+          text: JSON.stringify({ candidates: [{
+            name: "Verified Professional",
+            category: "AI_AUTOMATION",
+            sourceId, rationale: "Public profile confirms consulting work",
+          }] }),
+        }] } }],
+      },
+  });
+  const normalized = normalizeCampaignObservations(evidence, 2);
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0].name, "Verified Professional");
+  assert.equal(normalized[0].citationUrl, source);
+  assert.equal(normalized[0].status, "UNVERIFIED");
+  assert.equal(evidence.sendingEnabled, false);
+  assert.equal(evidence.imported, false);
 });
