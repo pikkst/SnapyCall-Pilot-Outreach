@@ -43,6 +43,7 @@ model Candidate {
   @@unique([workspaceId, emailNormalized])
   @@unique([workspaceId, discoveryKey])
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, removedAt, createdAt])
   @@index([category, status])
 }
 model AiSetting {
