@@ -3192,6 +3192,13 @@ function App() {
                               request, new budget reservation or retry was issued
                               during this wait. The server checks again automatically.
                             </p>}
+                          {campaignRunApproval.run.lastCode === "WAITING_DAILY_QUOTA" &&
+                            <p role="status" className="muted">
+                              Daily research quota reached. Waiting for the next UTC day;
+                              your original run approval and budget ceiling remain unchanged.
+                              No paid request is repeated during this wait. If the approval
+                              expires first, the run will stop for review.
+                            </p>}
                           {campaignRunApproval.run.lastCode === "WAITING_RETRY" &&
                             <p role="status" className="muted">
                               Waiting for the next eligible task. The existing
@@ -3199,7 +3206,8 @@ function App() {
                               during this wait. Progress updates automatically.
                             </p>}
                           {campaignRunApproval.run.lastCode &&
-                            !["WAITING_RETRY", "WAITING_RATE_LIMIT"].includes(
+                            !["WAITING_RETRY", "WAITING_RATE_LIMIT",
+                              "WAITING_DAILY_QUOTA"].includes(
                               campaignRunApproval.run.lastCode) &&
                             <p role="alert">Attention: {campaignRunApproval.run.lastCode.replaceAll("_", " ")}</p>}
                           <p className="muted">This is a conservative application budget,
