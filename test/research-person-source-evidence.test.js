@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { verifyPersonSourceProposal }
   from "../server/research-person-source-evidence.js";
-import { observationInspectionSource }
+import { observationInspectionSource, inspectCampaignObservationEmail }
   from "../server/research-observation-email.js";
 import { summarizeQualifiedEmailEvidence }
   from "../server/research-qualified-evidence.js";
@@ -203,4 +203,20 @@ test("opaque or forged proposal cannot authorize fetching a profile", async () =
   });
   assert.equal(result.code, "DIRECT_PERSON_SOURCE_REQUIRED");
   assert.equal(f.state.fetched, 0);
+});
+
+test("existing review intake re-inspects independently verified person source", async () => {
+  const f = fixture();
+  await verifyPersonSourceProposal(f.db, scope, {
+    retrieve: f.retrieve, now: () => clock,
+  });
+  const result = await inspectCampaignObservationEmail(f.db, {
+    campaignId: scope.campaignId, observationId: observation.id,
+    workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+  }, { retrieve: f.retrieve });
+  assert.equal(result.code, "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED");
+  assert.equal(result.sourceUrl, url);
+  assert.equal(result.observedEmail, "ada@example.org");
+  assert.equal(result.evidenceDigest, f.state.row.emailTriageDigest);
+  assert.equal(result.sendingEnabled, false);
 });
