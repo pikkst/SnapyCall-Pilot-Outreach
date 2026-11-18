@@ -66,3 +66,53 @@ Do not put real credentials or Google refresh tokens in the repository. The Rend
 - [#31 Partner/admin dashboard parity and member-management permissions](https://github.com/pikkst/SnapyCall-Pilot-Outreach/issues/31)
 
 *This README describes implemented behavior separately from planned work. Do not treat an authorized connector, a merged foundation, or a green CI as proof that an optional external integration is activated.*
+
+
+## Gemini 3 Flash + Tavily Basic research pipeline (AI98)
+
+The backend contains a bounded two-provider discovery route intended for the
+**existing** owner-scoped campaign worker. **It is not activated.** The exact
+`gemini:gemini-3-flash-preview` price entry in
+`server/research-price-policy.js` is deliberately `enforcementReady: false`,
+so `requireResearchPriceEnvelope` rejects execution before claiming a task,
+decrypting a user Gemini key, reserving spend or contacting either provider.
+Changing environment variables alone does **not** enable paid research.
+
+A future operator must independently review and confirm all of the following
+before explicitly approving a production price-policy change:
+
+- Tavily's applicable plan/ToS, allowed commercial use and contact-data
+  restrictions; publisher rights and lawful grounds for any personal outreach.
+  Discovery returns **review-only** experts with source citations, not emails,
+  automatically imported contacts, mailing approval or sending permission.
+- A server-managed `TAVILY_API_KEY`, entered into Render **only on the
+  server** (never `VITE_*`, client bundles, logs or GitHub). Verify the actual
+  provider-account hard credit cutoff, spending reports and ability to stop
+  further requests. The boolean `TAVILY_ACCOUNT_CAP_VERIFIED=true` merely
+  records operator attestation; it cannot enforce a real external cap.
+- Explicit `TAVILY_DUAL_PROVIDER_ENABLED=true` only after the above verification.
+  User Gemini key stays in the existing encrypted BYOK `AiSetting` storage
+  and is decrypted only by the existing owner-scoped worker.
+- Exact dated, reviewed Tavily + Gemini tariffs, billing units and quotas
+  documented and enabled in the server-only price registry. Review the
+  maximum 1 Tavily Basic call + 16,384 Gemini input tokens + 2,048 total
+  output/thinking tokens. The staged $0.03 worst-case **USD** quote is not a
+  guarantee of the account's actual invoice or applicable surcharges.
+- The usual authenticated workspace membership, explicit campaign run
+  approval, `reserveApprovedRunCall`, `reserveOwnerSpend`, tenant-scoped
+  concurrency and attempt quotas. The existing campaign row and owner budget
+  locks must be held before either provider is called.
+
+Execution is limited to one Tavily POST, one Gemini `countTokens`, one
+`generateContent`, then cited review-only observations. Each task reuses
+`runOneCampaignTask` and `commitCampaignResearchResult`; no parallel
+endpoint or database migration was added. A timeout or partial result is
+never automatically replayed; incomplete provider billing evidence settles
+against the full pre-reserved ceiling. Audit stores fixed stage identifiers,
+never provider payloads or credentials.
+
+Before release: verify account limits outside the repository, confirm the
+pricing policy in code, run exact-HEAD CI, test Gemini key authorization and
+owner-budget exhaustion, validate source quality/no-email behavior in staging,
+and explicitly authorize merge and deployment. A verified test search must be
+separately approved because it can incur upstream charges.
