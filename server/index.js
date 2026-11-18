@@ -21,12 +21,15 @@ import { GEMINI3_TEST_MODEL, GEMINI3_TEST_RESERVE_CENTS, GEMINI3_TEST_ACTION,
 import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
+import { approvePersonSourceResearch } from "./research-person-source-approval.js";
 import { approveCampaignRun, stopApprovedCampaignRun,
   publicRunStatus, ApprovedRunBlocked }
   from "./research-campaign-run-approval.js";
 import { startApprovedCampaignWorker } from "./research-approved-runner.js";
 import { normalizeManualResearchSources, enqueueManualResearchSources } from "./research-manual-sources.js";
 import { inspectCampaignObservationEmail } from "./research-observation-email.js";
+import { summarizeQualifiedEmailEvidence } from "./research-qualified-evidence.js";
+import { planPersonSourceResolution, publicPersonSourcePlan } from "./research-person-source-plan.js";
 import { approveEmailTriage, stopEmailTriage, emailTriageSummary,
   emailTriageSourceReadiness, startEmailTriageWorker }
   from "./research-email-triage-worker.js";
@@ -1799,6 +1802,7 @@ app.post("/api/research-campaigns/:id/email-triage/start",
     const input = z.object({
       maxPages: z.number().int().min(1).max(250),
       confirmPublicInspection: z.literal(true),
+      confirmSkipUninspectable: z.literal(true).optional(),
     }).strict().parse(req.body ?? {});
     const result = await approveEmailTriage(prisma, {
       campaignId: req.params.id, workspaceId: req.candidateScope,
@@ -1846,14 +1850,20 @@ app.get("/api/research-campaigns/:id/email-triage",
     // preflight or interpret inspectable as independently verified identity.
     const savedSources = await prisma.researchCampaignObservation.findMany({
       where: { campaignId: campaign.id },
-      select: { citationUrl: true, groundingStatus: true,
-        groundingResolvedUrl: true, groundingProvenance: true },
+      select: { id: true, citationUrl: true, groundingStatus: true,
+        groundingResolvedUrl: true, groundingProvenance: true,
+        name: true, category: true, emailTriageStatus: true,
+        emailTriageCode: true, emailTriageEmail: true,
+        emailTriageDigest: true, emailTriageAt: true },
       take: 251,
     });
     res.set("Cache-Control", "no-store");
     return res.json({
       ...emailTriageSummary(campaign, counts),
       preflight: emailTriageSourceReadiness(campaign.status, savedSources),
+      qualification: summarizeQualifiedEmailEvidence(savedSources),
+      sourceResolution: publicPersonSourcePlan(
+        planPersonSourceResolution(savedSources, { maxJobs: 0 })),
       enabled: env.AI_EMAIL_TRIAGE_ENABLED === "true",
     });
   }));
@@ -1902,6 +1912,32 @@ app.post("/api/research-campaigns/:id/observations/:observationId/accept-contact
 // New opt-in autonomous approval. Feature flag is OFF by default.
 // Only a clean, not-yet-executed campaign may be approved; all prices
 // and immutable attempt/cost caps come from verified server-side policy.
+// Separate, immutable source-enrichment budget. OFF by default; no provider
+// dispatch is wired here. Approval is not an outreach or contact permission.
+app.post("/api/research-campaigns/:id/person-source/approve",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (env.AI_PERSON_SOURCE_APPROVAL_ENABLED !== "true") {
+      return res.status(503).json({ code: "PERSON_SOURCE_APPROVAL_DISABLED" });
+    }
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const input = z.object({
+      maxCalls: z.number().int().min(1).max(250),
+      maxWorstCaseCents: z.number().int().min(1).max(50000),
+      confirmPaidSourceResearch: z.literal(true),
+      confirmNoAutomaticRetry: z.literal(true),
+    }).strict().parse(req.body ?? {});
+    const result = await approvePersonSourceResearch(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id, input,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
 app.post("/api/research-campaigns/:id/approve-run",
   candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
     if (env.AI_AGENT_RESEARCH_ENABLED !== "true" ||
