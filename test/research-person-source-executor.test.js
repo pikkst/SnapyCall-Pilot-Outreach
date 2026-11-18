@@ -109,6 +109,7 @@ function fixture({ member = true, campaignStatus = "PARTIAL",
     },
     researchPersonSourceJob: {
       findMany: async () => [job],
+      count: async () => 0,
       updateMany: async ({ data }) => {
         events.push("job-claimed");
         Object.assign(job, data, { attempts: job.attempts + 1 });
