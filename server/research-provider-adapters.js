@@ -243,6 +243,53 @@ export function buildGemini3TextOnlyPayload({ query, limit, manifest, maxInputTo
   return payload;
 }
 
+
+
+// Use the exact same contents as generateContent. Callers must send this
+// request to models/gemini-3-flash-preview:countTokens through the existing
+// trusted HTTP client, before a separately approved paid generation call.
+export function buildGemini3CountTokensRequest({ model, payload }) {
+  if (model !== "gemini-3-flash-preview" ||
+      !payload || Object.hasOwn(payload, "tools") ||
+      !Array.isArray(payload.contents) || payload.contents.length !== 1 ||
+      !Array.isArray(payload.contents[0]?.parts) ||
+      payload.contents[0].parts.length !== 1 ||
+      typeof payload.contents[0].parts[0]?.text !== "string" ||
+      !payload.contents[0].parts[0].text ||
+      payload.generationConfig?.maxOutputTokens !== 2048 ||
+      payload.generationConfig?.responseMimeType !== "application/json" ||
+      payload.generationConfig?.thinkingConfig?.thinkingLevel !== "minimal") {
+    throw new TypeError("Unapproved Gemini 3 text-only token count request");
+  }
+  return {
+    model: "gemini-3-flash-preview",
+    contents: payload.contents,
+  };
+}
+
+// Must be invoked with a response received from the trusted provider client,
+// never with a browser-supplied count. Reject missing, fractional, zero or
+// unexpectedly large counts. Counting input does not certify output/thinking
+// charges, price versions or paid dispatch authorization.
+export function requireGemini3CountTokensWithinBudget({
+  countRequest, countResponse, maxInputTokens,
+}) {
+  if (!Number.isSafeInteger(maxInputTokens) || maxInputTokens < 257 ||
+      maxInputTokens > 1_000_000 ||
+      countRequest?.model !== "gemini-3-flash-preview" ||
+      !Array.isArray(countRequest?.contents) ||
+      countRequest.contents.length !== 1) {
+    throw new TypeError("Invalid Gemini token budget envelope");
+  }
+  const actual = countResponse?.totalTokens;
+  if (!Number.isSafeInteger(actual) || actual <= 0 ||
+      actual > maxInputTokens) {
+    throw new TypeError("Gemini input token count unavailable or over budget");
+  }
+  return Object.freeze({ model: countRequest.model, inputTokens: actual,
+    maxInputTokens });
+}
+
 // Interpret a response only AFTER an independently authorized provider call.
 // Usage is telemetry only: no billingEvidence, refunds, or search charges are
 // certified by this parser. Missing/ambiguous billing is handled by the worker.
