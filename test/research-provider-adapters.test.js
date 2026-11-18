@@ -663,3 +663,73 @@ test("Gemini countTokens preflight denies mismatched contents and invalid respon
   assert.throws(() => check({ totalTokens: 850 }), TypeError,
     "Changes to generation contents after countTokens must invalidate preflight");
 });
+
+
+test("trusted Gemini 3 token preflight sends countTokens, never generateContent", async () => {
+  const { buildGemini3TextOnlyPayload, countGemini3TextOnlyInput } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const signal = new AbortController().signal;
+  let calls = 0;
+  const result = await countGemini3TextOnlyInput({
+    model: "gemini-3-flash-preview", payload,
+    maxInputTokens: 16_384, apiKey: "test-only-user-key",
+  }, async (url, headers, body, passedSignal) => {
+    calls++;
+    assert.equal(url,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:countTokens");
+    assert.equal(headers["x-goog-api-key"], "test-only-user-key");
+    assert.deepEqual(body, {
+      model: "gemini-3-flash-preview", contents: payload.contents,
+    });
+    assert.equal(passedSignal, signal);
+    assert.equal(Object.hasOwn(body, "tools"), false);
+    return { totalTokens: 975 };
+  }, signal);
+  assert.equal(calls, 1);
+  assert.equal(result.inputTokens, 975);
+  assert.equal(result.maxInputTokens, 16_384);
+});
+
+test("trusted Gemini 3 token preflight never authorizes invalid or drifting requests", async () => {
+  const { buildGemini3TextOnlyPayload, countGemini3TextOnlyInput } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  let countCalls = 0;
+  const post = async () => {
+    countCalls++;
+    return { totalTokens: 975 };
+  };
+  for (const override of [
+    { apiKey: "tiny" },
+    { maxInputTokens: 0 },
+    { model: "gemini-2.5-flash" },
+    { payload: { ...payload, tools: [{ google_search: {} }] } },
+  ]) {
+    await assert.rejects(() => countGemini3TextOnlyInput({
+      model: "gemini-3-flash-preview", payload, maxInputTokens: 16_384,
+      apiKey: "test-only-user-key", ...override,
+    }, post), TypeError);
+  }
+  assert.equal(countCalls, 0, "Invalid envelopes must reject before HTTP");
+  await assert.rejects(() => countGemini3TextOnlyInput({
+    model: "gemini-3-flash-preview", payload, maxInputTokens: 16_384,
+    apiKey: "test-only-user-key",
+  }, async () => ({ totalTokens: 20_000 })), TypeError);
+
+  const original = payload.contents[0].parts[0].text;
+  await assert.rejects(() => countGemini3TextOnlyInput({
+    model: "gemini-3-flash-preview", payload, maxInputTokens: 16_384,
+    apiKey: "test-only-user-key",
+  }, async () => {
+    payload.contents[0].parts[0].text += " Unexpected mutation";
+    return { totalTokens: 975 };
+  }), TypeError);
+  payload.contents[0].parts[0].text = original;
+});
