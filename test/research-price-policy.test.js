@@ -314,3 +314,34 @@ test("combined quote rounds both Gemini input and output components upward indep
     worstCaseCents: 3, enforcementReady: false,
   });
 });
+
+
+test("published Nov 2026 Tavily Basic plus Gemini 3 Flash quote stays non-authorizing", () => {
+  // Official published standard rates, checked 2026-11-18:
+  // Tavily pay-as-you-go Basic Search: 1 credit = USD 0.008 per request.
+  // Gemini 3 Flash Preview: USD 0.50 / 1M input, USD 3 / 1M output
+  // (including thinking). These are public reference prices, NOT a verified
+  // owner tariff, provider credit hard-stop, exchange rate or license grant.
+  // https://docs.tavily.com/documentation/api-credits
+  // https://ai.google.dev/gemini-api/docs/pricing
+  const quote = calculateCombinedRetrievalAndTextCeilingCents({
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 800 },
+    textModel: {
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+  });
+  assert.deepEqual(quote, {
+    retrievalCents: 1,
+    textModelCents: 2,
+    worstCaseCents: 3,
+    enforcementReady: false,
+  });
+  assert.throws(() => requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-3-flash-preview", ...quote,
+  }), ResearchPricingUnavailable);
+  assert.equal(researchPriceReadiness({
+    setting: { provider: "gemini", model: "gemini-3-flash-preview" },
+    enabled: true, remainingCents: 50_000,
+  }).pricingStatus, "MODEL_PRICING_UNAVAILABLE");
+});
