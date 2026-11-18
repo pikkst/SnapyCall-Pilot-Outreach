@@ -596,3 +596,67 @@ test("Gemini text-only preflight bounds UTF-8 and escaped source excerpts", asyn
   assert.equal(Object.hasOwn(result, "tools"), false);
   assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") + 256 <= 16_384);
 });
+
+
+test("Gemini countTokens preflight matches the exact generation contents", async () => {
+  const { buildGemini3TextOnlyPayload, buildGemini3CountTokensRequest,
+    requireGemini3CountTokensWithinBudget } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const countRequest = buildGemini3CountTokensRequest({
+    model: "gemini-3-flash-preview", payload,
+  });
+  assert.deepEqual(countRequest, {
+    model: "gemini-3-flash-preview",
+    contents: payload.contents,
+  });
+  const approved = requireGemini3CountTokensWithinBudget({
+    payload, countRequest,
+    countResponse: { totalTokens: 850 }, maxInputTokens: 16_384,
+  });
+  assert.deepEqual(approved, {
+    model: "gemini-3-flash-preview",
+    inputTokens: 850, maxInputTokens: 16_384,
+  });
+  assert.equal(Object.isFrozen(approved), true);
+  assert.equal(Object.hasOwn(payload, "tools"), false);
+});
+
+test("Gemini countTokens preflight denies mismatched contents and invalid responses", async () => {
+  const { buildGemini3TextOnlyPayload, buildGemini3CountTokensRequest,
+    requireGemini3CountTokensWithinBudget } =
+    await import("../server/research-provider-adapters.js");
+  const manifest = await textOnlyManifestFixture();
+  const payload = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  const countRequest = buildGemini3CountTokensRequest({
+    model: "gemini-3-flash-preview", payload,
+  });
+  const check = (countResponse, change = {}) =>
+    requireGemini3CountTokensWithinBudget({
+      payload, countRequest, countResponse, maxInputTokens: 16_384,
+      ...change,
+    });
+  for (const countResponse of [
+    null, {}, { totalTokens: 0 }, { totalTokens: -1 },
+    { totalTokens: "850" }, { totalTokens: 1.5 },
+    { totalTokens: 16_385 },
+  ]) assert.throws(() => check(countResponse), TypeError);
+  assert.throws(() => check({ totalTokens: 850 }, {
+    countRequest: { ...countRequest, contents: [{
+      parts: [{ text: "Different prompt" }],
+    }] },
+  }), TypeError);
+  assert.throws(() => buildGemini3CountTokensRequest({
+    model: "gemini-2.5-flash", payload,
+  }), TypeError);
+  assert.throws(() => buildGemini3CountTokensRequest({
+    model: "gemini-3-flash-preview", payload: {
+      ...payload, tools: [{ google_search: {} }],
+    },
+  }), TypeError);
+});
