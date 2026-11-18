@@ -45,3 +45,15 @@ test("older plan success copy is hidden once an actual run is active", () => {
   assert.match(research, /!campaignProgress\?\.tasks\.completed/);
   assert.match(research, /campaignRunApproval\?\.run\?\.lastCode === "RUN_LIMIT_REACHED"/);
 });
+
+test("activity remains visible between polls, including approved and reconnecting states", () => {
+  assert.match(research, /research-run-activity/);
+  assert.match(research, /\["APPROVED", "RUNNING"\]\.includes\(campaignRunApproval\.run\.status\)/);
+  assert.match(research, /Research is running on the server/);
+  assert.match(research, /Waiting for the server to start searching/);
+  assert.match(research, /campaignProgressLiveWarning/);
+  assert.match(research, /Connection interrupted\. Reconnecting to the server/);
+  assert.match(research, /latest confirmed/);
+  assert.match(research, /research-run-loading/);
+  assert.match(research, /Connecting to saved research progress/);
+});
