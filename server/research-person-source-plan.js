@@ -73,7 +73,7 @@ export function planPersonSourceResolution(observations, {
     // owner scope, entitlement, source provenance and budget before dispatch.
     if (jobs.length < maxJobs) jobs.push(Object.freeze({
       observationId: row.id, name: identity.name, category: identity.category,
-      reason: source ? "SHARED_SOURCE" :
+      reason: source && frequencies.get(source) > 1 ? "SHARED_SOURCE" :
         row.emailTriageStatus === "NO_EMAIL" ? "ALTERNATE_EMAIL_SOURCE" :
         "PERSON_SOURCE_REQUIRED",
       // Query text is an instruction to an approved search adapter, not an URL.
