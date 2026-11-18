@@ -3,7 +3,8 @@
 import { z } from "zod";
 import { normalizeResearchEvidence } from "./research-evidence.js";
 import { discoverySearchGuidance } from "./research-discovery-guidance.js";
-import { searchWithOpenAI, searchWithGemini, ResearchEvidenceUnavailableError } from "./research-provider-adapters.js";
+import { searchWithOpenAI, searchWithGemini, runBoundedTavilyGemini3Stages,
+  ResearchEvidenceUnavailableError } from "./research-provider-adapters.js";
 
 // Preserve only provider HTTP status and a stable public error category.
 export class ResearchProviderHttpError extends Error {
@@ -46,6 +47,17 @@ export function publicResearchProviderFailure(status) {
   };
 }
 
+// Shared trusted transport for existing native search and bounded multi-provider
+// search. It has deliberately no built-in retry after potentially billed POSTs.
+async function trustedResearchPost(url, headers, payload, signal) {
+  const response = await fetch(url, {
+    method: "POST", headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(payload), signal,
+  });
+  if (!response.ok) throw new ResearchProviderHttpError(response.status);
+  return response.json();
+}
+
 export const researchInput = z.object({
   query: z.string().trim().min(12).max(350),
   limit: z.number().int().min(1).max(20).default(10),
@@ -79,14 +91,7 @@ export async function researchCandidates({ query, limit = 10, provider = "anthro
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
-    const post = options.post ?? (async (url, headers, payload, signal) => {
-      const response = await fetch(url, {
-        method: "POST", headers: { "content-type": "application/json", ...headers },
-        body: JSON.stringify(payload), signal,
-      });
-      if (!response.ok) throw new ResearchProviderHttpError(response.status);
-      return response.json();
-    });
+    const post = options.post ?? trustedResearchPost;
     if (provider === "openai") {
       return searchWithOpenAI({ query: input.query, limit: input.limit, model, apiKey },
         post, controller.signal);
@@ -138,4 +143,31 @@ export async function researchCandidates({ query, limit = 10, provider = "anthro
     // text from external sources to the browser or application logs.
     throw new ResearchProviderExecutionError();
   } finally { clearTimeout(timeout); }
+}
+
+
+// Trusted campaign-only dual search. Only the campaign worker may supply
+// the server-owned Tavily credential after price/lease/budget authorization.
+// This function does not grant price entitlement and is not an API endpoint.
+export async function researchTavilyGeminiCandidates({
+  query, limit, model, apiKey, tavilyApiKey, maxInputTokens, maxResults,
+}, { tavilyPost = trustedResearchPost, geminiPost = trustedResearchPost,
+  observedAt = () => new Date().toISOString() } = {}) {
+  const input = researchInput.parse({ query, limit });
+  if (model !== "gemini-3-flash-preview" || typeof observedAt !== "function") {
+    throw new TypeError("Approved bounded campaign model and clock required");
+  }
+  // A single deadline applies to both provider requests, strictly before the
+  // campaign's 120-second lease expiry. No automatic retry on abort.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 80_000);
+  try {
+    return await runBoundedTavilyGemini3Stages({
+      query: input.query, limit: input.limit, maxResults, model,
+      observedAt: observedAt(), tavilyApiKey, geminiApiKey: apiKey,
+      maxInputTokens,
+    }, { tavilyPost, geminiPost, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
