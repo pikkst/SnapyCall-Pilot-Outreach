@@ -276,6 +276,7 @@ model ResearchCampaign {
   tasks ResearchCampaignTask[]
   observations ResearchCampaignObservation[]
   manualSources ResearchCampaignSource[]
+  personSourceJobs ResearchPersonSourceJob[]
   approvedRun ResearchCampaignRun?
   // This is a separate no-provider-call authorization for reading public profiles.
   emailTriageStatus String @default("IDLE")
@@ -356,6 +357,7 @@ model ResearchCampaignObservation {
   // explicit source-backed, named-email review. Never by name alone.
   candidateId String?
   candidate Candidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  personSourceJob ResearchPersonSourceJob?
   observedAt DateTime @default(now())
   @@unique([campaignId, evidenceKey])
   @@index([campaignId, observedAt, id])
@@ -424,6 +426,29 @@ model CandidateDirectEmailObservation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([workspaceId, inspectedAt])
+}
+
+
+model ResearchPersonSourceJob {
+  id String @id @default(cuid())
+  campaignId String
+  campaign ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  observationId String @unique
+  observation ResearchCampaignObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  // Hash of the exact persisted observation used when this job was enqueued.
+  // Any later change must be reconciled, never silently accepted.
+  evidenceFingerprint String @db.Char(64)
+  reason String
+  status String @default("QUEUED")
+  attempts Int @default(0)
+  leaseToken String?
+  leaseUntil DateTime?
+  lastErrorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([campaignId, status, createdAt])
+  @@index([status, leaseUntil])
 }
 
 model ResearchCampaignSource {
