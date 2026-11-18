@@ -37,10 +37,9 @@ test("provider-specific paid search policies price Gemini grounded prompts and O
   }), null, "Gemini must retain the full reservation, never infer prompt fees from query counts");
 });
 
-test("all other models remain blocked despite the pilot activation", () => {
+test("unreviewed models remain blocked despite the bounded Gemini 3 pilot activation", () => {
   for (const config of [
     { provider: "openai", model: "gpt-4.1" },
-    { provider: "gemini", model: "gemini-3-flash-preview" },
     { provider: "gemini", model: "gemini-3.1-pro-preview" },
     { provider: "anthropic", model: "claude-sonnet-4-5" },
     { provider: "anthropic", model: "arbitrary-custom-model" },
@@ -182,18 +181,26 @@ test("certified Gemini grounded-prompt usage settles per prompt, not per query",
   }), null);
 });
 
-test("Gemini 3 pricing remains blocked before API dispatch regardless of available money", () => {
+test("bounded Gemini 3 tariff is server approved but still respects monetary readiness", () => {
   const config = { provider: "gemini", model: "gemini-3-flash-preview" };
-  for (const remainingCents of [100, 100_000, Number.MAX_SAFE_INTEGER]) {
+  const policy = requireResearchPriceEnvelope(config);
+  assert.equal(policy.enforcementReady, true);
+  assert.equal(policy.billingContractVersion, "tavily-basic-gemini3-text-v1");
+  assert.equal(policy.retrieval.maxRequests, 1);
+  assert.equal(policy.textModel.maxInputTokens, 16_384);
+  assert.equal(policy.textModel.maxOutputTokens, 2048);
+  assert.equal(policy.worstCaseCents, 3);
+  assert.equal(calculateResearchPricePolicyCeilingCents(policy), 3);
+  for (const remainingCents of [3, 100, 100_000]) {
     const state = researchPriceReadiness({
       setting: config, enabled: true, remainingCents,
     });
-    assert.deepEqual(state, {
-      provider: "gemini", model: "gemini-3-flash-preview",
-      pricingStatus: "MODEL_PRICING_UNAVAILABLE",
-      worstCaseCents: null, enforcedForPaidSearch: false,
-    });
+    assert.equal(state.enforcedForPaidSearch, true);
+    assert.equal(state.worstCaseCents, 3);
   }
+  assert.equal(researchPriceReadiness({
+    setting: config, enabled: true, remainingCents: 2,
+  }).enforcedForPaidSearch, false);
   const historical = researchPriceReadiness({
     setting: { provider: "gemini", model: "gemini-2.5-flash" },
     enabled: true, remainingCents: 500,
@@ -274,19 +281,20 @@ test("combined quote fails closed on missing, negative, fractional or excessive 
   assert.equal(calculateCombinedRetrievalAndTextCeilingCents({}), null);
 });
 
-test("a mathematical quote never unlocks Gemini 3 paid discovery", () => {
+test("client mathematical quote never overrides the approved dated Gemini 3 tariff", () => {
   const quote = calculateCombinedRetrievalAndTextCeilingCents(syntheticCombinedTariff);
   assert.equal(quote.enforcementReady, false);
-  assert.throws(() => requireResearchPriceEnvelope({
+  const approved = requireResearchPriceEnvelope({
     provider: "gemini", model: "gemini-3-flash-preview",
-    ...quote,
-  }), ResearchPricingUnavailable);
-  const state = researchPriceReadiness({
+    ...quote, worstCaseCents: 1, priceVersion: "user-injected",
+  });
+  assert.equal(approved.worstCaseCents, 3);
+  assert.equal(approved.priceVersion,
+    "tavily-basic-gemini3-flash-preview-2026-11-18");
+  assert.equal(researchPriceReadiness({
     setting: { provider: "gemini", model: "gemini-3-flash-preview" },
     enabled: true, remainingCents: 100_000,
-  });
-  assert.equal(state.enforcedForPaidSearch, false);
-  assert.equal(state.pricingStatus, "MODEL_PRICING_UNAVAILABLE");
+  }).enforcedForPaidSearch, true);
 });
 
 test("combined quote rounds both Gemini input and output components upward independently", () => {
@@ -317,7 +325,7 @@ test("combined quote rounds both Gemini input and output components upward indep
 });
 
 
-test("published Nov 2026 Tavily Basic plus Gemini 3 Flash quote stays non-authorizing", () => {
+test("published Nov 2026 dual-provider quote does not authorize browser-supplied rates", () => {
   // Official published standard rates, checked 2026-11-18:
   // Tavily pay-as-you-go Basic Search: 1 credit = USD 0.008 per request.
   // Gemini 3 Flash Preview: USD 0.50 / 1M input, USD 3 / 1M output
@@ -338,13 +346,16 @@ test("published Nov 2026 Tavily Basic plus Gemini 3 Flash quote stays non-author
     worstCaseCents: 3,
     enforcementReady: false,
   });
-  assert.throws(() => requireResearchPriceEnvelope({
+  const policy = requireResearchPriceEnvelope({
     provider: "gemini", model: "gemini-3-flash-preview", ...quote,
-  }), ResearchPricingUnavailable);
+  });
+  assert.equal(policy.priceVersion,
+    "tavily-basic-gemini3-flash-preview-2026-11-18");
+  assert.equal(policy.worstCaseCents, 3);
   assert.equal(researchPriceReadiness({
     setting: { provider: "gemini", model: "gemini-3-flash-preview" },
     enabled: true, remainingCents: 50_000,
-  }).pricingStatus, "MODEL_PRICING_UNAVAILABLE");
+  }).enforcedForPaidSearch, true);
 });
 
 
@@ -438,11 +449,12 @@ test("staged dual-provider tariff remains disabled even if external account swit
     },
   });
   assert.equal(shape, 3);
-  assert.throws(() => requireResearchPriceEnvelope({
+  const policy = requireResearchPriceEnvelope({
     provider: "gemini", model: "gemini-3-flash-preview",
-  }), ResearchPricingUnavailable);
+  });
+  assert.equal(policy.worstCaseCents, 3);
   assert.equal(researchPriceReadiness({
     setting: { provider: "gemini", model: "gemini-3-flash-preview" },
     enabled: true, remainingCents: 100_000,
-  }).enforcedForPaidSearch, false);
+  }).enforcedForPaidSearch, true);
 });
