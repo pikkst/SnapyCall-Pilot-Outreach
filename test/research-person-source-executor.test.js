@@ -126,6 +126,10 @@ function fixture({ member = true, campaignStatus = "PARTIAL",
         reservations.set(data.id, data);
       },
     },
+    // No historical exclusions exist in this clean fixture.
+    researchSpendAdjustment: {
+      aggregate: async () => ({ _sum: { excludedCents: null } }),
+    },
     researchSpendMonth: {
       upsert: async () => ({ reservedCents: 0, settledCents: 0 }),
       update: async () => { events.push("spend-ledger"); },

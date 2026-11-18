@@ -834,6 +834,7 @@ try {
       pricingStatus: "RESEARCH_DISABLED", worstCaseCents: 200,
       ledger: { monthUtc: new Date().toISOString().slice(0, 7) + "-01",
         reservedCents: 0, settledCents: 0, pendingReservations: 0,
+        historicalTestExcludedCents: 0, effectiveSettledCents: 0,
         availableCents: null, billingSource: "application-estimate" },
       reconciliation: { staleAfterMinutes: 5, staleReservations: 0,
         oldestPendingAt: null, needsReview: false },
@@ -859,6 +860,7 @@ try {
       pricingStatus: "RESEARCH_DISABLED", worstCaseCents: 200,
       ledger: { monthUtc: new Date().toISOString().slice(0, 7) + "-01",
         reservedCents: 0, settledCents: 0, pendingReservations: 0,
+        historicalTestExcludedCents: 0, effectiveSettledCents: 0,
         availableCents: 500, billingSource: "application-estimate" },
       reconciliation: { staleAfterMinutes: 5, staleReservations: 0,
         oldestPendingAt: null, needsReview: false },
@@ -932,6 +934,7 @@ try {
     const snapshot = await readOwnerBudgetSnapshot(partnerDb, member.id, budgetClock);
     assert.deepEqual(snapshot.ledger, {
       monthUtc: "2026-11-01", reservedCents: 0, settledCents: 450,
+      historicalTestExcludedCents: 0, effectiveSettledCents: 450,
       pendingReservations: 0, availableCents: 50,
       billingSource: "application-estimate",
     });
