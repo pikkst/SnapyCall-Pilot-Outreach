@@ -1062,6 +1062,8 @@ test("bounded dual-provider preflight rejects invalid second-provider settings b
     { geminiApiKey: "" }, { tavilyApiKey: "invalid" },
     { model: "gemini-2.5-flash" }, { maxInputTokens: 0 },
     { maxResults: 21 }, { query: "too short" },
+    { observedAt: "2026-11-18" },
+    { observedAt: "2026-13-18T00:00:00.000Z" },
   ]) await assert.rejects(() => runBoundedTavilyGemini3Stages({
     ...base, ...bad,
   }, {
