@@ -2665,7 +2665,12 @@ function App() {
                               {" $"}{(campaignRunApproval.priceEnvelope.worstCasePerCallCents / 100).toFixed(2)}
                               per attempt. The worker stops at your approved limit,
                               any uncertain billing response, or an expired lease.
-                              This does not search emails or send outreach.</p>
+                              {campaignRunApproval.fullRunEnabled
+                                ? " Opt in to the full run below to include " +
+                                  "email evidence and person-source stages. " +
+                                  "Sending remains disabled."
+                                : " This discovery-only run does not inspect " +
+                                  "email addresses or send outreach."}</p>
                             <label>Maximum paid research requests
                               <input type="number" min={1} max={250} step={1}
                                 value={campaignMaxTasks}
@@ -2674,9 +2679,44 @@ function App() {
                                   Math.max(1, Math.min(250, Math.trunc(
                                     Number(event.target.value) || 1))))}/>
                             </label>
+                            {campaignRunApproval.fullRunEnabled &&
+                              <section className="campaign-full-run-option"
+                                aria-label="Full research pipeline approval">
+                                <label className="campaign-contact-confirm">
+                                  <input type="checkbox"
+                                    checked={campaignApproveFullRun}
+                                    onChange={event => setCampaignApproveFullRun(
+                                      event.target.checked)}/>
+                                  One approved full run: discovery, public
+                                  email evidence inspection and bounded
+                                  person-source lookup, without further stage clicks.
+                                </label>
+                                {campaignApproveFullRun && <>
+                                  <label>Maximum additional paid source searches
+                                    <input type="number" min={1} max={250} step={1}
+                                      value={campaignSourceCalls}
+                                      disabled={campaignRunApprovalBusy}
+                                      onChange={event => setCampaignSourceCalls(
+                                        Math.max(1, Math.min(250, Math.trunc(
+                                          Number(event.target.value) || 1))))}/>
+                                  </label>
+                                  <p className="muted">Public profile inspection
+                                    is limited to 250 saved observations and
+                                    does not send email or accept contacts.
+                                    Uncertain charges are not retried.</p>
+                                </>}
+                              </section>}
                             <p>Maximum conservative approved spend:
-                              <strong>{" $"}{(campaignMaxTasks *
-                                campaignRunApproval.priceEnvelope.worstCasePerCallCents / 100).toFixed(2)}</strong></p>
+                              <strong>{" $"}{((campaignMaxTasks +
+                                (campaignApproveFullRun ? campaignSourceCalls : 0)) *
+                                campaignRunApproval.priceEnvelope.worstCasePerCallCents /
+                                  100).toFixed(2)}</strong></p>
+                            {((campaignMaxTasks +
+                              (campaignApproveFullRun ? campaignSourceCalls : 0)) *
+                              campaignRunApproval.priceEnvelope.worstCasePerCallCents) >
+                                50000 && <p role="alert">The total approval
+                                  exceeds the $500 hard ceiling. Reduce the
+                                  number of paid requests.</p>}
                             <label className="campaign-contact-confirm">
                               <input type="checkbox" checked={campaignNoReplayConfirmed}
                                 onChange={event => setCampaignNoReplayConfirmed(event.target.checked)}/>
@@ -2685,12 +2725,27 @@ function App() {
                               be automatically retried or refunded.
                             </label>
                             <button type="button"
-                              disabled={!campaignNoReplayConfirmed || campaignRunApprovalBusy}
+                              disabled={!campaignNoReplayConfirmed || campaignRunApprovalBusy ||
+                                ((campaignMaxTasks +
+                                  (campaignApproveFullRun ? campaignSourceCalls : 0)) *
+                                  campaignRunApproval.priceEnvelope.worstCasePerCallCents > 50000)}
                               onClick={() => void approveCampaignAutonomousRun(
                                 p.id, campaignProgress.id)}>
                               {campaignRunApprovalBusy ? "Saving approval…" : "Approve single run"}
                             </button>
                           </section>}
+                        {campaignRunApproval?.fullRun && <p role="status"
+                          className="research-full-run-progress">
+                          Full run: {campaignRunApproval.fullRun.status.replaceAll("_", " ")}
+                          {" · "}Goal: {campaignRunApproval.fullRun.targetQualifiedContacts}
+                          {" "}independently attributed emails
+                          {" · "}Maximum total reserve:
+                          {" $"}{(campaignRunApproval.fullRun.maxTotalWorstCaseCents /
+                            100).toFixed(2)}
+                          {campaignRunApproval.fullRun.lastCode &&
+                            " · " + campaignRunApproval.fullRun.lastCode}
+                          {" · "}Sending disabled
+                        </p>}
                         {campaignRunApprovalNotice && <p role="status">
                           {campaignRunApprovalNotice}</p>}
                         
