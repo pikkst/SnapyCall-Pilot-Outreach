@@ -2734,8 +2734,9 @@ function App() {
                             </button>
                           </>}
                         </details>
-                        <section className="campaign-observations"
-                          aria-label="Saved campaign findings">
+                        {campaignObservationsStatus !== "idle" &&
+                          <section className="campaign-observations"
+                            aria-label="Saved campaign findings">
                           <div className="campaign-observations-heading">
                             <div>
                               <h5>Saved research findings</h5>
@@ -2845,7 +2846,7 @@ function App() {
                                 p.id, campaignProgress.id, campaignObservationsCursor)}>
                               Load more saved findings
                             </button>}
-                        </section>
+                        </section>}
                         <details className="research-run-details" aria-label="Manual sources">
                           <summary>Add source URLs manually</summary>
                         <section className="campaign-manual-sources"
