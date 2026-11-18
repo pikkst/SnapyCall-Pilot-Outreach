@@ -81,8 +81,16 @@ type ApprovedCampaignRun = {
   maxWorstCaseCents: number; committedWorstCaseCents: number;
   lastCode: string | null; expiresAt: string; sendingEnabled: false;
 };
+type FullRunStatus = {
+  status: string; targetQualifiedContacts: number;
+  maxDiscoveryCalls: number; maxSourceCalls: number;
+  maxEmailInspectionPages: number; maxTotalWorstCaseCents: number;
+  lastCode: string | null; expiresAt: string;
+  contactAcceptanceAuthorized: false; sendingEnabled: false;
+};
 type CampaignRunApprovalState = {
   run: ApprovedCampaignRun | null; autonomousRunEnabled: boolean;
+  fullRun: FullRunStatus | null; fullRunEnabled: boolean;
   priceEnvelope: null | { provider: string; model: string;
     worstCasePerCallCents: number; priceVersion: string };
   sendingEnabled: false;
@@ -339,6 +347,8 @@ function App() {
   const [campaignRunApprovalBusy, setCampaignRunApprovalBusy] = useState(false);
   const [campaignRunApprovalNotice, setCampaignRunApprovalNotice] = useState("");
   const [campaignMaxTasks, setCampaignMaxTasks] = useState(10);
+  const [campaignApproveFullRun, setCampaignApproveFullRun] = useState(false);
+  const [campaignSourceCalls, setCampaignSourceCalls] = useState(40);
   const [campaignNoReplayConfirmed, setCampaignNoReplayConfirmed] = useState(false);
 
   const [campaignProgressLastSeen, setCampaignProgressLastSeen] = useState<number | null>(null);
@@ -954,15 +964,30 @@ function App() {
             maxWorstCaseCents: campaignMaxTasks * price.worstCasePerCallCents,
             confirmConservativeBudget: true,
             confirmNoAutomaticRetry: true,
+            ...(campaignApproveFullRun && campaignRunApproval?.fullRunEnabled ? {
+              fullRun: {
+                maxSourceCalls: campaignSourceCalls,
+                maxEmailInspectionPages: 250,
+                maxTotalWorstCaseCents:
+                  (campaignMaxTasks + campaignSourceCalls) *
+                    price.worstCasePerCallCents,
+                confirmPublicInspection: true,
+                confirmNoAutomaticRetry: true,
+                confirmNoAutomaticSending: true,
+              },
+            } : {}),
           }),
         });
       if (generation !== workspaceRequest.current ||
           request !== campaignProgressRequest.current) return;
       setCampaignRunApproval(current => current
         ? { ...current, run: result.run } : null);
-      setCampaignRunApprovalNotice("Campaign execution approved. The server " +
-        "will run within your saved ceiling while the worker is available. " +
-        "A provider/billing uncertainty stops the run without retry.");
+      setCampaignRunApprovalNotice(campaignApproveFullRun
+        ? "Full research run approved: discovery, bounded email inspection and " +
+          "source enrichment have one saved cost ceiling. Review and save contacts " +
+          "separately after evidence checks; no messages will be sent."
+        : "Campaign execution approved. The server will run within your saved " +
+          "ceiling. A provider/billing uncertainty stops the run without retry.");
       setCampaignNoReplayConfirmed(false);
     } catch (error) {
       if (generation === workspaceRequest.current &&
@@ -1185,6 +1210,8 @@ function App() {
     setCampaignRunApprovalBusy(false);
     setCampaignNoReplayConfirmed(false);
     setCampaignMaxTasks(10);
+    setCampaignApproveFullRun(false);
+    setCampaignSourceCalls(40);
     setCampaignGrounding(null);
     setCampaignGroundingBusy(false);
     setCampaignGroundingConfirmed(false);
