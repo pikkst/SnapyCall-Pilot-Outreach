@@ -84,8 +84,25 @@ export async function commitCampaignResearchResult(db, claim, preview,
       observedCount: observations.length, completionCode, now,
     });
     if (!applied) throw new CampaignLeaseConflict();
-    const saved = observations.length ? await tx.researchCampaignObservation.createMany({
-      data: observations.map(item => ({
+    const approvedFull = await tx.researchFullRun?.findUnique({
+      where: { campaignId: claim.campaignId },
+      select: { status: true, workspaceId: true, ownerId: true },
+    });
+    const fullDiscovery = approvedFull?.status === "DISCOVERY" &&
+      approvedFull.workspaceId === claim.workspaceId &&
+      approvedFull.ownerId === claim.ownerId;
+    const existingEvidence = fullDiscovery
+      ? await tx.researchCampaignObservation.count({
+        where: { campaignId: claim.campaignId },
+      }) : 0;
+    // Do not write beyond the 250-observation/email-inspection snapshot
+    // supported by this release, including when a single model call returns
+    // more results than remaining room. No claim of 100 validated emails.
+    const bounded = fullDiscovery
+      ? observations.slice(0, Math.max(0, 250 - existingEvidence))
+      : observations;
+    const saved = bounded.length ? await tx.researchCampaignObservation.createMany({
+      data: bounded.map(item => ({
         campaignId: claim.campaignId, taskId: claim.taskId,
         evidenceKey: item.evidenceKey, name: item.name, category: item.category,
         citationUrl: item.citationUrl, rationale: item.rationale,
@@ -197,6 +214,8 @@ export async function commitCampaignResearchResult(db, claim, preview,
       observed: observations.length,
       uniqueAdded: saved.count,
       duplicates: observations.length - saved.count,
+      ...(fullDiscovery ? { inspectionCap: 250,
+        omittedAtInspectionCap: observations.length - bounded.length } : {}),
       ...(terminalStatus ? { campaignStatus: terminalStatus } : {}),
     });
   });
