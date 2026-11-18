@@ -21,6 +21,7 @@ import { GEMINI3_TEST_MODEL, GEMINI3_TEST_RESERVE_CENTS, GEMINI3_TEST_ACTION,
 import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
+import { approvePersonSourceResearch } from "./research-person-source-approval.js";
 import { approveCampaignRun, stopApprovedCampaignRun,
   publicRunStatus, ApprovedRunBlocked }
   from "./research-campaign-run-approval.js";
@@ -1911,6 +1912,32 @@ app.post("/api/research-campaigns/:id/observations/:observationId/accept-contact
 // New opt-in autonomous approval. Feature flag is OFF by default.
 // Only a clean, not-yet-executed campaign may be approved; all prices
 // and immutable attempt/cost caps come from verified server-side policy.
+// Separate, immutable source-enrichment budget. OFF by default; no provider
+// dispatch is wired here. Approval is not an outreach or contact permission.
+app.post("/api/research-campaigns/:id/person-source/approve",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (env.AI_PERSON_SOURCE_APPROVAL_ENABLED !== "true") {
+      return res.status(503).json({ code: "PERSON_SOURCE_APPROVAL_DISABLED" });
+    }
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    const input = z.object({
+      maxCalls: z.number().int().min(1).max(250),
+      maxWorstCaseCents: z.number().int().min(1).max(50000),
+      confirmPaidSourceResearch: z.literal(true),
+      confirmNoAutomaticRetry: z.literal(true),
+    }).strict().parse(req.body ?? {});
+    const result = await approvePersonSourceResearch(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id, input,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
 app.post("/api/research-campaigns/:id/approve-run",
   candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
     if (env.AI_AGENT_RESEARCH_ENABLED !== "true" ||
