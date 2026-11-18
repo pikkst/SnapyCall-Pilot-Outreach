@@ -81,8 +81,16 @@ type ApprovedCampaignRun = {
   maxWorstCaseCents: number; committedWorstCaseCents: number;
   lastCode: string | null; expiresAt: string; sendingEnabled: false;
 };
+type FullRunStatus = {
+  status: string; targetQualifiedContacts: number;
+  maxDiscoveryCalls: number; maxSourceCalls: number;
+  maxEmailInspectionPages: number; maxTotalWorstCaseCents: number;
+  lastCode: string | null; expiresAt: string;
+  contactAcceptanceAuthorized: false; sendingEnabled: false;
+};
 type CampaignRunApprovalState = {
   run: ApprovedCampaignRun | null; autonomousRunEnabled: boolean;
+  fullRun: FullRunStatus | null; fullRunEnabled: boolean;
   priceEnvelope: null | { provider: string; model: string;
     worstCasePerCallCents: number; priceVersion: string };
   sendingEnabled: false;
@@ -339,6 +347,8 @@ function App() {
   const [campaignRunApprovalBusy, setCampaignRunApprovalBusy] = useState(false);
   const [campaignRunApprovalNotice, setCampaignRunApprovalNotice] = useState("");
   const [campaignMaxTasks, setCampaignMaxTasks] = useState(10);
+  const [campaignApproveFullRun, setCampaignApproveFullRun] = useState(false);
+  const [campaignSourceCalls, setCampaignSourceCalls] = useState(40);
   const [campaignNoReplayConfirmed, setCampaignNoReplayConfirmed] = useState(false);
 
   const [campaignProgressLastSeen, setCampaignProgressLastSeen] = useState<number | null>(null);
@@ -909,12 +919,15 @@ function App() {
   async function stopCampaignAutonomousRun(workspaceId: string, campaignId: string) {
     if (campaignRunApprovalBusy || activeWorkspaceId !== workspaceId ||
         campaignProgressId !== campaignId ||
-        !["APPROVED", "RUNNING"].includes(campaignRunApproval?.run?.status ?? "")) return;
+        !["APPROVED", "RUNNING"].includes(campaignRunApproval?.run?.status ?? "") &&
+        !["DISCOVERY", "EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING"].includes(
+          campaignRunApproval?.fullRun?.status ?? "")) return;
     const generation = workspaceRequest.current;
     const request = campaignProgressRequest.current;
     setCampaignRunApprovalBusy(true);
     try {
-      const result = await api<{ run: ApprovedCampaignRun }>(
+      const result = await api<{ run: ApprovedCampaignRun;
+        fullRun?: FullRunStatus }>(
         "/research-campaigns/" + encodeURIComponent(campaignId) +
         "/approved-run/stop?workspaceId=" + encodeURIComponent(workspaceId), {
           method: "POST", body: JSON.stringify({ confirmStop: true }),
@@ -922,7 +935,8 @@ function App() {
       if (generation !== workspaceRequest.current ||
           request !== campaignProgressRequest.current) return;
       setCampaignRunApproval(current => current
-        ? { ...current, run: result.run } : null);
+        ? { ...current, run: result.run,
+            fullRun: result.fullRun ?? null } : null);
       setCampaignRunApprovalNotice("Run stopped. An already dispatched provider call may still be billed; it will not be replayed.");
     } catch (error) {
       if (generation === workspaceRequest.current &&
@@ -954,15 +968,30 @@ function App() {
             maxWorstCaseCents: campaignMaxTasks * price.worstCasePerCallCents,
             confirmConservativeBudget: true,
             confirmNoAutomaticRetry: true,
+            ...(campaignApproveFullRun && campaignRunApproval?.fullRunEnabled ? {
+              fullRun: {
+                maxSourceCalls: campaignSourceCalls,
+                maxEmailInspectionPages: 250,
+                maxTotalWorstCaseCents:
+                  (campaignMaxTasks + campaignSourceCalls) *
+                    price.worstCasePerCallCents,
+                confirmPublicInspection: true,
+                confirmNoAutomaticRetry: true,
+                confirmNoAutomaticSending: true,
+              },
+            } : {}),
           }),
         });
       if (generation !== workspaceRequest.current ||
           request !== campaignProgressRequest.current) return;
       setCampaignRunApproval(current => current
         ? { ...current, run: result.run } : null);
-      setCampaignRunApprovalNotice("Campaign execution approved. The server " +
-        "will run within your saved ceiling while the worker is available. " +
-        "A provider/billing uncertainty stops the run without retry.");
+      setCampaignRunApprovalNotice(campaignApproveFullRun
+        ? "Full research run approved: discovery, bounded email inspection and " +
+          "source enrichment have one saved cost ceiling. Review and save contacts " +
+          "separately after evidence checks; no messages will be sent."
+        : "Campaign execution approved. The server will run within your saved " +
+          "ceiling. A provider/billing uncertainty stops the run without retry.");
       setCampaignNoReplayConfirmed(false);
     } catch (error) {
       if (generation === workspaceRequest.current &&
@@ -1185,6 +1214,8 @@ function App() {
     setCampaignRunApprovalBusy(false);
     setCampaignNoReplayConfirmed(false);
     setCampaignMaxTasks(10);
+    setCampaignApproveFullRun(false);
+    setCampaignSourceCalls(40);
     setCampaignGrounding(null);
     setCampaignGroundingBusy(false);
     setCampaignGroundingConfirmed(false);
@@ -2414,7 +2445,17 @@ function App() {
                         <div className="research-run-window" aria-label="Research run overview">
                           <div className="research-run-title">
                             <div>
-                              <strong>{campaignRunApproval?.run?.status === "RUNNING"
+                              <strong>{campaignRunApproval?.fullRun &&
+                                ["EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING"].includes(
+                                  campaignRunApproval.fullRun.status)
+                                ? "Verifying professional emails"
+                                : campaignRunApproval?.fullRun?.status === "READY_FOR_REVIEW"
+                                  ? "Verified email review ready"
+                                  : campaignRunApproval?.fullRun?.status === "PARTIAL"
+                                    ? "Partial qualified-email results"
+                                    : campaignRunApproval?.fullRun?.status === "NEEDS_REVIEW"
+                                      ? "Research needs attention"
+                                      : campaignRunApproval?.run?.status === "RUNNING"
                                 ? "Finding experts"
                                 : campaignRunApproval?.run?.status === "COMPLETED" ||
                                   ["COMPLETED", "PARTIAL"].includes(campaignProgress.status)
@@ -2422,7 +2463,16 @@ function App() {
                                   : campaignRunApproval?.run?.status === "PAUSED" ||
                                     ["PAUSED_REVIEW", "QUALITY_STOP"].includes(campaignProgress.operationalState)
                                     ? "Research needs attention" : "Ready to research"}</strong>
-                              <p className="muted">{campaignRunApproval?.run?.status === "RUNNING"
+                              <p className="muted">{campaignRunApproval?.fullRun &&
+                                ["EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING"].includes(
+                                  campaignRunApproval.fullRun.status)
+                                ? "The approved stages are continuing server-side. " +
+                                  "Only independently attributed emails count."
+                                : campaignRunApproval?.fullRun?.status === "READY_FOR_REVIEW"
+                                  ? "Review the qualified email pairs before saving contacts."
+                                  : campaignRunApproval?.fullRun?.status === "PARTIAL"
+                                    ? "The approved stages ended below the qualified email goal."
+                                    : campaignRunApproval?.run?.status === "RUNNING"
                                 ? "The search continues automatically. You can leave this page."
                                 : campaignRunApproval?.run?.lastCode === "RUN_LIMIT_REACHED"
                                   ? "Your approved search limit was reached."
@@ -2430,7 +2480,10 @@ function App() {
                                     ? "The approved run ended. Review the saved findings."
                                     : "Review findings or plan a new campaign."}</p>
                             </div>
-                            {campaignRunApproval?.run?.status === "RUNNING" &&
+                            {(campaignRunApproval?.run?.status === "RUNNING" ||
+                            (campaignRunApproval?.fullRun &&
+                              ["EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING"].includes(
+                                campaignRunApproval.fullRun.status))) &&
                               !campaignProgressLiveWarning &&
                               <span className="research-running-indicator"
                                 aria-hidden="true"/>}
@@ -2473,11 +2526,14 @@ function App() {
                           </div>
                           <div className="research-run-actions">
                             {campaignRunApproval?.run &&
-                              ["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
+                              (["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) ||
+                                ["DISCOVERY", "EMAIL_TRIAGE", "SOURCE_PREPARE",
+                                  "SOURCE_RUNNING"].includes(
+                                    campaignRunApproval.fullRun?.status ?? "")) &&
                               <button type="button" className="secondary"
                                 disabled={campaignRunApprovalBusy}
                                 onClick={() => void stopCampaignAutonomousRun(p.id, campaignProgress.id)}>
-                                Stop future searches
+                                Stop all future research
                               </button>}
                             <button type="button" className="secondary"
                               onClick={() => void loadCampaignObservations(p.id, campaignProgress.id)}
@@ -2638,7 +2694,12 @@ function App() {
                               {" $"}{(campaignRunApproval.priceEnvelope.worstCasePerCallCents / 100).toFixed(2)}
                               per attempt. The worker stops at your approved limit,
                               any uncertain billing response, or an expired lease.
-                              This does not search emails or send outreach.</p>
+                              {campaignRunApproval.fullRunEnabled
+                                ? " Opt in to the full run below to include " +
+                                  "email evidence and person-source stages. " +
+                                  "Sending remains disabled."
+                                : " This discovery-only run does not inspect " +
+                                  "email addresses or send outreach."}</p>
                             <label>Maximum paid research requests
                               <input type="number" min={1} max={250} step={1}
                                 value={campaignMaxTasks}
@@ -2647,9 +2708,44 @@ function App() {
                                   Math.max(1, Math.min(250, Math.trunc(
                                     Number(event.target.value) || 1))))}/>
                             </label>
+                            {campaignRunApproval.fullRunEnabled &&
+                              <section className="campaign-full-run-option"
+                                aria-label="Full research pipeline approval">
+                                <label className="campaign-contact-confirm">
+                                  <input type="checkbox"
+                                    checked={campaignApproveFullRun}
+                                    onChange={event => setCampaignApproveFullRun(
+                                      event.target.checked)}/>
+                                  One approved full run: discovery, public
+                                  email evidence inspection and bounded
+                                  person-source lookup, without further stage clicks.
+                                </label>
+                                {campaignApproveFullRun && <>
+                                  <label>Maximum additional paid source searches
+                                    <input type="number" min={1} max={250} step={1}
+                                      value={campaignSourceCalls}
+                                      disabled={campaignRunApprovalBusy}
+                                      onChange={event => setCampaignSourceCalls(
+                                        Math.max(1, Math.min(250, Math.trunc(
+                                          Number(event.target.value) || 1))))}/>
+                                  </label>
+                                  <p className="muted">Public profile inspection
+                                    is limited to 250 saved observations and
+                                    does not send email or accept contacts.
+                                    Uncertain charges are not retried.</p>
+                                </>}
+                              </section>}
                             <p>Maximum conservative approved spend:
-                              <strong>{" $"}{(campaignMaxTasks *
-                                campaignRunApproval.priceEnvelope.worstCasePerCallCents / 100).toFixed(2)}</strong></p>
+                              <strong>{" $"}{((campaignMaxTasks +
+                                (campaignApproveFullRun ? campaignSourceCalls : 0)) *
+                                campaignRunApproval.priceEnvelope.worstCasePerCallCents /
+                                  100).toFixed(2)}</strong></p>
+                            {((campaignMaxTasks +
+                              (campaignApproveFullRun ? campaignSourceCalls : 0)) *
+                              campaignRunApproval.priceEnvelope.worstCasePerCallCents) >
+                                50000 && <p role="alert">The total approval
+                                  exceeds the $500 hard ceiling. Reduce the
+                                  number of paid requests.</p>}
                             <label className="campaign-contact-confirm">
                               <input type="checkbox" checked={campaignNoReplayConfirmed}
                                 onChange={event => setCampaignNoReplayConfirmed(event.target.checked)}/>
@@ -2658,12 +2754,27 @@ function App() {
                               be automatically retried or refunded.
                             </label>
                             <button type="button"
-                              disabled={!campaignNoReplayConfirmed || campaignRunApprovalBusy}
+                              disabled={!campaignNoReplayConfirmed || campaignRunApprovalBusy ||
+                                ((campaignMaxTasks +
+                                  (campaignApproveFullRun ? campaignSourceCalls : 0)) *
+                                  campaignRunApproval.priceEnvelope.worstCasePerCallCents > 50000)}
                               onClick={() => void approveCampaignAutonomousRun(
                                 p.id, campaignProgress.id)}>
                               {campaignRunApprovalBusy ? "Saving approval…" : "Approve single run"}
                             </button>
                           </section>}
+                        {campaignRunApproval?.fullRun && <p role="status"
+                          className="research-full-run-progress">
+                          Full run: {campaignRunApproval.fullRun.status.replaceAll("_", " ")}
+                          {" · "}Goal: {campaignRunApproval.fullRun.targetQualifiedContacts}
+                          {" "}independently attributed emails
+                          {" · "}Maximum total reserve:
+                          {" $"}{(campaignRunApproval.fullRun.maxTotalWorstCaseCents /
+                            100).toFixed(2)}
+                          {campaignRunApproval.fullRun.lastCode &&
+                            " · " + campaignRunApproval.fullRun.lastCode}
+                          {" · "}Sending disabled
+                        </p>}
                         {campaignRunApprovalNotice && <p role="status">
                           {campaignRunApprovalNotice}</p>}
                         

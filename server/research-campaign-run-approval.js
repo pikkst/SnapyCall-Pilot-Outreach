@@ -2,6 +2,7 @@
 // metered campaign research calls. User approval never authorizes sending.
 import { lockActiveWorkspaceMembership } from "./workspace-access.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
+import { validateFullRunScope } from "./research-full-run-contract.js";
 
 const CUID = /^c[a-z0-9]{10,40}$/;
 const APPROVAL_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -36,7 +37,12 @@ export async function approveCampaignRun(db, {
       typeof id === "string" && CUID.test(id))) {
     throw new TypeError("Valid campaign owner scope required");
   }
-  const limits = validateCampaignRunApproval(input);
+  // A new full-run charter is one optional scope on the existing approval
+  // API. Legacy discovery approvals remain strict and unchanged.
+  const fullRequested = input && Object.prototype.hasOwnProperty.call(input, "fullRun");
+  const discoveryInput = fullRequested ? Object.fromEntries(
+    Object.entries(input).filter(([key]) => key !== "fullRun")) : input;
+  const limits = validateCampaignRunApproval(discoveryInput);
   const setting = await db.aiSetting.findUnique({ where: { ownerId },
     select: { provider: true, model: true } });
   if (!setting) return { status: 409, code: "RESEARCH_AI_SETTINGS_REQUIRED" };
@@ -46,6 +52,8 @@ export async function approveCampaignRun(db, {
       limits.maxWorstCaseCents > limits.maxTasks * price.worstCaseCents) {
     return { status: 409, code: "RUN_PRICE_ENVELOPE_INVALID" };
   }
+  const fullRun = fullRequested ? validateFullRunScope(
+    input.fullRun, limits, price) : null;
   return db.$transaction(async tx => {
     if (!await lockActiveWorkspaceMembership(tx, { workspaceId, userId: ownerId })) {
       return { status: 403, code: "WORKSPACE_ACCESS_REVOKED" };
@@ -57,6 +65,22 @@ export async function approveCampaignRun(db, {
         AND "ownerId" = ${ownerId} FOR UPDATE`;
     if (campaigns.length !== 1) return { status: 404, code: "CAMPAIGN_NOT_FOUND" };
     const prior = await tx.researchCampaignRun.findUnique({ where: { campaignId } });
+    if (prior && fullRun) {
+      const full = await tx.researchFullRun.findUnique({ where: { campaignId } });
+      const identical = full && full.workspaceId === workspaceId &&
+        full.ownerId === ownerId &&
+        full.provider === setting.provider && full.model === setting.model &&
+        full.priceVersion === price.priceVersion &&
+        full.maxDiscoveryCalls === limits.maxTasks &&
+        full.maxDiscoveryWorstCaseCents === limits.maxWorstCaseCents &&
+        full.maxSourceCalls === fullRun.maxSourceCalls &&
+        full.maxEmailInspectionPages === fullRun.maxEmailInspectionPages &&
+        full.maxTotalWorstCaseCents === fullRun.maxTotalWorstCaseCents &&
+        full.publicInspectionAuthorized === true;
+      return identical ? { status: 200, code: "FULL_RUN_ALREADY_APPROVED",
+        run: publicRunStatus(prior), fullRun: publicFullRunStatus(full) }
+        : { status: 409, code: "RUN_APPROVAL_IMMUTABLE" };
+    }
     if (prior) {
       const identical = prior.workspaceId === workspaceId &&
         prior.ownerId === ownerId && prior.provider === setting.provider &&
@@ -89,6 +113,30 @@ export async function approveCampaignRun(db, {
       maxTasks: limits.maxTasks, maxWorstCaseCents: limits.maxWorstCaseCents,
       expiresAt: new Date(Date.now() + APPROVAL_LIFETIME_MS),
     } });
+    let createdFullRun = null;
+    if (fullRun) {
+      const campaign = await tx.researchCampaign.findUnique({
+        where: { id: campaignId }, select: { targetCount: true },
+      });
+      if (!campaign || !Number.isInteger(campaign.targetCount) ||
+          campaign.targetCount < 20 || campaign.targetCount > 200) {
+        throw new TypeError("Valid saved campaign target required");
+      }
+      createdFullRun = await tx.researchFullRun.create({ data: {
+        campaignId, workspaceId, ownerId,
+        provider: setting.provider, model: setting.model,
+        priceVersion: price.priceVersion,
+        targetQualifiedContacts: campaign.targetCount,
+        maxDiscoveryCalls: limits.maxTasks,
+        maxSourceCalls: fullRun.maxSourceCalls,
+        maxEmailInspectionPages: fullRun.maxEmailInspectionPages,
+        maxDiscoveryWorstCaseCents: limits.maxWorstCaseCents,
+        maxSourceWorstCaseCents: fullRun.maxSourceWorstCaseCents,
+        maxTotalWorstCaseCents: fullRun.maxTotalWorstCaseCents,
+        publicInspectionAuthorized: true,
+        expiresAt: created.expiresAt,
+      } });
+    }
     await tx.auditEvent.create({ data: {
       actorId: ownerId, action: "research.campaign.run.approved",
       entityId: campaignId, metadata: {
@@ -97,9 +145,33 @@ export async function approveCampaignRun(db, {
         provider: setting.provider, model: setting.model,
         priceVersion: price.priceVersion,
         sendingEnabled: false, automaticBillableReplay: false,
+        ...(createdFullRun ? {
+          fullRunId: createdFullRun.id,
+          sourceCallCeiling: fullRun.maxSourceCalls,
+          totalWorstCaseCents: fullRun.maxTotalWorstCaseCents,
+          publicInspectionAuthorized: true,
+          contactAcceptanceAuthorized: false,
+        } : {}),
       },
     } });
-    return { status: 201, code: "RUN_APPROVED", run: publicRunStatus(created) };
+    return { status: 201,
+      code: createdFullRun ? "FULL_RUN_APPROVED" : "RUN_APPROVED",
+      run: publicRunStatus(created),
+      ...(createdFullRun ? { fullRun: publicFullRunStatus(createdFullRun) } : {}) };
+  });
+}
+
+export function publicFullRunStatus(run) {
+  if (!run) return null;
+  return Object.freeze({
+    status: run.status, targetQualifiedContacts: run.targetQualifiedContacts,
+    maxDiscoveryCalls: run.maxDiscoveryCalls,
+    maxSourceCalls: run.maxSourceCalls,
+    maxEmailInspectionPages: run.maxEmailInspectionPages,
+    maxTotalWorstCaseCents: run.maxTotalWorstCaseCents,
+    maxSourceWorstCaseCents: run.maxSourceWorstCaseCents,
+    lastCode: run.lastCode, expiresAt: run.expiresAt,
+    contactAcceptanceAuthorized: false, sendingEnabled: false,
   });
 }
 
@@ -300,24 +372,66 @@ export async function stopApprovedCampaignRun(db, {
     if (!run || run.workspaceId !== workspaceId || run.ownerId !== ownerId) {
       return { status: 404, code: "RUN_NOT_FOUND" };
     }
-    if (["PAUSED", "COMPLETED"].includes(run.status)) {
+    const charter = await tx.researchFullRun.findUnique({
+      where: { campaignId },
+    });
+    if (charter && (charter.ownerId !== ownerId ||
+        charter.workspaceId !== workspaceId)) {
+      return { status: 403, code: "FULL_RUN_SCOPE_MISMATCH" };
+    }
+    const fullActive = charter && ["DISCOVERY", "EMAIL_TRIAGE",
+      "SOURCE_PREPARE", "SOURCE_RUNNING"].includes(charter.status);
+    const discoveryActive = ["APPROVED", "RUNNING"].includes(run.status);
+    if (!fullActive && !discoveryActive) {
       return { status: 200, code: "RUN_ALREADY_TERMINAL",
         run: publicRunStatus(run) };
     }
-    const saved = await tx.researchCampaignRun.update({
-      where: { id: run.id }, data: {
-        status: "PAUSED", lastCode: "USER_STOPPED",
-      },
-    });
+    // All staged claims acquire the same campaign lock. A stop revokes new
+    // paid starts and further page inspections atomically across stages.
+    if (fullActive) {
+      const stopped = await tx.researchFullRun.updateMany({
+        where: { id: charter.id, campaignId, workspaceId, ownerId,
+          status: { in: ["DISCOVERY", "EMAIL_TRIAGE",
+            "SOURCE_PREPARE", "SOURCE_RUNNING"] } },
+        data: { status: "STOPPED", lastCode: "USER_STOPPED" },
+      });
+      if (stopped.count !== 1) throw new Error("FULL_RUN_STOP_CAS_CONFLICT");
+      await tx.researchPersonSourceApproval.updateMany({
+        where: { campaignId, workspaceId, ownerId,
+          status: { in: ["APPROVED", "RUNNING"] } },
+        data: { status: "STOPPED" },
+      });
+      await tx.researchCampaign.updateMany({
+        where: { id: campaignId, workspaceId, ownerId,
+          emailTriageStatus: "RUNNING" },
+        data: { emailTriageStatus: "PAUSED" },
+      });
+    }
+    let saved = run;
+    if (discoveryActive) {
+      saved = await tx.researchCampaignRun.update({
+        where: { id: run.id }, data: {
+          status: "PAUSED", lastCode: "USER_STOPPED",
+        },
+      });
+    }
     await tx.auditEvent.create({ data: {
       actorId: ownerId, action: "research.campaign.run.stopped",
       entityId: campaignId, metadata: {
         workspaceId, runId: run.id,
+        fullRunStopped: !!fullActive,
+        futureSourceCallsStopped: !!fullActive,
         inFlightMayStillBeBilled: true, automaticRetryAllowed: false,
         sendingEnabled: false,
       },
     } });
     return { status: 200, code: "RUN_STOPPED",
-      run: publicRunStatus(saved) };
+      run: publicRunStatus(saved),
+      fullRun: charter
+        ? { ...publicFullRunStatus(charter),
+            status: fullActive ? "STOPPED" : charter.status,
+            lastCode: fullActive ? "USER_STOPPED" : charter.lastCode }
+        : null,
+      fullRunStopped: !!fullActive, sendingEnabled: false };
   });
 }
