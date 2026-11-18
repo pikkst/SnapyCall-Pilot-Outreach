@@ -42,6 +42,8 @@ type CampaignEmailTriageState = {
   remaining: number; checking: number; reviewRequired: number;
   noEmail: number; blocked: number; uncertain: number;
   contactsCreated: 0; providerCalls: 0; sendingEnabled: false;
+  qualification?: { qualifiedEvidence: number; reviewRequired: number;
+    ambiguous: number; countReliable: boolean; sendingEnabled: false };
   enabled: boolean;
 };
 type CampaignObservationsPage = {
@@ -2370,6 +2372,9 @@ function App() {
                               {campaignRunApproval?.run?.maxTasks ??
                                 campaignProgress.plannedTasks}</strong> searches</span>
                             <span><strong>{campaignProgress.uniqueSourcedCandidates}</strong> cited findings</span>
+                            {campaignEmailTriage?.qualification?.countReliable &&
+                              <span><strong>{campaignEmailTriage.qualification.qualifiedEvidence} / 100</strong>
+                                {" "}email evidence ready for review</span>}
                             {campaignRunApproval?.run &&
                               <span><strong>USD {(campaignRunApproval.run.committedWorstCaseCents / 100).toFixed(2)}</strong>
                                 {" "}reserved ceiling</span>}
