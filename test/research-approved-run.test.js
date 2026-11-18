@@ -308,6 +308,16 @@ test("successful tenth bounded task finalizes partial campaign without new paid 
         return { count: 1 };
       },
     },
+    auditEvent: {
+      create: async ({ data }) => {
+        assert.equal(data.action, "research.campaign.finalized");
+        assert.equal(data.entityId, campaignId);
+        assert.equal(data.metadata.status, "PARTIAL");
+        assert.equal(data.metadata.reason, "IMMUTABLE_APPROVED_RUN_LIMIT_REACHED");
+        assert.equal(data.metadata.automaticBillableReplay, false);
+        events.push("audit-PARTIAL");
+      },
+    },
   }) };
   const out = await finishApprovedRunTask(db, {
     campaignId, workspaceId, ownerId, result: { status: "COMPLETED" },
@@ -315,7 +325,7 @@ test("successful tenth bounded task finalizes partial campaign without new paid 
   assert.equal(out.code, "COMPLETED");
   assert.equal(out.lastCode, "RUN_LIMIT_REACHED");
   assert.deepEqual(events, ["checked-inflight", "campaign-PARTIAL",
-    ["run", "COMPLETED", "RUN_LIMIT_REACHED"]]);
+    "audit-PARTIAL", ["run", "COMPLETED", "RUN_LIMIT_REACHED"]]);
 });
 
 test("run cap never finalizes campaign while a task remains in flight", async () => {
