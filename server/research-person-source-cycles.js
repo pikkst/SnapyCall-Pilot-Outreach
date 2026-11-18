@@ -2,6 +2,7 @@
 // The first immutable ResearchPersonSourceApproval remains untouched.
 import { lockActiveWorkspaceMembership } from "./workspace-access.js";
 import { personSourceJobSnapshot } from "./research-person-source-approval.js";
+import { personSourceFingerprint } from "./research-person-source-queue.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
 
 export const SOURCE_CYCLE_SIZE = 25;
@@ -86,12 +87,35 @@ export async function createNextSourceCycle(db, {
       where: { campaignId, cycleIndex: 0, status: "QUEUED",
         attempts: 0, spendReservationId: null },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      take: SOURCE_CYCLE_SIZE + 1,
+      take: 251,
     });
+    if (available.length > 250) return { status: "BLOCKED",
+      code: "SOURCE_JOB_MANIFEST_CAP_EXCEEDED" };
     if (!available.length) {
       return { status: "EXHAUSTED", code: "NO_UNATTEMPTED_SOURCE_JOBS" };
     }
-    const selected = available.slice(0, Math.min(
+    // Previously queued jobs may have gained independently verified email
+    // evidence since their first snapshot. Never make a redundant paid call
+    // or attach stale person/source evidence to a fresh cycle.
+    const liveRows = await tx.researchCampaignObservation.findMany({
+      where: { campaignId,
+        id: { in: available.map(job => job.observationId) } },
+      select: { id: true, name: true, category: true, citationUrl: true,
+        groundingStatus: true, groundingResolvedUrl: true,
+        groundingProvenance: true, emailTriageStatus: true,
+        candidateId: true, personSourceUrl: true },
+      take: 251,
+    });
+    const byId = new Map(liveRows.map(row => [row.id, row]));
+    const eligible = available.filter(job => {
+      const row = byId.get(job.observationId);
+      return row && row.candidateId == null && row.personSourceUrl == null &&
+        ["UNCHECKED", "BLOCKED", "NO_EMAIL"].includes(row.emailTriageStatus) &&
+        personSourceFingerprint(row) === job.evidenceFingerprint;
+    });
+    if (!eligible.length) return { status: "EXHAUSTED",
+      code: "NO_CURRENTLY_ELIGIBLE_SOURCE_JOBS" };
+    const selected = eligible.slice(0, Math.min(
       SOURCE_CYCLE_SIZE, leftCalls, Math.floor(leftCents / price.worstCaseCents)));
     const cycleIndex = cycles.length + 1;
     const snapshot = personSourceJobSnapshot(selected);
