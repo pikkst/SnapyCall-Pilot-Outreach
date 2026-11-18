@@ -682,9 +682,7 @@ test("trusted Gemini 3 token preflight sends countTokens, never generateContent"
     assert.equal(url,
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:countTokens");
     assert.equal(headers["x-goog-api-key"], "test-only-user-key");
-    assert.deepEqual(body, {
-      model: "gemini-3-flash-preview", contents: payload.contents,
-    });
+    assert.deepEqual(body, { contents: payload.contents });
     assert.equal(passedSignal, signal);
     assert.equal(Object.hasOwn(body, "tools"), false);
     return { totalTokens: 975 };
