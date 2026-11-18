@@ -430,3 +430,28 @@ test("unusable terminal output does not finalize without completed spend settlem
   assert.equal(getReservation().status, "RESERVED");
   assert.ok(!events.includes("task-completed"));
 });
+
+
+test("Gemini 3 remains fail-closed in the real campaign worker before DB claim or paid calls", async () => {
+  const { db, events, search } = fakeDatabase({ approvedRun: true });
+  db.aiSetting.findUnique = async () => ({
+    provider: "gemini",
+    model: "gemini-3-flash-preview",
+    encryptedApiKey: "test-only-encrypted-key",
+  });
+  let decryptAttempts = 0;
+  await assert.rejects(() => runOneCampaignTask(db, {
+    ...input, autonomousApproved: true,
+  }, {
+    search, decrypt: () => {
+      decryptAttempts++;
+      return "test-only-provider-key";
+    },
+    now: () => now,
+  }), error => error?.name === "ResearchPricingUnavailable");
+  assert.equal(decryptAttempts, 0);
+  for (const event of ["provider-called", "money-reserved",
+    "task-claimed", "run-allowance-reserved", "concurrency-reserved"]) {
+    assert.equal(events.includes(event), false, event);
+  }
+});
