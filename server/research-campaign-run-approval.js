@@ -262,6 +262,7 @@ export async function finishApprovedRunTask(db, {
     // Unlike a provider failure, this is non-billable and can wait until the
     // next UTC day without granting any new authorization.
     let dailyQuotaWaiting = false;
+    let dailyQuotaUncertain = false;
     if (result?.status === "DAILY_QUOTA_WAIT" && result.attempted === false &&
         !terminal && !qualityStopped &&
         run.expiresAt instanceof Date && run.expiresAt.getTime() > Date.now() &&
@@ -272,6 +273,7 @@ export async function finishApprovedRunTask(db, {
         where: { campaignId, status: { in: ["PAUSED", "FAILED", "RUNNING"] } },
       });
       dailyQuotaWaiting = unresolved === 0;
+      dailyQuotaUncertain = unresolved !== 0;
     }
     // A queued task waiting for an already scheduled, bounded retry is not
     // a failed campaign. Never require a fresh user approval merely because
@@ -345,6 +347,7 @@ export async function finishApprovedRunTask(db, {
       status === "RUNNING" ? (dailyQuotaWaiting ? "WAITING_DAILY_QUOTA" :
         pacingWaiting ? "WAITING_RATE_LIMIT" :
         retryWaiting ? "WAITING_RETRY" : null) :
+      dailyQuotaUncertain ? "RUN_EXECUTION_UNCERTAIN" :
       result?.status === "DAILY_QUOTA_WAIT" &&
         run.expiresAt instanceof Date && run.expiresAt.getTime() <= Date.now()
         ? "RUN_APPROVAL_EXPIRED" :
