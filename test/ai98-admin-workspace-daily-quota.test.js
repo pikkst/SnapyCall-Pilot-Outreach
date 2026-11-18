@@ -48,7 +48,8 @@ test("workspace limit route is admin-only, origin gated, row locked and audited"
 test("workspace admin UI is separate from personal quota with budget invariants", () => {
   assert.match(ui, /Workspace daily research quotas/);
   assert.match(ui, /Save workspace quota/);
-  assert.match(ui, /\/admin\/partners\/.*research-limit/);
+  assert.match(ui, /"\/admin\/partners\/" \+ encodeURIComponent\(workspace\.id\)/);
+  assert.match(ui, /"\/research-limit"/);
   assert.match(ui, /Daily search attempts \(1–1000\)/);
   assert.match(ui, /Workspace daily quota is set by the administrator/);
   assert.match(ui, /Five concurrent workspace searches remain/);
