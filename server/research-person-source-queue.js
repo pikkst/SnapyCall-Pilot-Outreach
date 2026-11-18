@@ -42,6 +42,14 @@ export async function enqueuePersonSourceJobs(db, {
     if (!["COMPLETED", "PARTIAL"].includes(campaigns[0].status)) {
       return { status: 409, code: "DISCOVERY_NOT_TERMINAL" };
     }
+    // Once a stage approval has frozen its job manifest, no further jobs can
+    // be appended to that campaign without an explicitly new approval version.
+    const approval = await tx.researchPersonSourceApproval.findUnique({
+      where: { campaignId }, select: { id: true },
+    });
+    if (approval) {
+      return { status: 409, code: "SOURCE_JOB_MANIFEST_FROZEN" };
+    }
     const total = await tx.researchCampaignObservation.count({
       where: { campaignId },
     });
