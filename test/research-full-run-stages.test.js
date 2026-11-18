@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { tickFullRunStages, transitionFullRunStage }
+import { tickFullRunStages, transitionFullRunStage,
+  stopFullRunSourceAtGoal }
   from "../server/research-full-run-stages.js";
 import { requireResearchPriceEnvelope }
   from "../server/research-price-policy.js";
@@ -47,6 +48,12 @@ function fixture({ stage = "DISCOVERY", status = "PARTIAL",
     progress: async () => ({
       reliable: true, qualifiedEvidence: qualified,
     }),
+    stopAtGoal: async (_, owner) => {
+      assert.equal(owner.campaignId, scope.campaignId);
+      actions.push("atomic-source-stop");
+      return { status: "READY_FOR_REVIEW",
+        code: "QUALIFIED_TARGET_REACHED" };
+    },
     transition: async (_, owner, args) => {
       assert.equal(owner.campaignId, scope.campaignId);
       assert.equal(args.from, stage);
@@ -142,7 +149,7 @@ test("100 verified person emails are ready for review; never auto-sent", async (
   const f = fixture({ stage: "SOURCE_RUNNING", qualified: 100 });
   const result = await tickFullRunStages(f.db, f.input);
   assert.equal(result.status, "READY_FOR_REVIEW");
-  assert.deepEqual(f.actions, ["stage:READY_FOR_REVIEW"]);
+  assert.deepEqual(f.actions, ["atomic-source-stop"]);
 });
 
 test("completed source stage with 0 emails remains partial", async () => {
@@ -181,4 +188,86 @@ test("revoked membership cannot transition a saved full-run stage", async () => 
   });
   assert.equal(result.code, "WORKSPACE_ACCESS_REVOKED");
   assert.equal(didWrite, false);
+});
+
+test("goal commit blocks further paid source claims in same locked transaction", async () => {
+  const updates = [];
+  const full = { ...scope, id: "fullrun-id",
+    status: "SOURCE_RUNNING", targetQualifiedContacts: 1,
+    model: "gemini-3-flash-preview", provider: "gemini",
+    priceVersion: price.priceVersion };
+  const source = { ...scope, id: "approval-id", status: "RUNNING",
+    model: full.model, provider: full.provider, priceVersion: full.priceVersion };
+  const evidence = [{
+    name: "Ada Lovelace", category: "AI_AUTOMATION",
+    citationUrl: "https://example.org/ada", groundingStatus: "UNCHECKED",
+    groundingResolvedUrl: null, groundingProvenance: null,
+    emailTriageStatus: "REVIEW_REQUIRED",
+    emailTriageCode: "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED",
+    emailTriageEmail: "ada@example.org",
+    emailTriageDigest: "a".repeat(64),
+    emailTriageAt: new Date("2026-11-18T15:30:00Z"),
+  }];
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async parts => {
+      const sql = parts.join("?");
+      if (sql.includes('FROM "PartnerMembership"'))
+        return [{ revokedAt: null }];
+      if (sql.includes('FROM "ResearchCampaign"'))
+        return [{ id: scope.campaignId }];
+      throw new Error("Unexpected SQL");
+    },
+    researchFullRun: {
+      findUnique: async () => full,
+      updateMany: async ({ data }) => {
+        updates.push("full:" + data.status); return { count: 1 };
+      },
+    },
+    researchPersonSourceApproval: {
+      findUnique: async () => source,
+      updateMany: async ({ data }) => {
+        updates.push("source:" + data.status); return { count: 1 };
+      },
+    },
+    researchCampaignObservation: {
+      count: async () => 1,
+      findMany: async () => evidence,
+    },
+    auditEvent: { create: async ({ data }) => {
+      updates.push("audit");
+      assert.equal(data.metadata.sourceNewPaidClaimsStopped, true);
+      assert.equal(data.metadata.sendingEnabled, false);
+    } },
+  }) };
+  const result = await stopFullRunSourceAtGoal(db, scope);
+  assert.equal(result.status, "READY_FOR_REVIEW");
+  assert.deepEqual(updates,
+    ["source:TARGET_REACHED", "full:READY_FOR_REVIEW", "audit"]);
+});
+
+test("unproven source evidence never stops a paid stage early", async () => {
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async parts => {
+      if (parts.join("?").includes('FROM "PartnerMembership"'))
+        return [{ revokedAt: null }];
+      return [{ id: scope.campaignId }];
+    },
+    researchFullRun: { findUnique: async () => ({
+      ...scope, id: "fullrun-id", status: "SOURCE_RUNNING",
+      targetQualifiedContacts: 100,
+      provider: "gemini", model: "gemini-3-flash-preview",
+      priceVersion: price.priceVersion,
+    }) },
+    researchPersonSourceApproval: { findUnique: async () => ({
+      ...scope, status: "RUNNING",
+      provider: "gemini", model: "gemini-3-flash-preview",
+      priceVersion: price.priceVersion,
+    }) },
+    researchCampaignObservation: { count: async () => 0,
+      findMany: async () => [] },
+    auditEvent: { create: async () => { throw Error("Must not write"); } },
+  }) };
+  const result = await stopFullRunSourceAtGoal(db, scope);
+  assert.equal(result.status, "WAITING");
+  assert.equal(result.code, "QUALIFIED_TARGET_NOT_REACHED");
 });
