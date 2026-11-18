@@ -547,7 +547,8 @@ export async function runBoundedTavilyGemini3Stages({
     }, tavilyPost, signal);
   } catch {
     // The upstream request may have been billed. Never automatically replay.
-    throw new BoundedResearchStageError("RETRIEVAL_OUTCOME_UNCERTAIN");
+    throw new BoundedResearchStageError(
+      "RETRIEVAL_OUTCOME_UNCERTAIN", "TAVILY_SEARCH_DISPATCHED");
   }
   if (retrieved.status === "NO_USABLE_EVIDENCE") {
     return Object.freeze({
@@ -557,14 +558,26 @@ export async function runBoundedTavilyGemini3Stages({
       reviewRequired: true, imported: false, sendingEnabled: false,
     });
   }
+  let failedStage = "GEMINI_INPUT_PREPARATION";
   try {
     const payload = buildGemini3TextOnlyPayload({
       query, limit, manifest: retrieved.manifest, maxInputTokens,
     });
+    // Stage is recorded immediately before invoking the trusted transport,
+    // not after a successful response. A timeout can still be billable.
+    // Store only static phase labels; never log keys, prompt or provider JSON.
+    const trackedPost = (url, headers, body, requestSignal) => {
+      failedStage = url.endsWith(":countTokens")
+        ? "GEMINI_COUNT_TOKENS_DISPATCHED"
+        : url.endsWith(":generateContent")
+        ? "GEMINI_GENERATE_CONTENT_DISPATCHED"
+        : "GEMINI_UNKNOWN_DISPATCH";
+      return geminiPost(url, headers, body, requestSignal);
+    };
     const extracted = await extractWithGemini3TextOnly({
       query, limit, model, payload, manifest: retrieved.manifest,
       maxInputTokens, apiKey: geminiApiKey,
-    }, geminiPost, signal);
+    }, trackedPost, signal);
     return Object.freeze({
       ...extracted, status: "REVIEW_PENDING",
       reportedRetrievalCredits: retrieved.reportedCredits,
@@ -574,15 +587,18 @@ export async function runBoundedTavilyGemini3Stages({
     // After retrieval, even a locally rejected Gemini payload cannot refund
     // the earlier Tavily call. After countTokens/generateContent, additional
     // charges are possible. The real worker must settle conservatively.
-    throw new BoundedResearchStageError("DUAL_PROVIDER_OUTCOME_UNCERTAIN");
+    throw new BoundedResearchStageError(
+      "DUAL_PROVIDER_OUTCOME_UNCERTAIN", failedStage);
   }
 }
 
 export class BoundedResearchStageError extends Error {
-  constructor(code) {
+  constructor(code, stage) {
     super("Bounded multi-provider research requires reconciliation");
     this.name = "BoundedResearchStageError";
     this.code = code;
+    // Only controlled internal phase identifiers, not upstream error details.
+    this.stage = stage;
     this.billableCallPossible = true;
     this.automaticRetryAllowed = false;
   }
