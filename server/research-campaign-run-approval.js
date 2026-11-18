@@ -3,6 +3,7 @@
 import { lockActiveWorkspaceMembership } from "./workspace-access.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
 import { validateFullRunScope } from "./research-full-run-contract.js";
+import { readResearchDailyCapacity } from "./research-quota.js";
 
 const CUID = /^c[a-z0-9]{10,40}$/;
 const APPROVAL_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -105,6 +106,20 @@ export async function approveCampaignRun(db, {
     ]);
     if (attempts !== 0 || observations !== 0) {
       return { status: 409, code: "CAMPAIGN_ALREADY_STARTED" };
+    }
+    // A full pipeline's discovery and source searches share the same UTC quota.
+    // Decline a new approval that cannot fit in today's remaining capacity.
+    // This is advisory against concurrent claims; the existing claim-time
+    // transactional quota check remains authoritative.
+    if (fullRun) {
+      const dailyQuota = await readResearchDailyCapacity(tx, {
+        workspaceId, userId: ownerId,
+      });
+      const requestedCalls = limits.maxTasks + fullRun.maxSourceCalls;
+      if (requestedCalls > dailyQuota.remaining) {
+        return { status: 409, code: "DAILY_QUOTA_INSUFFICIENT",
+          requestedCalls, dailyQuota };
+      }
     }
     const created = await tx.researchCampaignRun.create({ data: {
       campaignId, workspaceId, ownerId,
