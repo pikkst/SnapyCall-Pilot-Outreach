@@ -2308,92 +2308,9 @@ function App() {
                       {campaignProgressStatus === "error" && <p role="alert">
                         Progress could not be loaded.
 
-                        <button type="button" className="secondary"
-                          onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
-                          Retry</button></p>}
-                      {campaignProgressStatus === "ready" && campaignProgress && <>
-                        <div className="research-run-window" aria-label="Research run overview">
-                          <div className="research-run-title">
-                            <div>
-                              <strong>{campaignRunApproval?.run?.status === "RUNNING"
-                                ? "Finding experts"
-                                : campaignRunApproval?.run?.status === "COMPLETED" ||
-                                  ["COMPLETED", "PARTIAL"].includes(campaignProgress.status)
-                                  ? "Research finished"
-                                  : campaignRunApproval?.run?.status === "PAUSED" ||
-                                    ["PAUSED_REVIEW", "QUALITY_STOP"].includes(campaignProgress.operationalState)
-                                    ? "Research needs attention" : "Ready to research"}</strong>
-                              <p className="muted">{campaignRunApproval?.run?.status === "RUNNING"
-                                ? "The search continues automatically. You can leave this page."
-                                : campaignRunApproval?.run?.lastCode === "RUN_LIMIT_REACHED"
-                                  ? "Your approved search limit was reached."
-                                  : campaignProgress.status === "PARTIAL"
-                                    ? "The approved run ended. Review the saved findings."
-                                    : "Review findings or plan a new campaign."}</p>
-                            </div>
-                            {campaignRunApproval?.run?.status === "RUNNING" &&
-                              <span className="research-running-indicator" aria-label="Search is active"/>}
-                          </div>
-                          <progress aria-label="Research task completion"
-                            max={Math.max(1, campaignRunApproval?.run?.maxTasks ??
-                              campaignProgress.plannedTasks)}
-                            value={Math.min(campaignProgress.tasks.completed,
-                              campaignRunApproval?.run?.maxTasks ??
-                              campaignProgress.plannedTasks)}/>
-                          <div className="research-run-counts">
-                            <span><strong>{campaignProgress.tasks.completed} /
-                              {campaignRunApproval?.run?.maxTasks ??
-                                campaignProgress.plannedTasks}</strong> searches</span>
-                            <span><strong>{campaignProgress.uniqueSourcedCandidates}</strong> cited findings</span>
-                            {campaignRunApproval?.run &&
-                              <span><strong>USD {(campaignRunApproval.run.committedWorstCaseCents / 100).toFixed(2)}</strong>
-                                {" "}reserved ceiling</span>}
-                          </div>
-                          <div className="research-run-actions">
-                            {campaignRunApproval?.run &&
-                              ["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
-                              <button type="button" className="secondary"
-                                disabled={campaignRunApprovalBusy}
-                                onClick={() => void stopCampaignAutonomousRun(p.id, campaignProgress.id)}>
-                                Stop future searches
-                              </button>}
-                            <button type="button" className="secondary"
-                              onClick={() => void loadCampaignObservations(p.id, campaignProgress.id)}
-                              disabled={campaignObservationsStatus === "loading"}>
-                              {campaignObservationsStatus === "idle" ? "View findings" : "Refresh findings"}
-                            </button>
-                          </div>
-                        </div>
-                        {campaignProgress.operationalState === "QUALITY_STOP" &&
-                          <p role="alert" className="campaign-blocker">
-                            Research stopped after three consecutive responses
-                            with no verifiable candidates. No more paid AI
-                            calls will start for this campaign. Review the
-                            criteria and source quality before planning a new
-                            campaign with separate approval.
-                          </p>}
-                        {campaignProgress.operationalState === "PAUSED_REVIEW" &&
-                          <p role="alert" className="campaign-blocker">
-                            Research is paused. A possibly billable task needs
-                            manual reconciliation. The remaining queued tasks
-                            are NOT running. Do not reattempt this paid request.
-                          </p>}
-                        {campaignProgress.invalidOutputTasks > 0 &&
-                          <p role="status" className="muted">
-                            {campaignProgress.invalidOutputTasks} completed AI search task(s)
-                            returned unusable structured candidate data.
-                            Those paid attempts were conservatively accounted for,
-                            not retried, and accepted no unverified people or emails.
-                          </p>}
-                        {campaignProgress.uniqueSourcedCandidates === 0 &&
-                          campaignProgress.noGroundingTasks > 0 &&
-                          <p role="status" className="muted">
-                            No source-backed candidates yet: {campaignProgress.noGroundingTasks}
-                            {" "}completed research task(s) returned no verifiable citations.
-                            No name or email was accepted from those attempts.
-                          </p>}
-                        <details className="research-run-details" aria-label="Agent diagnostics">
-                          <summary>Agent details and diagnostics</summary>
+                        <details className="research-run-details" aria-label="Additional research tools">
+                          <summary>More details and tools</summary>
+
                         {campaignGrounding && <section
                           className="campaign-email-triage"
                           data-state={campaignGrounding.status}
@@ -2562,9 +2479,8 @@ function App() {
                               </li>)}
                           </ol>
                         </section>
-                        </details>
-                        <details className="research-run-details" aria-label="Budget details">
-                          <summary>Budget details</summary>
+                        
+
                         {campaignRunApproval?.run && <section
                           className="campaign-approved-run" aria-label="Approved campaign automation">
                           <strong>Approved single-run budget</strong>
@@ -2598,7 +2514,193 @@ function App() {
                             not a verified provider invoice. A PAUSED run does not
                             automatically replay uncertain paid calls.</p>
                         </section>}
+                        
+
+                        <p className="muted">Tasks: {campaignProgress.tasks.completed} complete ·
+                          {campaignProgress.tasks.queued} queued ·
+                          {campaignProgress.tasks.running} running ·
+                          {campaignProgress.tasks.paused} paused ·
+                          {campaignProgress.tasks.failed} failed</p>
+                        <p className="muted">{campaignProgress.duplicateObservations} duplicate
+                          research observations. These are discovery candidates,
+                          not verified person-email contacts.</p>
+                        {campaignProgress.needsReconciliation && <p role="alert">
+                          Manual reconciliation required. Expired worker leases:
+                          {" " + campaignProgress.expiredLeases}.
+                          Do not restart paid research until the spend ledger is checked.</p>}
+                        {campaignProgress.noGroundingTasks > 0 &&
+                          <p role="status" className="muted">
+                            {campaignProgress.noGroundingTasks} research {
+                              campaignProgress.noGroundingTasks === 1 ? "task" : "tasks"
+                            } finished without verifiable source citations.
+                            These attempts are complete and will not be retried.
+                            No people or emails were accepted from them.
+                            Application spend remains conservative, not the provider invoice.
+                          </p>}
+                        <p className="muted">Next step: {campaignProgress.action}.
+                          No email checks or messages were sent by this view.</p>
+                        {campaignProgress.pausedTaskReview?.length === 1 &&
+                          campaignProgress.tasks.running === 0 && <>
+                            <p role="alert">Task #{campaignProgress.pausedTaskReview[0].taskIndex + 1}
+                              {" "}was paused after a potentially billable provider call.
+                              Its previous results are not source-verified. This
+                              action permanently skips ONLY that task; the full
+                              conservative app-side charge remains and may differ
+                              from the provider invoice. No AI call is replayed.</p>
+                            <label className="checkbox-review">
+                              <input type="checkbox" checked={skipChargeConfirmed}
+                                disabled={campaignTestBusy}
+                                onChange={event =>
+                                  setSkipChargeConfirmed(event.target.checked)}/>
+                              I reviewed the provider billing uncertainty,
+                              accept the existing conservative charge without
+                              a refund, and explicitly authorize skipping this
+                              task without a retry.
+                            </label>
+                            <button type="button" disabled={campaignTestBusy ||
+                              !skipChargeConfirmed}
+                              onClick={() => void skipUncertainCampaignTask(p.id,
+                                campaignProgress.id,
+                                campaignProgress.pausedTaskReview[0].taskIndex)}>
+                              Skip uncertain task without replay
+                            </button>
+                          </>}
+                        
+
+                        <section className="campaign-manual-sources"
+                          aria-label="Add public research sources">
+                          <h5>Add public source URLs</h5>
+                          <p className="muted">Paste up to 25 public HTTPS profile or
+                            company page URLs, one per line. These sources are
+                            saved for a future evidence review stage. Saving does
+                            not launch AI, inspect websites, create contacts or
+                            authorize provider spending.</p>
+                          <label>Public source URLs
+                            <textarea rows={4} value={manualSourceDraft}
+                              disabled={manualSourceBusy}
+                              placeholder={"https://example.org/experts/jane\nhttps://company.example.org/team"}
+                              onChange={event => setManualSourceDraft(event.target.value)}/>
+                          </label>
+                          <div className="campaign-source-actions">
+                            <button type="button"
+                              disabled={manualSourceBusy ||
+                                !manualSourceDraft.trim()}
+                              onClick={() => void queueManualCampaignSources(
+                                p.id, campaignProgressId)}>
+                              {manualSourceBusy ? "Saving sources…" : "Add to research queue"}
+                            </button>
+                            <button type="button" className="secondary"
+                              disabled={manualSourceBusy || manualSourceStatus === "loading"}
+                              onClick={() => void loadManualCampaignSources(
+                                p.id, campaignProgressId)}>
+                              {manualSourceStatus === "loading"
+                                ? "Loading sources…" : "View queued sources"}
+                            </button>
+                          </div>
+                          {manualSourceNotice && <p role="status">{manualSourceNotice}</p>}
+                          {manualSourceStatus === "error" &&
+                            <p role="alert">Saved source list unavailable. Try again.</p>}
+                          {manualSourceStatus === "ready" &&
+                            <p className="muted">{manualSources.length} saved source(s)
+                              shown · Not inspected · No contacts created</p>}
+                          {manualSourceStatus === "ready" && manualSources.length > 0 &&
+                            <ul className="campaign-source-list">
+                              {manualSources.map(source => <li key={source.id}>
+                                <a href={source.normalizedUrl} target="_blank"
+                                  rel="noopener noreferrer">{source.normalizedUrl}</a>
+                                <small>{source.status.replaceAll("_", " ")}
+                                  {" · "}Added {new Date(source.createdAt).toLocaleString()}</small>
+                              </li>)}
+                            </ul>}
+                        </section>
+                        
                         </details>
+                        <button type="button" className="secondary"
+                          onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
+                          Retry</button></p>}
+                      {campaignProgressStatus === "ready" && campaignProgress && <>
+                        <div className="research-run-window" aria-label="Research run overview">
+                          <div className="research-run-title">
+                            <div>
+                              <strong>{campaignRunApproval?.run?.status === "RUNNING"
+                                ? "Finding experts"
+                                : campaignRunApproval?.run?.status === "COMPLETED" ||
+                                  ["COMPLETED", "PARTIAL"].includes(campaignProgress.status)
+                                  ? "Research finished"
+                                  : campaignRunApproval?.run?.status === "PAUSED" ||
+                                    ["PAUSED_REVIEW", "QUALITY_STOP"].includes(campaignProgress.operationalState)
+                                    ? "Research needs attention" : "Ready to research"}</strong>
+                              <p className="muted">{campaignRunApproval?.run?.status === "RUNNING"
+                                ? "The search continues automatically. You can leave this page."
+                                : campaignRunApproval?.run?.lastCode === "RUN_LIMIT_REACHED"
+                                  ? "Your approved search limit was reached."
+                                  : campaignProgress.status === "PARTIAL"
+                                    ? "The approved run ended. Review the saved findings."
+                                    : "Review findings or plan a new campaign."}</p>
+                            </div>
+                            {campaignRunApproval?.run?.status === "RUNNING" &&
+                              <span className="research-running-indicator" aria-label="Search is active"/>}
+                          </div>
+                          <progress aria-label="Research task completion"
+                            max={Math.max(1, campaignRunApproval?.run?.maxTasks ??
+                              campaignProgress.plannedTasks)}
+                            value={Math.min(campaignProgress.tasks.completed,
+                              campaignRunApproval?.run?.maxTasks ??
+                              campaignProgress.plannedTasks)}/>
+                          <div className="research-run-counts">
+                            <span><strong>{campaignProgress.tasks.completed} /
+                              {campaignRunApproval?.run?.maxTasks ??
+                                campaignProgress.plannedTasks}</strong> searches</span>
+                            <span><strong>{campaignProgress.uniqueSourcedCandidates}</strong> cited findings</span>
+                            {campaignRunApproval?.run &&
+                              <span><strong>USD {(campaignRunApproval.run.committedWorstCaseCents / 100).toFixed(2)}</strong>
+                                {" "}reserved ceiling</span>}
+                          </div>
+                          <div className="research-run-actions">
+                            {campaignRunApproval?.run &&
+                              ["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
+                              <button type="button" className="secondary"
+                                disabled={campaignRunApprovalBusy}
+                                onClick={() => void stopCampaignAutonomousRun(p.id, campaignProgress.id)}>
+                                Stop future searches
+                              </button>}
+                            <button type="button" className="secondary"
+                              onClick={() => void loadCampaignObservations(p.id, campaignProgress.id)}
+                              disabled={campaignObservationsStatus === "loading"}>
+                              {campaignObservationsStatus === "idle" ? "View findings" : "Refresh findings"}
+                            </button>
+                          </div>
+                        </div>
+                        {campaignProgress.operationalState === "QUALITY_STOP" &&
+                          <p role="alert" className="campaign-blocker">
+                            Research stopped after three consecutive responses
+                            with no verifiable candidates. No more paid AI
+                            calls will start for this campaign. Review the
+                            criteria and source quality before planning a new
+                            campaign with separate approval.
+                          </p>}
+                        {campaignProgress.operationalState === "PAUSED_REVIEW" &&
+                          <p role="alert" className="campaign-blocker">
+                            Research is paused. A possibly billable task needs
+                            manual reconciliation. The remaining queued tasks
+                            are NOT running. Do not reattempt this paid request.
+                          </p>}
+                        {campaignProgress.invalidOutputTasks > 0 &&
+                          <p role="status" className="muted">
+                            {campaignProgress.invalidOutputTasks} completed AI search task(s)
+                            returned unusable structured candidate data.
+                            Those paid attempts were conservatively accounted for,
+                            not retried, and accepted no unverified people or emails.
+                          </p>}
+                        {campaignProgress.uniqueSourcedCandidates === 0 &&
+                          campaignProgress.noGroundingTasks > 0 &&
+                          <p role="status" className="muted">
+                            No source-backed candidates yet: {campaignProgress.noGroundingTasks}
+                            {" "}completed research task(s) returned no verifiable citations.
+                            No name or email was accepted from those attempts.
+                          </p>}
+                        
+                        
                         {campaignRunApproval?.run &&
                           (campaignRunApproval.run.status === "PAUSED" ||
                             campaignRunApproval.run.status === "COMPLETED") &&
@@ -2682,58 +2784,7 @@ function App() {
                           </section>}
                         {campaignRunApprovalNotice && <p role="status">
                           {campaignRunApprovalNotice}</p>}
-                        <details className="research-run-details" aria-label="Task diagnostics">
-                          <summary>Detailed task and safety information</summary>
-                        <p className="muted">Tasks: {campaignProgress.tasks.completed} complete ·
-                          {campaignProgress.tasks.queued} queued ·
-                          {campaignProgress.tasks.running} running ·
-                          {campaignProgress.tasks.paused} paused ·
-                          {campaignProgress.tasks.failed} failed</p>
-                        <p className="muted">{campaignProgress.duplicateObservations} duplicate
-                          research observations. These are discovery candidates,
-                          not verified person-email contacts.</p>
-                        {campaignProgress.needsReconciliation && <p role="alert">
-                          Manual reconciliation required. Expired worker leases:
-                          {" " + campaignProgress.expiredLeases}.
-                          Do not restart paid research until the spend ledger is checked.</p>}
-                        {campaignProgress.noGroundingTasks > 0 &&
-                          <p role="status" className="muted">
-                            {campaignProgress.noGroundingTasks} research {
-                              campaignProgress.noGroundingTasks === 1 ? "task" : "tasks"
-                            } finished without verifiable source citations.
-                            These attempts are complete and will not be retried.
-                            No people or emails were accepted from them.
-                            Application spend remains conservative, not the provider invoice.
-                          </p>}
-                        <p className="muted">Next step: {campaignProgress.action}.
-                          No email checks or messages were sent by this view.</p>
-                        {campaignProgress.pausedTaskReview?.length === 1 &&
-                          campaignProgress.tasks.running === 0 && <>
-                            <p role="alert">Task #{campaignProgress.pausedTaskReview[0].taskIndex + 1}
-                              {" "}was paused after a potentially billable provider call.
-                              Its previous results are not source-verified. This
-                              action permanently skips ONLY that task; the full
-                              conservative app-side charge remains and may differ
-                              from the provider invoice. No AI call is replayed.</p>
-                            <label className="checkbox-review">
-                              <input type="checkbox" checked={skipChargeConfirmed}
-                                disabled={campaignTestBusy}
-                                onChange={event =>
-                                  setSkipChargeConfirmed(event.target.checked)}/>
-                              I reviewed the provider billing uncertainty,
-                              accept the existing conservative charge without
-                              a refund, and explicitly authorize skipping this
-                              task without a retry.
-                            </label>
-                            <button type="button" disabled={campaignTestBusy ||
-                              !skipChargeConfirmed}
-                              onClick={() => void skipUncertainCampaignTask(p.id,
-                                campaignProgress.id,
-                                campaignProgress.pausedTaskReview[0].taskIndex)}>
-                              Skip uncertain task without replay
-                            </button>
-                          </>}
-                        </details>
+                        
                         {campaignObservationsStatus !== "idle" &&
                           <section className="campaign-observations"
                             aria-label="Saved campaign findings">
@@ -2847,55 +2898,7 @@ function App() {
                               Load more saved findings
                             </button>}
                         </section>}
-                        <details className="research-run-details" aria-label="Manual sources">
-                          <summary>Add source URLs manually</summary>
-                        <section className="campaign-manual-sources"
-                          aria-label="Add public research sources">
-                          <h5>Add public source URLs</h5>
-                          <p className="muted">Paste up to 25 public HTTPS profile or
-                            company page URLs, one per line. These sources are
-                            saved for a future evidence review stage. Saving does
-                            not launch AI, inspect websites, create contacts or
-                            authorize provider spending.</p>
-                          <label>Public source URLs
-                            <textarea rows={4} value={manualSourceDraft}
-                              disabled={manualSourceBusy}
-                              placeholder={"https://example.org/experts/jane\nhttps://company.example.org/team"}
-                              onChange={event => setManualSourceDraft(event.target.value)}/>
-                          </label>
-                          <div className="campaign-source-actions">
-                            <button type="button"
-                              disabled={manualSourceBusy ||
-                                !manualSourceDraft.trim()}
-                              onClick={() => void queueManualCampaignSources(
-                                p.id, campaignProgressId)}>
-                              {manualSourceBusy ? "Saving sources…" : "Add to research queue"}
-                            </button>
-                            <button type="button" className="secondary"
-                              disabled={manualSourceBusy || manualSourceStatus === "loading"}
-                              onClick={() => void loadManualCampaignSources(
-                                p.id, campaignProgressId)}>
-                              {manualSourceStatus === "loading"
-                                ? "Loading sources…" : "View queued sources"}
-                            </button>
-                          </div>
-                          {manualSourceNotice && <p role="status">{manualSourceNotice}</p>}
-                          {manualSourceStatus === "error" &&
-                            <p role="alert">Saved source list unavailable. Try again.</p>}
-                          {manualSourceStatus === "ready" &&
-                            <p className="muted">{manualSources.length} saved source(s)
-                              shown · Not inspected · No contacts created</p>}
-                          {manualSourceStatus === "ready" && manualSources.length > 0 &&
-                            <ul className="campaign-source-list">
-                              {manualSources.map(source => <li key={source.id}>
-                                <a href={source.normalizedUrl} target="_blank"
-                                  rel="noopener noreferrer">{source.normalizedUrl}</a>
-                                <small>{source.status.replaceAll("_", " ")}
-                                  {" · "}Added {new Date(source.createdAt).toLocaleString()}</small>
-                              </li>)}
-                            </ul>}
-                        </section>
-                        </details>
+                        
                         <button type="button" className="secondary"
                           onClick={() => void openCampaignProgress(p.id, campaignProgressId)}>
                           Refresh progress</button>
