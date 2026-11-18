@@ -91,9 +91,9 @@ test("backfill is restricted to reviewed test fixtures, not arbitrary settled co
   const migration = readFileSync(new URL(
     "../prisma/migrations/20261118230000_ai98_historical_spend_adjustment/migration.sql",
     import.meta.url), "utf8");
-  assert.match(migration, /research\\.spend\\.legacy_test_classified/);
+  assert.match(migration, /research\.spend\.legacy_test_classified/);
   assert.match(migration, /"chargedCents" = 200/);
-  assert.match(migration, /ON CONFLICT \\("reservationId"\\) DO NOTHING/);
+  assert.match(migration, /ON CONFLICT \("reservationId"\) DO NOTHING/);
   assert.doesNotMatch(migration, /UPDATE "ResearchSpendReservation"/);
   assert.doesNotMatch(migration, /UPDATE "ResearchSpendMonth"/);
 });
