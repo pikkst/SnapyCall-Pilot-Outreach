@@ -61,7 +61,7 @@ import {
   reserveResearchAttempt, ResearchQuotaExceeded, lockedResearchPreferences,
   validateResearchPreferences, RESEARCH_DAILY_USER_WORKSPACE_LIMIT,
   reserveResearchLease, releaseResearchLease, ResearchConcurrencyExceeded,
-  ResearchPacingRequired,
+  ResearchPacingRequired, readResearchDailyCapacity,
 } from "./research-quota.js";
 import { validateMonthlyBudgetCents, reserveOwnerSpend, settleOwnerSpend,
   ResearchBudgetExceeded, readOwnerBudgetSnapshot,
@@ -2097,8 +2097,14 @@ app.get("/api/research-campaigns/:id/approved-run",
         }
       }
     }
+    // Return authoritative UTC quota headroom only for unstarted campaigns.
+    // No provider calls, quota reservations or financial writes occur here.
+    const dailyQuota = !run ? await readResearchDailyCapacity(prisma, {
+      workspaceId: req.candidateScope, userId: identity.id,
+    }) : null;
     res.set("Cache-Control", "no-store");
     return res.json({ run: run ? publicRunStatus(run) : null,
+      dailyQuota,
       fullRun: fullRun ? { ...fullRun, contactAcceptanceAuthorized: false,
         sendingEnabled: false } : null,
       fullRunEnabled: fullRunReadiness(env).enabled,
