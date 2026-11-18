@@ -237,13 +237,13 @@ const syntheticCombinedTariff = {
 test("two independent providers are rounded upward before reserving combined spend", () => {
   assert.deepEqual(
     calculateCombinedRetrievalAndTextCeilingCents(syntheticCombinedTariff),
-    { retrievalCents: 1, textModelCents: 1,
-      worstCaseCents: 2, enforcementReady: false });
+    { retrievalCents: 1, textModelCents: 2,
+      worstCaseCents: 3, enforcementReady: false });
   assert.equal(
     calculateCombinedRetrievalAndTextCeilingCents({
       ...syntheticCombinedTariff,
       retrieval: { ...syntheticCombinedTariff.retrieval, maxRequests: 3 },
-    }).worstCaseCents, 3);
+    }).worstCaseCents, 4);
 });
 
 test("combined quote fails closed on missing, negative, fractional or excessive limits", () => {
@@ -286,4 +286,31 @@ test("a mathematical quote never unlocks Gemini 3 paid discovery", () => {
   });
   assert.equal(state.enforcedForPaidSearch, false);
   assert.equal(state.pricingStatus, "MODEL_PRICING_UNAVAILABLE");
+});
+
+test("combined quote rounds both Gemini input and output components upward independently", () => {
+  const quote = calculateCombinedRetrievalAndTextCeilingCents({
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 1 },
+    textModel: {
+      maxInputTokens: 1, maxOutputTokens: 1,
+      inputCentsPerMillion: 1, outputCentsPerMillion: 1,
+    },
+  });
+  assert.deepEqual(quote, {
+    retrievalCents: 1, textModelCents: 2,
+    worstCaseCents: 3, enforcementReady: false,
+  });
+  // The prior one-shot rounding returned one model cent here, which is not
+  // conservative when the provider rounds its two charge categories separately.
+  const nearBoundary = calculateCombinedRetrievalAndTextCeilingCents({
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 1000 },
+    textModel: {
+      maxInputTokens: 100_000, maxOutputTokens: 100_000,
+      inputCentsPerMillion: 10, outputCentsPerMillion: 10,
+    },
+  });
+  assert.deepEqual(nearBoundary, {
+    retrievalCents: 1, textModelCents: 2,
+    worstCaseCents: 3, enforcementReady: false,
+  });
 });
