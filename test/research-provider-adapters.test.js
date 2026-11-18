@@ -485,3 +485,75 @@ test("oversized or invalid Tavily envelope fails before accepting any results", 
   });
   assert.equal(result.reportedCredits, null);
 });
+
+
+test("bounded research stages compose without external calls or contact promotion", async () => {
+  const { buildBoundedTavilySearchRequest, normalizeBoundedTavilySearch,
+    buildGemini3TextOnlyPayload, parseGemini3TextOnlyResponse } =
+    await import("../server/research-provider-adapters.js");
+  const { calculateCombinedRetrievalAndTextCeilingCents,
+    requireResearchPriceEnvelope, ResearchPricingUnavailable } =
+    await import("../server/research-price-policy.js");
+
+  const retrievalRequest = buildBoundedTavilySearchRequest({
+    query, maxResults: 2,
+  });
+  const trustedSearch = {
+    results: [{
+      url: source,
+      title: "Professional profile",
+      content: "Verified Professional offers AI automation consultancy.",
+    }],
+    usage: { credits: 1 },
+  };
+  // Fully deterministic provider fixture: no fetch, credentials or payment.
+  const retrieval = normalizeBoundedTavilySearch({
+    response: trustedSearch,
+    maxResults: retrievalRequest.max_results,
+    observedAt: "2026-11-18T00:00:00.000Z",
+  });
+  const request = buildGemini3TextOnlyPayload({
+    query, limit: 2, manifest: retrieval.manifest,
+  });
+  assert.equal(Object.hasOwn(request, "tools"), false);
+  const sourceId = retrieval.manifest.records[0].sourceId;
+  const response = {
+    candidates: [{
+      finishReason: "STOP",
+      content: { parts: [{ text: JSON.stringify({ candidates: [
+        { name: "Verified Professional", category: "AI_AUTOMATION",
+          sourceId, rationale: "Professional publicly offers consulting services" },
+        { name: "Fabricated Expert", category: "AI_AUTOMATION",
+          sourceId: "not-in-manifest",
+          rationale: "No independently observed professional profile" },
+      ] }) }] },
+    }],
+    usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 70,
+      thoughtsTokenCount: 0 },
+  };
+  const extracted = parseGemini3TextOnlyResponse({
+    response, limit: 2, manifest: retrieval.manifest,
+  });
+  assert.deepEqual(extracted.candidates.map(c => c.name), ["Verified Professional"]);
+  assert.equal(extracted.candidates[0].email, null);
+  assert.equal(extracted.candidates[0].contactReviewed, false);
+  assert.equal(extracted.candidates[0].status, "REVIEW_PENDING");
+  assert.equal(extracted.manifestDigest, retrieval.manifest.digest);
+  assert.equal(extracted.imported, false);
+  assert.equal(extracted.sendingEnabled, false);
+
+  // A synthetic mathematical ceiling is never a server-approved tariff.
+  const quote = calculateCombinedRetrievalAndTextCeilingCents({
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 500 },
+    textModel: {
+      maxInputTokens: 1200, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+  });
+  assert.equal(quote.enforcementReady, false);
+  assert.ok(quote.worstCaseCents > 0);
+  assert.throws(() => requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-3-flash-preview",
+    ...quote,
+  }), ResearchPricingUnavailable);
+});
