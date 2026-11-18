@@ -1265,3 +1265,99 @@ test("campaign dual-provider transport reuses trusted posts with one shared dead
   assert.equal(found.sendingEnabled, false);
   assert.equal(found.automaticRetryAllowed, false);
 });
+
+
+test("20 full Tavily excerpts are fitted before Gemini dispatch without repeated retrieval", async () => {
+  const { createHash } = await import("node:crypto");
+  const { runBoundedTavilyGemini3Stages } =
+    await import("../server/research-provider-adapters.js");
+  const firstUrl = "https://consultants.example.org/experts/overflow-0";
+  const firstId = createHash("sha256").update(firstUrl, "utf8").digest("hex");
+  const calls = [];
+  let prompt;
+  const response = await runBoundedTavilyGemini3Stages({
+    query, limit: 10, maxResults: 20,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    tavilyApiKey: "tvly-test-only-key", geminiApiKey: "gemini-test-only-key",
+    model: "gemini-3-flash-preview", maxInputTokens: 16_384,
+  }, {
+    tavilyPost: async (_url, _headers, request) => {
+      calls.push("tavily");
+      assert.equal(request.max_results, 20);
+      return { results: Array.from({ length: 20 }, (_, i) => ({
+        url: "https://consultants.example.org/experts/overflow-" + i,
+        title: "AI automation professional — " + "Q".repeat(130),
+        content: "Named AI automation consultant offering online services. " +
+          "🧪 Unicode \" injected \" text ".repeat(85),
+      })), usage: { credits: 1 } };
+    },
+    geminiPost: async (url, _headers, body) => {
+      if (url.endsWith(":countTokens")) {
+        calls.push("count");
+        prompt = body.contents[0].parts[0].text;
+        assert.ok(Buffer.byteLength(JSON.stringify({
+          contents: body.contents,
+          generationConfig: {
+            maxOutputTokens: 2048, responseMimeType: "application/json",
+            thinkingConfig: { thinkingLevel: "minimal" },
+          },
+        }), "utf8") + 256 <= 16_384);
+        assert.ok(prompt.includes(firstId));
+        assert.ok(prompt.includes("UNTRUSTED_RETRIEVAL_DATA:"));
+        return { totalTokens: 1200 };
+      }
+      calls.push("generate");
+      assert.equal(body.contents[0].parts[0].text, prompt);
+      return {
+        candidates: [{ finishReason: "STOP", content: { parts: [{
+          text: JSON.stringify({ candidates: [{
+            name: "Verified Professional", category: "AI_AUTOMATION",
+            sourceId: firstId,
+            rationale: "Tavily independently returned this named consultant.",
+          }, {
+            name: "Hallucinated", category: "AI_AUTOMATION",
+            sourceId: "unknown-source-id",
+            rationale: "This identity lacks grounded retrieval evidence.",
+          }] }),
+        }] } }],
+        usageMetadata: { promptTokenCount: 1200, candidatesTokenCount: 120,
+          thoughtsTokenCount: 0 },
+      };
+    },
+  });
+  assert.deepEqual(calls, ["tavily", "count", "generate"]);
+  assert.deepEqual(response.candidates.map(item => item.name),
+    ["Verified Professional"]);
+  assert.equal(response.candidates[0].email, null);
+  assert.equal(response.reportedRetrievalCredits, 1);
+  assert.equal(response.automaticRetryAllowed, false);
+  assert.equal(response.sendingEnabled, false);
+});
+
+test("Gemini evidence compaction preserves trusted URL IDs and refuses tampered manifests", async () => {
+  const { fitGemini3RetrievalEvidence } =
+    await import("../server/research-provider-adapters.js");
+  const { buildBoundedRetrievalManifest } =
+    await import("../server/research-evidence.js");
+  const manifest = buildBoundedRetrievalManifest({
+    provider: "tavily", observedAt: "2026-11-18T00:00:00.000Z",
+    records: [{
+      sourceId: "trusted-id", url: source, title: "Consultant profile",
+      excerpt: "Named specialist offers professional online advisory services.",
+    }],
+  });
+  const prepared = fitGemini3RetrievalEvidence({
+    query, limit: 2, manifest, maxInputTokens: 16_384,
+  });
+  assert.equal(prepared.manifest.records[0].url, source);
+  assert.equal(prepared.manifest.records[0].sourceId, "trusted-id");
+  assert.equal(prepared.payload.tools, undefined);
+  assert.equal(prepared.manifest.digest.length, 64);
+  await assert.rejects(async () => fitGemini3RetrievalEvidence({
+    query, limit: 2,
+    manifest: { ...manifest, records: [{
+      ...manifest.records[0], url: "https://invented.example.org",
+    }] },
+    maxInputTokens: 16_384,
+  }), TypeError);
+});

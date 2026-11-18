@@ -2821,6 +2821,26 @@ function App() {
                             not a verified provider invoice. A PAUSED run does not
                             automatically replay uncertain paid calls.</p>
                         </section>}
+                        {campaignRunApproval?.run?.status === "PAUSED" &&
+                          <section className="campaign-approved-run" role="alert"
+                            aria-label="Paused paid run recovery">
+                            <strong>Research stopped safely — no automatic retry</strong>
+                            <p>This campaign already has an immutable paid-run
+                              approval. Its last request may have incurred a
+                              provider charge, so the remaining tasks cannot
+                              be launched using the other Run campaign button.
+                              The previous request will not be repeated.</p>
+                            <p>Inspect the saved run and ledger first. When
+                              ready, plan a fresh campaign with the same
+                              criteria and approve a new bounded run.
+                              Planning is free and does not call a provider.</p>
+                            <button type="button" className="secondary"
+                              disabled={campaignTestBusy ||
+                                campaignTestQuery.trim().length < 12}
+                              onClick={() => void createManualTestCampaign(p.id)}>
+                              Plan a new campaign (free)
+                            </button>
+                          </section>}
                         {campaignRunApproval?.autonomousRunEnabled &&
                           campaignRunApproval.priceEnvelope &&
                           !campaignRunApproval.run &&
@@ -2913,7 +2933,8 @@ function App() {
                               Skip uncertain task without replay
                             </button>
                           </>}
-                        {campaignProgress.operationalState === "READY" && <>
+                        {campaignProgress.operationalState === "READY" &&
+                          campaignRunApproval?.run === null && <>
                           <p>Personal AI key: {personalAi.keyConfigured ? "configured" : "missing"} ·
                             {describeCampaignBudget(researchBudget,
                               personalAi.keyConfigured).message} ·
