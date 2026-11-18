@@ -84,6 +84,10 @@ function fixture({ remaining = 60, usedFirst = 25, sourceLimit = 100,
     aiSetting: { findUnique: async () => ({
       provider: "gemini", model: providerModel,
     }) },
+    researchCampaignObservation: {
+      findMany: async ({ where }) => observations.filter(row =>
+        where.id.in.includes(row.id)),
+    },
     researchPersonSourceJob: {
       count: async ({ where }) =>
         where.status?.in?.includes("PAUSED") && uncertain ? 1 : 0,
