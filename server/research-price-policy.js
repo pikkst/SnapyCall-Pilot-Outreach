@@ -49,6 +49,28 @@ const approvedResearchPrices = Object.freeze({
       maxSearchRequests: 3,
     }),
   }),
+  // Staged dual-provider tariff. Deliberately NOT approved for dispatch.
+  // Provider account credit ceilings, contractual rights and owner-level
+  // allocation have not been independently confirmed. A public price alone
+  // cannot enable a paid campaign. No environment flag overrides this gate.
+  "gemini:gemini-3-flash-preview": Object.freeze({
+    provider: "gemini",
+    model: "gemini-3-flash-preview",
+    retrievalProvider: "tavily",
+    enforcementReady: false,
+    priceVersion: "tavily-basic-gemini3-flash-preview-staged-2026-11-18",
+    expiresAt: new Date("2026-12-01T00:00:00Z"),
+    billingContractVersion: "tavily-basic-gemini3-text-v1",
+    worstCaseCents: 3,
+    retrieval: Object.freeze({
+      maxRequests: 1,
+      centsPerThousandRequests: 800,
+    }),
+    textModel: Object.freeze({
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    }),
+  }),
   "gemini:gemini-2.5-flash": Object.freeze({
     provider: "gemini",
     enforcementReady: true,
