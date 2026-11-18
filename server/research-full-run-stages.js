@@ -203,6 +203,18 @@ export async function tickFullRunStages(db, {
     return move("NEEDS_REVIEW", "DISCOVERY_REQUIRES_REVIEW");
   }
   if (!TERMINAL_CAMPAIGN.has(campaign.status)) {
+    // A paused/expired discovery run is a reconciliation stop, not a healthy
+    // in-progress stage. Never mask uncertain provider billing as activity.
+    if (full.status === "DISCOVERY") {
+      const run = await db.researchCampaignRun.findUnique({
+        where: { campaignId: scope.campaignId },
+        select: { status: true, expiresAt: true },
+      });
+      if (!run || !["APPROVED", "RUNNING"].includes(run.status) ||
+          !(run.expiresAt instanceof Date) || run.expiresAt <= clock) {
+        return move("NEEDS_REVIEW", "DISCOVERY_APPROVAL_RECONCILIATION_REQUIRED");
+      }
+    }
     return { status: "WAITING", code: "DISCOVERY_RUNNING" };
   }
   const evidence = await progress(db, scope);
@@ -315,6 +327,15 @@ export async function tickFullRunStages(db, {
     return move("SOURCE_RUNNING", "SOURCE_STAGE_APPROVED_FROM_FULL_RUN");
   }
   if (full.status === "SOURCE_RUNNING") {
+    const uncertainJobs = await db.researchPersonSourceJob.count({
+      where: { campaignId: scope.campaignId, OR: [
+        { status: "PAUSED" },
+        { status: "RUNNING", leaseUntil: { lte: clock } },
+      ] },
+    });
+    if (uncertainJobs) {
+      return move("NEEDS_REVIEW", "SOURCE_JOB_BILLING_RECONCILIATION_REQUIRED");
+    }
     const approval = await db.researchPersonSourceApproval.findUnique({
       where: { campaignId: scope.campaignId },
       select: { status: true, ownerId: true, workspaceId: true },
