@@ -155,7 +155,16 @@ export async function commitCampaignResearchResult(db, claim, preview,
       const adaptive = full?.status === "DISCOVERY" &&
         full.workspaceId === claim.workspaceId &&
         full.ownerId === claim.ownerId;
-      if (unique >= campaign.targetCount && !adaptive) {
+      if (adaptive && unique >= 250) {
+        // The immutable email-inspection snapshot cannot exceed 250 persons.
+        // Cancel future queued tasks under the same campaign lock so the
+        // autorun and full-run stage controller can progress to verification.
+        await tx.researchCampaignTask.updateMany({
+          where: { campaignId: claim.campaignId, status: "QUEUED" },
+          data: { status: "CANCELLED" },
+        });
+        terminalStatus = "PARTIAL";
+      } else if (unique >= campaign.targetCount && !adaptive) {
         // Prevent another paid claim after the threshold has been reached.
         await tx.researchCampaignTask.updateMany({
           where: { campaignId: claim.campaignId, status: "QUEUED" },
