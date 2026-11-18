@@ -188,7 +188,11 @@ async function persistPersonSourceInspection(db, scope, job, observation, {
       });
       if (changed.count !== 1) throw new Error("SOURCE_PROOF_CAS_CONFLICT");
     }
-    const next = evidence ? "VERIFIED" : "NO_PUBLIC_EMAIL";
+    // A page lacking attributable evidence does NOT prove this person has no
+    // public email elsewhere. Preserve a precise, source-scoped terminal state.
+    const next = evidence ? "VERIFIED" :
+      errorCode === "PUBLIC_PAGE_INSPECTION_UNAVAILABLE"
+        ? "SOURCE_UNAVAILABLE" : "SOURCE_NOT_ATTRIBUTABLE";
     const updated = await tx.researchPersonSourceJob.updateMany({
       where: { id: job.id, campaignId: scope.campaignId,
         status: "COMPLETED", proposedSourceUrl: url,
