@@ -783,7 +783,7 @@ try {
       "Legacy admin cannot set partner's research budget");
     assert.equal((await call("/research-limits", { method: "PUT",
       headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
-      body: JSON.stringify({ dailyLimit: 101, maxCandidates: 5, maxConcurrent: 2 }),
+      body: JSON.stringify({ dailyLimit: 1001, maxCandidates: 5, maxConcurrent: 2 }),
     })).status, 400, "A user cannot exceed the backend safety ceiling");
     const storedLimits = await call("/research-limits", { method: "PUT",
       headers: { cookie: partnerCookie, origin, "content-type": "application/json" },
