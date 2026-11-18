@@ -21,7 +21,8 @@ const jobs = records.map(row => ({
   reason: "SHARED_SOURCE", status: "QUEUED",
 }));
 const validInput = { maxCalls: 2, maxWorstCaseCents: 6,
-  confirmPaidSourceResearch: true, confirmNoAutomaticRetry: true };
+  confirmPaidSourceResearch: true, confirmNoAutomaticRetry: true,
+  confirmPublicInspection: true };
 const scope = { campaignId, workspaceId, ownerId, input: validInput };
 const clock = new Date("2026-11-18T14:00:00.000Z");
 
@@ -84,6 +85,7 @@ test("approval requires explicit bounded call count and conservative budget", ()
     { ...validInput, maxWorstCaseCents: 50001 },
     { ...validInput, confirmPaidSourceResearch: false },
     { ...validInput, confirmNoAutomaticRetry: false },
+    { ...validInput, confirmPublicInspection: false },
     { ...validInput, provider: "openai" },
   ]) assert.throws(() => validatePersonSourceApproval(value), TypeError);
 });
