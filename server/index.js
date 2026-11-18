@@ -1800,6 +1800,7 @@ app.post("/api/research-campaigns/:id/email-triage/start",
     const input = z.object({
       maxPages: z.number().int().min(1).max(250),
       confirmPublicInspection: z.literal(true),
+      confirmSkipUninspectable: z.literal(true).optional(),
     }).strict().parse(req.body ?? {});
     const result = await approveEmailTriage(prisma, {
       campaignId: req.params.id, workspaceId: req.candidateScope,
