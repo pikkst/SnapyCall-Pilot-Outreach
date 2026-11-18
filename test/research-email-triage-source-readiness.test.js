@@ -18,9 +18,10 @@ test("read-only triage preflight requires a terminal discovery and direct unique
   assert.equal(pending.eligible, false);
   const ready = emailTriageSourceReadiness("PARTIAL", [first, second]);
   assert.deepEqual(ready, {
-    eligible: true, code: "READY_FOR_OWNER_APPROVAL",
+    eligible: true, partialEligible: false, code: "READY_FOR_OWNER_APPROVAL",
     observations: 2, inspectableObservations: 2,
-    uniqueSources: 2, namedPersonEmailVerified: false,
+    uniqueSources: 2, eligibleSubsetObservations: 2, excludedObservations: 0,
+    namedPersonEmailVerified: false,
     sendingEnabled: false,
   });
   assert.equal(emailTriageSourceReadiness("COMPLETED", []).code,
@@ -54,4 +55,18 @@ test("250-page bound and invalid snapshots fail closed", () => {
   assert.throws(() => emailTriageSourceReadiness("PARTIAL", Array(252).fill(first)),
     TypeError);
   assert.throws(() => emailTriageSourceReadiness("PARTIAL", null), TypeError);
+});
+
+test("partial readiness selects only non-colliding independently inspectable sources", () => {
+  const mixed = emailTriageSourceReadiness("PARTIAL",
+    [first, first, second, opaque]);
+  assert.equal(mixed.eligible, false);
+  assert.equal(mixed.partialEligible, true);
+  assert.equal(mixed.eligibleSubsetObservations, 1);
+  assert.equal(mixed.excludedObservations, 3);
+  assert.equal(mixed.code, "EMAIL_TRIAGE_DIRECT_SOURCE_REQUIRED");
+  assert.equal(emailTriageSourceReadiness("RUNNING",
+    [first, opaque]).partialEligible, false);
+  assert.equal(emailTriageSourceReadiness("PARTIAL",
+    [first, first]).partialEligible, false);
 });
