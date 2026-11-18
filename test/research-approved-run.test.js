@@ -27,7 +27,7 @@ test("approval requires explicit conservative total and no-repeat acceptance", (
   for (const input of [
     { ...limits, confirmNoAutomaticRetry: false },
     { ...limits, confirmConservativeBudget: false },
-    { ...limits, maxTasks: 25 },
+    { ...limits, maxTasks: 251 },
     { ...limits, maxWorstCaseCents: 0 },
     { ...limits, provider: "gemini" },
   ]) assert.throws(() => validateCampaignRunApproval(input), TypeError);
@@ -381,4 +381,16 @@ test("uncertain provider result cannot finalize partial campaign at run limit", 
   assert.equal(out.lastCode, "BILLING_UNCERTAIN");
   assert.equal(attempted, false);
   assert.equal(writes[0].status, "PAUSED");
+});
+
+
+test("expanded approval cap accepts 250 calls while still enforcing explicit spend", () => {
+  assert.deepEqual(validateCampaignRunApproval({
+    maxTasks: 250, maxWorstCaseCents: 50000,
+    confirmConservativeBudget: true, confirmNoAutomaticRetry: true,
+  }), { maxTasks: 250, maxWorstCaseCents: 50000 });
+  assert.throws(() => validateCampaignRunApproval({
+    maxTasks: 250, maxWorstCaseCents: 50001,
+    confirmConservativeBudget: true, confirmNoAutomaticRetry: true,
+  }), TypeError);
 });
