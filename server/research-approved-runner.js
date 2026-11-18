@@ -2,7 +2,7 @@
 // It is restart-safe at the DB lease boundary but availability requires a
 // continuously running worker/scheduler; a sleeping free instance is NOT one.
 import { runOneCampaignTask } from "./research-campaign-worker.js";
-import { ResearchPacingRequired } from "./research-quota.js";
+import { ResearchPacingRequired, ResearchQuotaExceeded } from "./research-quota.js";
 import { finishApprovedRunTask, pauseApprovedRun,
   ApprovedRunBlocked } from "./research-campaign-run-approval.js";
 
@@ -45,6 +45,16 @@ export async function tickApprovedCampaignRun(db, {
       return { status: waiting.code === "RUNNING" ? "WAITING" : waiting.code,
         code: waiting.lastCode ?? error.code,
         retryAfterSeconds: error.retryAfterSeconds };
+    }
+    if (error instanceof ResearchQuotaExceeded) {
+      // The entire claim transaction rolled back. No task, owner budget,
+      // daily quota or provider dispatch was committed in this tick.
+      // Preserve the immutable approval and recheck after the UTC day resets.
+      const waiting = await finish(db, {
+        ...scope, result: { status: "DAILY_QUOTA_WAIT", attempted: false },
+      });
+      return { status: waiting.code === "RUNNING" ? "WAITING" : waiting.code,
+        code: waiting.lastCode ?? "WAITING_DAILY_QUOTA" };
     }
     if (error instanceof ApprovedRunBlocked &&
         error.code === "RUN_TASK_ALREADY_IN_FLIGHT") {

@@ -3,6 +3,7 @@
 import { lockActiveWorkspaceMembership } from "./workspace-access.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
 import { validateFullRunScope } from "./research-full-run-contract.js";
+import { readResearchDailyCapacity } from "./research-quota.js";
 
 const CUID = /^c[a-z0-9]{10,40}$/;
 const APPROVAL_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -105,6 +106,23 @@ export async function approveCampaignRun(db, {
     ]);
     if (attempts !== 0 || observations !== 0) {
       return { status: 409, code: "CAMPAIGN_ALREADY_STARTED" };
+    }
+    // A full pipeline's discovery and source searches share the same UTC quota.
+    // Decline a new approval that cannot fit in today's remaining capacity.
+    // This is advisory against concurrent claims; the existing claim-time
+    // transactional quota check remains authoritative.
+    if (fullRun) {
+      const dailyQuota = await readResearchDailyCapacity(tx, {
+        workspaceId, userId: ownerId,
+      });
+      const requestedCalls = limits.maxTasks + fullRun.maxSourceCalls;
+      if (requestedCalls > dailyQuota.remaining) {
+        return { status: 409, code: "DAILY_QUOTA_INSUFFICIENT",
+          error: "This run exceeds today's remaining daily research quota. " +
+            "Reduce searches, increase your personal limit if possible, " +
+            "or wait until the next UTC reset.",
+          requestedCalls, dailyQuota };
+      }
     }
     const created = await tx.researchCampaignRun.create({ data: {
       campaignId, workspaceId, ownerId,
@@ -257,6 +275,24 @@ export async function finishApprovedRunTask(db, {
       run.startedTasks < run.maxTasks &&
       run.committedWorstCaseCents + run.worstCasePerCallCents <=
         run.maxWorstCaseCents;
+    // Daily quota exhaustion is thrown *inside* the atomic claim transaction.
+    // The claim rolls back its lease, approved-call allowance and money reserve.
+    // Unlike a provider failure, this is non-billable and can wait until the
+    // next UTC day without granting any new authorization.
+    let dailyQuotaWaiting = false;
+    let dailyQuotaUncertain = false;
+    if (result?.status === "DAILY_QUOTA_WAIT" && result.attempted === false &&
+        !terminal && !qualityStopped &&
+        run.expiresAt instanceof Date && run.expiresAt.getTime() > Date.now() &&
+        run.startedTasks < run.maxTasks &&
+        run.committedWorstCaseCents + run.worstCasePerCallCents <=
+          run.maxWorstCaseCents) {
+      const unresolved = await tx.researchCampaignTask.count({
+        where: { campaignId, status: { in: ["PAUSED", "FAILED", "RUNNING"] } },
+      });
+      dailyQuotaWaiting = unresolved === 0;
+      dailyQuotaUncertain = unresolved !== 0;
+    }
     // A queued task waiting for an already scheduled, bounded retry is not
     // a failed campaign. Never require a fresh user approval merely because
     // the tick found no task eligible at this exact instant.
@@ -317,7 +353,8 @@ export async function finishApprovedRunTask(db, {
     const status = qualityStopped ? "PAUSED" :
       boundedPartial || (["COMPLETED", "NO_READY_TASK"].includes(result?.status) &&
       terminal) ? "COMPLETED" :
-      (result?.status === "COMPLETED" || retryWaiting || pacingWaiting) &&
+      (result?.status === "COMPLETED" || retryWaiting || pacingWaiting ||
+       dailyQuotaWaiting) &&
       run.startedTasks < run.maxTasks &&
       run.expiresAt instanceof Date && run.expiresAt.getTime() > Date.now() &&
       run.committedWorstCaseCents + run.worstCasePerCallCents <=
@@ -325,8 +362,13 @@ export async function finishApprovedRunTask(db, {
     const code = qualityStopped ? "QUALITY_STOP" :
       boundedPartial ? "RUN_LIMIT_REACHED" :
       status === "COMPLETED" ? "CAMPAIGN_FINISHED" :
-      status === "RUNNING" ? (pacingWaiting ? "WAITING_RATE_LIMIT" :
+      status === "RUNNING" ? (dailyQuotaWaiting ? "WAITING_DAILY_QUOTA" :
+        pacingWaiting ? "WAITING_RATE_LIMIT" :
         retryWaiting ? "WAITING_RETRY" : null) :
+      dailyQuotaUncertain ? "RUN_EXECUTION_UNCERTAIN" :
+      result?.status === "DAILY_QUOTA_WAIT" &&
+        run.expiresAt instanceof Date && run.expiresAt.getTime() <= Date.now()
+        ? "RUN_APPROVAL_EXPIRED" :
       result?.status === "COMPLETED" ? "RUN_LIMIT_REACHED" :
       result?.code ?? result?.status ?? "RUN_OUTCOME_UNCERTAIN";
     await tx.researchCampaignRun.update({

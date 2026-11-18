@@ -43,7 +43,8 @@ test("upfront multi-stage ceiling cannot expand outside the single approval", ()
 
 function fixture({ prior = null, priorFull = null, revocation = false,
   campaignStatus = "QUEUED", taskAttempts = 0,
-  observed = 0 } = {}) {
+  observed = 0, workspaceUsed = 0, personalUsed = 0,
+  personalLimit = 100 } = {}) {
   const calls = [];
   const db = {
     aiSetting: { findUnique: async () => ({
@@ -79,6 +80,15 @@ function fixture({ prior = null, priorFull = null, revocation = false,
       researchCampaign: {
         findUnique: async () => ({ targetCount: 100 }),
       },
+      researchUserLimits: {
+        findUnique: async () => ({ dailyLimit: personalLimit }),
+      },
+      researchDailyQuota: {
+        findMany: async ({ where }) => where.scopeKey.in.map(key => ({
+          scopeKey: key,
+          attempts: key.startsWith("workspace-user:") ? personalUsed : workspaceUsed,
+        })),
+      },
       researchCampaignTask: { count: async () => taskAttempts },
       researchCampaignObservation: { count: async () => observed },
       auditEvent: { create: async ({ data }) => {
@@ -103,6 +113,26 @@ test("one approved action commits discovery and source grants atomically", async
   assert.equal(result.fullRun.contactAcceptanceAuthorized, false);
   assert.equal(result.fullRun.sendingEnabled, false);
   assert.deepEqual(state.calls, ["discovery", "full-run", "audit"]);
+});
+
+test("new full-run requires today's combined discovery/source quota headroom", async () => {
+  // 12 + 30 requests = 42. Workspace cap is 100; user can raise only
+  // their personal limit. Approving a new run never reserves quota.
+  const quota = fixture({ workspaceUsed: 65, personalUsed: 40, personalLimit: 100 });
+  const denied = await approveCampaignRun(quota.db,
+    { campaignId, workspaceId, ownerId, input });
+  assert.equal(denied.status, 409);
+  assert.equal(denied.code, "DAILY_QUOTA_INSUFFICIENT");
+  assert.equal(denied.requestedCalls, 42);
+  assert.equal(denied.dailyQuota.remaining, 35);
+  assert.deepEqual(quota.calls, []);
+
+  const personal = fixture({ workspaceUsed: 0, personalUsed: 3, personalLimit: 40 });
+  const personalDenied = await approveCampaignRun(personal.db,
+    { campaignId, workspaceId, ownerId, input });
+  assert.equal(personalDenied.code, "DAILY_QUOTA_INSUFFICIENT");
+  assert.equal(personalDenied.dailyQuota.remaining, 37);
+  assert.deepEqual(personal.calls, []);
 });
 
 test("revoked membership and started discovery cannot acquire full-run grants", async () => {
