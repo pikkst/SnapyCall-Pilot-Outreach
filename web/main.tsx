@@ -665,8 +665,12 @@ function App() {
         autoOpenedCampaignForWorkspace.current === activeWorkspaceId) return;
     autoOpenedCampaignForWorkspace.current = activeWorkspaceId;
     const latest = [...workspaceCampaigns].sort((a, b) =>
+      Number(b.status === "RUNNING") - Number(a.status === "RUNNING") ||
       Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
-    if (latest) void openCampaignProgress(activeWorkspaceId, latest.id);
+    if (latest) {
+      setCampaignTestQuery(latest.query);
+      void openCampaignProgress(activeWorkspaceId, latest.id);
+    }
   }, [partnerTab, activeWorkspaceId, campaignListStatus,
     campaignProgressId, campaignProgressStatus, workspaceCampaigns]);
 
@@ -2211,12 +2215,16 @@ function App() {
                             disabled={campaignProgressStatus === "loading"}
                             onChange={event => {
                               if (event.target.value) {
+                                const selected = workspaceCampaigns.find(item =>
+                                  item.id === event.target.value);
+                                if (selected) setCampaignTestQuery(selected.query);
                                 setCampaignCreationOpen(false);
                                 void openCampaignProgress(p.id, event.target.value);
                               }
                             }}>
                             {!campaignProgressId && <option value="">Choose a campaign</option>}
                             {[...workspaceCampaigns].sort((a, b) =>
+                              Number(b.status === "RUNNING") - Number(a.status === "RUNNING") ||
                               Date.parse(b.createdAt) - Date.parse(a.createdAt))
                               .map(item => <option key={item.id} value={item.id}>
                                 {item.query.slice(0, 65)} · {item.status} ·
