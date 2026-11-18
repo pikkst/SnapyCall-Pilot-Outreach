@@ -558,6 +558,7 @@ model ResearchPersonSourceJob {
   updatedAt DateTime @updatedAt
 
   @@index([campaignId, status, createdAt])
+  @@index([campaignId, cycleIndex, status])
   @@index([status, leaseUntil])
 }
 
