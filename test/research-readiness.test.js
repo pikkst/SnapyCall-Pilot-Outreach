@@ -65,7 +65,9 @@ test("unpriced Gemini 3 is blocked even with budget and a configured personal ke
   });
   assert.equal(status.ready, false);
   assert.equal(status.steps[2].state, "blocked");
-  assert.match(status.steps[2].description, /no approved app-enforced Search billing ceiling/);
+  assert.match(status.steps[2].description, /cannot enforce a maximum search cost before each request/);
+  assert.match(status.steps[2].description, /Your API key and monthly budget are already configured/);
+  assert.match(status.steps[2].description, /one-time Gemini 3 diagnostic does not enable a campaign/);
 });
 
 test("editing model ID cannot borrow previously approved model's research readiness", () => {
@@ -78,4 +80,19 @@ test("editing model ID cannot borrow previously approved model's research readin
   assert.equal(status.ready, false);
   assert.equal(status.steps[2].state, "blocked");
   assert.match(status.steps[2].description, /Save this model selection/);
+});
+
+
+test("unapproved non-Gemini models retain generic billing guidance", () => {
+  const status = researchReadiness({
+    ...ready,
+    selectedProvider: "openai", selectedModel: "unsupported-model",
+    savedProvider: "openai", savedModel: "unsupported-model",
+    pricingStatus: "MODEL_PRICING_UNAVAILABLE",
+    enforcedForPaidSearch: false,
+  });
+  assert.equal(status.ready, false);
+  assert.equal(status.steps[2].state, "blocked");
+  assert.match(status.steps[2].description, /no approved app-enforced search billing ceiling/);
+  assert.doesNotMatch(status.steps[2].description, /Gemini 3/);
 });
