@@ -28,6 +28,8 @@ test("additive schema migration preserves existing daily counters and has DB che
   assert.match(migration, /ALTER TABLE "Partner"/);
   assert.match(migration, /DEFAULT 1000/);
   assert.match(migration, /CHECK \("researchDailyLimit" BETWEEN 1 AND 1000\)/);
+  assert.match(migration, /DROP CONSTRAINT IF EXISTS "ResearchUserLimits_dailyLimit_check"/);
+  assert.match(migration, /CHECK \("dailyLimit" BETWEEN 1 AND 1000\)/);
   assert.doesNotMatch(migration, /(?:DELETE|UPDATE|TRUNCATE)\s+"ResearchDailyQuota"/);
 });
 
