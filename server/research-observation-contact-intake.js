@@ -59,7 +59,9 @@ export async function acceptReviewedCampaignContact(db, {
     }
     const matches = await tx.$queryRaw`
       SELECT "id", "name", "category", "citationUrl", "candidateId",
-        "groundingStatus", "groundingResolvedUrl", "groundingProvenance"
+        "groundingStatus", "groundingResolvedUrl", "groundingProvenance",
+        "personSourceUrl", "personSourceProvenance", "personSourceVerifiedAt",
+        "emailTriageStatus", "emailTriageDigest"
       FROM "ResearchCampaignObservation"
       WHERE "id" = ${observationId} AND "campaignId" = ${campaignId}
       FOR UPDATE`;
@@ -75,7 +77,8 @@ export async function acceptReviewedCampaignContact(db, {
     const sharedSources = await tx.researchCampaignObservation.count({
       where: { campaignId, id: { not: observationId },
         OR: [{ citationUrl: finding.sourceUrl },
-          { groundingResolvedUrl: finding.sourceUrl }] },
+          { groundingResolvedUrl: finding.sourceUrl },
+          { personSourceUrl: finding.sourceUrl }] },
     });
     if (sharedSources) {
       return { status: 409, code: "SHARED_SOURCE_REQUIRES_REVIEW",

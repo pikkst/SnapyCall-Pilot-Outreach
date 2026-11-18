@@ -22,6 +22,8 @@ import { planResearchCampaign } from "./research-campaign-planner.js";
 import { summarizeCampaignProgress } from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
 import { approvePersonSourceResearch } from "./research-person-source-approval.js";
+import { enqueuePersonSourceJobs } from "./research-person-source-queue.js";
+import { startPersonSourceWorker } from "./research-person-source-runner.js";
 import { approveCampaignRun, stopApprovedCampaignRun,
   publicRunStatus, ApprovedRunBlocked }
   from "./research-campaign-run-approval.js";
@@ -1916,6 +1918,28 @@ app.post("/api/research-campaigns/:id/observations/:observationId/accept-contact
 // and immutable attempt/cost caps come from verified server-side policy.
 // Separate, immutable source-enrichment budget. OFF by default; no provider
 // dispatch is wired here. Approval is not an outreach or contact permission.
+// Queue preparation is non-billable, idempotent and explicitly owner-scoped.
+// It does NOT grant source research, public inspection or sending permission.
+app.post("/api/research-campaigns/:id/person-source/queue",
+  candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
+    if (env.AI_PERSON_SOURCE_APPROVAL_ENABLED !== "true") {
+      return res.status(503).json({ code: "PERSON_SOURCE_APPROVAL_DISABLED" });
+    }
+    if (req.candidateScope === null) return res.status(403).json({
+      error: "Partner workspace required",
+    });
+    const identity = await partnerIdentity(req);
+    if (!identity) return res.status(401).json({ error: "Unauthorized" });
+    z.object({ confirmQueuePreparation: z.literal(true) }).strict().parse(
+      req.body ?? {});
+    const result = await enqueuePersonSourceJobs(prisma, {
+      campaignId: req.params.id, workspaceId: req.candidateScope,
+      ownerId: identity.id, confirmQueuePreparation: true,
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.status).json(result);
+  }));
+
 app.post("/api/research-campaigns/:id/person-source/approve",
   candidateReadScope, requireOrigin, researchLimiter, safe(async (req, res) => {
     if (env.AI_PERSON_SOURCE_APPROVAL_ENABLED !== "true") {
@@ -2374,6 +2398,11 @@ async function start() {
     ? startGroundingResolutionWorker(prisma) : () => {};
   const stopEmailTriageWorker = env.AI_EMAIL_TRIAGE_ENABLED === "true"
     ? startEmailTriageWorker(prisma) : () => {};
+  const stopPersonSourceWorker =
+    env.AI_PERSON_SOURCE_EXECUTOR_ENABLED === "true" &&
+    env.AI_PERSON_SOURCE_APPROVAL_ENABLED === "true"
+      ? startPersonSourceWorker(prisma, { encryptionKey: env.AI_ENCRYPTION_KEY })
+      : () => {};
   const stopApprovedWorker = env.AI_AGENT_AUTORUN_ENABLED === "true" &&
     env.AI_AGENT_RESEARCH_ENABLED === "true" &&
     env.AI_AGENT_EXECUTOR_ENABLED === "true"
@@ -2384,6 +2413,7 @@ async function start() {
     if (shuttingDown) return;
     shuttingDown = true;
     stopApprovedWorker();
+    stopPersonSourceWorker();
     stopGroundingWorker();
     stopEmailTriageWorker();
     server.close(async () => {
