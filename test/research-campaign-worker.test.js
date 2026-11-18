@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runOneCampaignTask, ResearchWorkerPreflightError,
-  calculateCampaignVerifiedSpendCents
+  calculateCampaignVerifiedSpendCents, resolveCampaignResearchExecution
 } from "../server/research-campaign-worker.js";
 
 const campaignId = "cmabcdefghijklmnopqrstu";
@@ -520,4 +520,70 @@ test("worker does not accept an injected dual-provider stage on a legacy model",
   assert.equal(metadata.length, 1);
   assert.equal(Object.hasOwn(metadata[0], "dualProviderStage"), false);
   assert.equal(metadata[0].automaticRetryAllowed, false);
+});
+
+
+
+test("dual-provider task plan selects bounded search only with exact reviewed account prerequisites", async () => {
+  const { researchTavilyGeminiCandidates, researchCandidates } =
+    await import("../server/ai-research.js");
+  const price = {
+    provider: "gemini", model: "gemini-3-flash-preview",
+    billingContractVersion: "tavily-basic-gemini3-text-v1",
+    retrievalProvider: "tavily", enforcementReady: true,
+    retrieval: { maxRequests: 1 },
+    textModel: { maxInputTokens: 16_384, maxOutputTokens: 2048 },
+  };
+  const valid = {
+    provider: "gemini", model: "gemini-3-flash-preview", price,
+    search: researchCandidates,
+    tavilyApiKey: "tvly-synthetic-test-key",
+    tavilyEnabled: true, accountCapVerified: true,
+  };
+  const plan = resolveCampaignResearchExecution(valid);
+  assert.equal(plan.dualProvider, true);
+  assert.equal(plan.search, researchTavilyGeminiCandidates);
+  assert.equal(plan.maxResults, 20);
+  assert.equal(plan.maxInputTokens, 16_384);
+  assert.equal(plan.tavilyApiKey, valid.tavilyApiKey);
+  assert.equal(Object.isFrozen(plan), true);
+  for (const change of [
+    { tavilyApiKey: undefined }, { tavilyApiKey: "not-a-key" },
+    { tavilyEnabled: false }, { accountCapVerified: false },
+    { provider: "openai" }, { model: "gemini-2.5-flash" },
+    { price: { ...price, enforcementReady: false } },
+    { price: { ...price, textModel: { ...price.textModel, maxInputTokens: 1_000_000 } } },
+    { price: { ...price, retrieval: { maxRequests: 2 } } },
+    { price: { ...price, textModel: { ...price.textModel, maxOutputTokens: 9999 } } },
+  ]) assert.throws(() => resolveCampaignResearchExecution({
+    ...valid, ...change,
+  }), error => error instanceof ResearchWorkerPreflightError);
+  const legacy = resolveCampaignResearchExecution({
+    ...valid, price: {
+      billingContractVersion: "gemini-2.5-google-search-grounded-prompt-v1",
+    },
+  });
+  assert.equal(legacy.dualProvider, false);
+  assert.equal(legacy.search, researchCandidates);
+});
+
+test("worker never claims Gemini 3 without an approved registry tariff even with Tavily enabled", async () => {
+  const { db, events, search } = fakeDatabase({ approvedRun: true });
+  db.aiSetting.findUnique = async () => ({
+    provider: "gemini", model: "gemini-3-flash-preview",
+    encryptedApiKey: "encrypted-synthetic-gemini-key",
+  });
+  let calls = 0;
+  await assert.rejects(() => runOneCampaignTask(db, input, {
+    search,
+    decrypt: () => { calls++; return "test-gemini-key"; },
+    tavilyApiKey: "tvly-synthetic-test-key",
+    tavilyEnabled: true, accountCapVerified: true,
+    now: () => now,
+  }), error => error.name === "ResearchPricingUnavailable");
+  assert.equal(calls, 0);
+  for (const event of ["provider-called", "money-reserved",
+    "task-claimed", "concurrency-reserved", "run-allowance-reserved"]) {
+    assert.equal(events.includes(event), false, event);
+  }
 });
