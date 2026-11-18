@@ -18,7 +18,7 @@ const observations = [1, 2].map(i => ({
 }));
 
 function fixture({ revoked = false, campaignStatus = "PARTIAL",
-  rows = observations, existing = [] } = {}) {
+  rows = observations, existing = [], approvalExists = false } = {}) {
   const writes = [];
   const jobs = [...existing];
   const tx = {
@@ -29,6 +29,9 @@ function fixture({ revoked = false, campaignStatus = "PARTIAL",
       if (sql.includes('FROM "ResearchCampaign"'))
         return [{ id: campaignId, status: campaignStatus }];
       throw new Error("Unexpected SQL");
+    },
+    researchPersonSourceApproval: {
+      findUnique: async () => approvalExists ? { id: "prior-approval" } : null,
     },
     researchCampaignObservation: {
       count: async () => rows.length,
@@ -117,4 +120,13 @@ test("queue preparation is not implicit authorization", async () => {
   await assert.rejects(() => enqueuePersonSourceJobs(db, {
     ...scope, confirmQueuePreparation: false,
   }), TypeError);
+});
+
+test("immutable source approval freezes the queue and prevents newly appended jobs", async () => {
+  const state = fixture({ approvalExists: true });
+  const result = await enqueuePersonSourceJobs(state.db, scope);
+  assert.equal(result.status, 409);
+  assert.equal(result.code, "SOURCE_JOB_MANIFEST_FROZEN");
+  assert.deepEqual(state.writes, []);
+  assert.equal(state.jobs.length, 0);
 });
