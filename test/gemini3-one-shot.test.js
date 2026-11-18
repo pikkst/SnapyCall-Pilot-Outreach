@@ -75,6 +75,10 @@ test("user explicitly confirms exactly one call and cannot retry from this brows
   assert.match(ui, /gemini3TestAttempted\.current = true/);
   assert.match(ui, /confirmation: "RUN_ONE_GEMINI3_PAID_TEST"/);
   assert.match(ui, /gemini3TestAttempted\.current \|\| gemini3TestBusy/);
-  assert.match(ui, /type="checkbox"/);
-  assert.match(ui, /provider charge limit/);
+  // The legacy diagnostic contract remains guarded for existing callers,
+  // but Partner Research no longer exposes a competing paid test launcher.
+  const research = ui.slice(ui.indexOf('{partnerTab === "discovery" && <>'),
+    ui.indexOf('aria-label="Manual expert lead"'));
+  assert.doesNotMatch(research, /Run ONE Gemini 3 Search cost test/);
+  assert.doesNotMatch(research, /one paid search diagnostic/);
 });

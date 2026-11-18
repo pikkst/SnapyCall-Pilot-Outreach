@@ -47,7 +47,9 @@ test("missing key and budget provide independent configuration actions", () => {
 
 test("research UI never enables a paid request without server readiness", () => {
   const source = readFileSync(new URL("../web/main.tsx", import.meta.url), "utf8");
-  assert.ok(source.includes("!readiness.ready}>"));
+  assert.match(source, /readiness\.steps\.map\(step/);
+  assert.match(source, /!campaignNoReplayConfirmed \|\| campaignRunApprovalBusy/);
+  assert.match(source, /approveCampaignAutonomousRun\(/);
   assert.ok(source.includes("researchReadiness({"));
   assert.match(source,
     /no specific\s+spreadsheet has been selected or synchronized/);

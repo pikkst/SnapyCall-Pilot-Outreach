@@ -186,3 +186,13 @@ td button+button{margin-left:6px}
 .research-mode-choice button:focus-visible{outline:3px solid #5c7fe0;outline-offset:3px}
 .research-mode-choice button:hover:not(:disabled){background:#edf3ff;opacity:1}
 @media(max-width:600px){.research-mode-choice{grid-template-columns:minmax(0,1fr)}.research-mode-choice button{width:100%}}
+
+
+/* AI98: one campaign picker, one free planning action and read-only run summary. */
+.research-campaign-selector{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:16px 0}
+.research-campaign-selector label{flex:1 1 280px;min-width:0}
+.research-campaign-selector button{min-height:42px}
+.research-campaign-selector + .metrics{margin-top:16px;margin-bottom:4px}
+.research-campaign-selector + .metrics .metric{padding:16px}
+.research-campaign-selector + .metrics .metric strong{font-size:24px;letter-spacing:-.03em}
+@media(max-width:600px){.research-campaign-selector{align-items:stretch}.research-campaign-selector button{width:100%}.research-campaign-selector + .metrics{grid-template-columns:1fr}}
