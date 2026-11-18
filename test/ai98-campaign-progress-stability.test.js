@@ -6,9 +6,9 @@ const ui = readFileSync(new URL("../web/main.tsx", import.meta.url), "utf8");
 
 test("campaign picker and run summary precede live progress with preserved tenant selection", () => {
   const picker = ui.indexOf('aria-label="Campaign navigation"');
-  const summary = ui.indexOf('aria-label="Selected campaign summary"', picker);
-  const panel = ui.indexOf('aria-label="Campaign research progress"', summary);
-  assert.ok(picker >= 0 && summary > picker && panel > summary);
+  const panel = ui.indexOf('aria-label="Campaign research progress"', picker);
+  const summary = ui.indexOf('aria-label="Research run overview"', panel);
+  assert.ok(picker >= 0 && panel > picker && summary > panel);
   assert.match(ui, /<select value=\{campaignProgressId \?\? ""\}/);
   assert.match(ui, /onChange=\{event => \{[\s\S]*?openCampaignProgress\(p\.id, event\.target\.value\)/);
   assert.match(ui, /Research is paused\. A possibly billable task needs/);
