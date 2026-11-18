@@ -130,3 +130,66 @@ export function buildBoundedRetrievalManifest({ provider, observedAt, records })
     digest,
   });
 }
+
+
+// Normalize text-only model output against the exact immutable retrieval
+// manifest. The model may refer to a sourceId but cannot supply source URLs,
+// email addresses or verification status. Reuse the existing evidence contract.
+const boundedCandidateSchema = candidateSchema.omit({ sourceUrl: true }).extend({
+  sourceId: z.string().min(1).max(160),
+}).strict();
+
+export function normalizeBoundedRetrievalEvidence({ text, manifest, limit }) {
+  if (!manifest || manifest.version !== "bounded-retrieval-v1" ||
+      !Array.isArray(manifest.records) || !Number.isInteger(limit) ||
+      limit < 1 || limit > 20 || typeof text !== "string" ||
+      text.length > 50_000) {
+    throw new TypeError("Invalid bounded evidence envelope");
+  }
+  const records = manifest.records;
+  const provider = records[0]?.sourceProvider;
+  const observedAt = records[0]?.observedAt;
+  // Rebuild the digest rather than trusting a caller-supplied hash.
+  if (records.some(r => r?.sourceProvider !== provider ||
+      r?.observedAt !== observedAt)) {
+    throw new TypeError("Mixed retrieval provenance");
+  }
+  const trusted = buildBoundedRetrievalManifest({
+    provider, observedAt,
+    records: records.map(r => ({
+      sourceId: r.sourceId, url: r.url, title: r.title,
+      excerpt: r.excerpt,
+    })),
+  });
+  if (manifest.digest !== trusted.digest) {
+    throw new TypeError("Retrieval manifest digest mismatch");
+  }
+  let parsed;
+  try { parsed = JSON.parse(text.trim()); }
+  catch { throw new Error("AI research did not return structured results"); }
+  if (!parsed || !Array.isArray(parsed.candidates) ||
+      parsed.candidates.length > 20) {
+    throw new Error("AI research returned an invalid candidate list");
+  }
+  const lookup = new Map(trusted.records.map(r => [r.sourceId, r.url]));
+  const candidates = [];
+  for (const item of parsed.candidates) {
+    const checked = boundedCandidateSchema.safeParse(item);
+    if (!checked.success) continue;
+    const { sourceId, ...fields } = checked.data;
+    const sourceUrl = lookup.get(sourceId);
+    if (!sourceUrl) continue;
+    candidates.push({ ...fields, sourceUrl });
+  }
+  const normalized = normalizeResearchEvidence({
+    text: JSON.stringify({ candidates }),
+    citations: trusted.records.map(r => ({ url: r.url, title: r.title })),
+    limit,
+  });
+  return {
+    ...normalized,
+    manifestDigest: trusted.digest,
+    // Still research observations, never imported workspace contacts.
+    imported: false, reviewRequired: true, sendingEnabled: false,
+  };
+}
