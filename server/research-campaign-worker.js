@@ -11,7 +11,7 @@ import { reserveOwnerSpend, settleOwnerSpend } from "./research-budget.js";
 import { requireResearchPriceEnvelope, calculateVerifiedSpendCents,
   calculateVerifiedCombinedSpendCents } from "./research-price-policy.js";
 import { assertWebResearchModel, BoundedResearchStageError } from "./research-provider-adapters.js";
-import { researchCandidates } from "./ai-research.js";
+import { researchCandidates, researchTavilyGeminiCandidates } from "./ai-research.js";
 import { decryptKey } from "./security.js";
 import { reserveApprovedRunCall, ApprovedRunBlocked } from "./research-campaign-run-approval.js";
 
@@ -24,6 +24,42 @@ export function calculateCampaignVerifiedSpendCents({ price, provider, model, us
       ? calculateVerifiedCombinedSpendCents(price, usage) : null;
   }
   return calculateVerifiedSpendCents(price, usage);
+}
+
+// Validate the server-owned retrieval key and operator entitlement only for
+// an ALREADY approved exact-model dual tariff. This is not price approval.
+export function resolveCampaignResearchExecution({
+  provider, model, price, search = researchCandidates,
+  tavilyApiKey, tavilyEnabled, accountCapVerified,
+}) {
+  if (price?.billingContractVersion !== "tavily-basic-gemini3-text-v1") {
+    return Object.freeze({ search, dualProvider: false });
+  }
+  if (provider !== "gemini" || model !== "gemini-3-flash-preview" ||
+      price?.provider !== provider || price?.model !== model ||
+      price?.retrievalProvider !== "tavily" ||
+      price?.retrieval?.maxRequests !== 1 ||
+      price?.textModel?.maxOutputTokens !== 2048 ||
+      !Number.isSafeInteger(price?.textModel?.maxInputTokens) ||
+      price.textModel.maxInputTokens < 257 ||
+      price.textModel.maxInputTokens > 16_384 ||
+      price?.enforcementReady !== true) {
+    throw new ResearchWorkerPreflightError("DUAL_PROVIDER_PRICE_INVALID");
+  }
+  // Both values must be provided by the server operator, never a browser.
+  // The account cap is an explicit operational prerequisite, not something
+  // this software can independently verify with the API.
+  if (tavilyEnabled !== true || accountCapVerified !== true ||
+      typeof tavilyApiKey !== "string" ||
+      !/^tvly-[A-Za-z0-9_-]{8,}$/.test(tavilyApiKey)) {
+    throw new ResearchWorkerPreflightError("TAVILY_ACCOUNT_NOT_VERIFIED");
+  }
+  return Object.freeze({
+    search: search === researchCandidates ? researchTavilyGeminiCandidates : search,
+    dualProvider: true, tavilyApiKey,
+    maxResults: 20,
+    maxInputTokens: price.textModel.maxInputTokens,
+  });
 }
 
 export class ResearchWorkerPreflightError extends Error {
@@ -41,6 +77,9 @@ export async function runOneCampaignTask(db, {
   search = researchCandidates, now = () => new Date(),
   membership = requireWorkspaceMembership,
   decrypt = decryptKey,
+  tavilyApiKey = process.env.TAVILY_API_KEY,
+  tavilyEnabled = process.env.TAVILY_DUAL_PROVIDER_ENABLED === "true",
+  accountCapVerified = process.env.TAVILY_ACCOUNT_CAP_VERIFIED === "true",
 } = {}) {
   // Callers must require an explicit server-side feature flag and active,
   // authenticated partner scope before invoking this executor.
@@ -61,6 +100,10 @@ export async function runOneCampaignTask(db, {
   }
   const price = requireResearchPriceEnvelope({
     provider: setting.provider, model: setting.model,
+  });
+  const plan = resolveCampaignResearchExecution({
+    provider: setting.provider, model: setting.model, price, search,
+    tavilyApiKey, tavilyEnabled, accountCapVerified,
   });
   let apiKey;
   try { apiKey = decrypt(setting.encryptedApiKey, encryptionKey); }
@@ -146,9 +189,14 @@ export async function runOneCampaignTask(db, {
       outcome = { status: "PAUSED", attempted: false, code: failure };
     } else {
       invoked = true;
-      const result = await search({
+      const result = await plan.search({
         query: claim.query, limit: claim.limit,
         provider: setting.provider, model: setting.model, apiKey,
+        ...(plan.dualProvider ? {
+          tavilyApiKey: plan.tavilyApiKey,
+          maxResults: plan.maxResults,
+          maxInputTokens: plan.maxInputTokens,
+        } : {}),
       });
       providerReturned = true;
       // A future reviewed dual-provider policy uses its own complete Tavily
