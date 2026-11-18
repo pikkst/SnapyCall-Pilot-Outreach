@@ -120,3 +120,13 @@ At least: 100 synthetic valid named-email fixtures, shared URL for 5 people, opa
 ## 11. Implementation checkpoint — 2026-11-18
 
 On PR #143 branch, added `server/research-qualified-evidence.js` and regression tests. Reuses existing canonical observation source selection and computes read-only **email evidence ready for review** counts on the already authorized `GET /api/research-campaigns/:id/email-triage`; central running window displays the count if the bounded snapshot is complete. Duplicated email/source, missing name/category/digest, generic inbox, opaque source and uninspected observations never count. No DB mutation, schema migration, provider call, contact insertion, or send. **This is a measurable funnel foundation, not 100-contact automation.** Next: durable person-specific resolution and email enrichment, then adaptive replenishment and minimal-click bulk review. Exact HEAD CI and full authenticated E2E still required.
+
+## 12. Partial-source triage slice — 2026-11-18, draft PR
+
+**Root cause addressed:** the original `emailTriageSourceReadiness` required *every* campaign observation to have an independently inspectable unique source. A single opaque citation or repeated shared directory URL prevented the whole batch from starting, even if other observations had safe direct person-specific URLs.
+
+**Change:** use the same deterministic canonical-source predicate in read-only preflight and locked approval. Preflight now reports eligible distinct sources versus excluded shared/opaque sources. Strict all-or-nothing approval remains the default; the owner must explicitly confirm excluding uninspectable sources to authorize a partial batch. The approval transaction marks those excluded observations `BLOCKED` with reason code and audit counts; the existing durable worker fetches only remaining unique sources. No extra provider calls, no auto-creation of Candidates, no email-send permission, no implicit new approval. Source evidence stays in campaign records for later person-specific resolution. Existing 250-source limit and 24-hour lease remain.
+
+**Limitations:** this does not itself find alternative source URLs for excluded people, grant one-run authorization across all stages, or guarantee 100 contacts. Follow-up requires safe person-specific discovery with a separately approved provider budget and durable checkpoints. Automated bulk qualification remains separate from human acceptance and send eligibility.
+
+**Release gate:** exact-head CI, PostgreSQL tests, authenticated mobile staging smoke on the approval UI, confirmation that excluded observations are never fetched and source snapshots remain fenced; no merge/deploy without authorization.
