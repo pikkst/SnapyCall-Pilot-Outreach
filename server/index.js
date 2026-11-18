@@ -2358,8 +2358,10 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
           sourceUrl: candidate.sourceUrl,
           name: { equals: candidate.name, mode: "insensitive" },
         },
-        select: { id: true },
+        select: { id: true, removedAt: true },
       });
+      if (found?.removedAt) return { id: found.id,
+        created: false, archived: true };
       if (found) return { id: found.id, created: false };
     }
     const created = await tx.candidate.create({
@@ -2390,6 +2392,9 @@ app.post("/api/candidates", candidateReadScope, requireOrigin, safe(async (req, 
   });
   if (row === null) return res.status(403).json({ error: "Workspace membership revoked" });
   if (row === "DUPLICATE") return res.status(409).json({ error: "Candidate already exists in workspace" });
+  if (row.archived) return res.status(409).json({
+    code: "CONTACT_REMOVED", error: "This contact was previously removed. Restore it from Removed contacts.",
+  });
   return res.status((manualSeed || discoverySeed) && !row.created ? 200 : 201).json(
     manualSeed || discoverySeed ? { id: row.id, created: row.created } : { id: row.id });
 }));
