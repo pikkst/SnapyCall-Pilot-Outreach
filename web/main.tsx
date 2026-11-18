@@ -2574,19 +2574,34 @@ function App() {
                             not a verified provider invoice. A PAUSED run does not
                             automatically replay uncertain paid calls.</p>
                         </section>}
-                        {campaignRunApproval?.run?.status === "PAUSED" &&
-                          <section className="campaign-approved-run" role="alert"
-                            aria-label="Paused paid run recovery">
-                            <strong>Research stopped safely — no automatic retry</strong>
-                            <p>This campaign already has an immutable paid-run
-                              approval. Its last request may have incurred a
-                              provider charge, so the remaining tasks cannot
-                              be launched using the other Run campaign button.
-                              The previous request will not be repeated.</p>
-                            <p>Inspect the saved run and ledger first. When
-                              ready, plan a fresh campaign with the same
-                              criteria and approve a new bounded run.
-                              Planning is free and does not call a provider.</p>
+                        {campaignRunApproval?.run &&
+                          (campaignRunApproval.run.status === "PAUSED" ||
+                            campaignRunApproval.run.status === "COMPLETED") &&
+                          (campaignRunApproval.run.status === "PAUSED" ||
+                            campaignRunApproval.run.lastCode === "RUN_LIMIT_REACHED") &&
+                          <section className="campaign-approved-run"
+                            role={campaignRunApproval.run.lastCode === "RUN_LIMIT_REACHED"
+                              ? "status" : "alert"}
+                            aria-label="Paid campaign run outcome">
+                            {campaignRunApproval.run.lastCode === "RUN_LIMIT_REACHED"
+                              ? <>
+                                <strong>Approved research limit reached successfully</strong>
+                                <p>All {campaignRunApproval.run.startedTasks} authorized
+                                  requests were started. No further paid calls are
+                                  authorized for this immutable run. Saved evidence
+                                  remains available for review; this is not a
+                                  provider failure or proof of verified contacts.</p>
+                              </>
+                              : <>
+                                <strong>Research stopped safely — no automatic retry</strong>
+                                <p>This run stopped before its approved limit.
+                                  The last request may have incurred a provider
+                                  charge and will not be repeated automatically.
+                                  Inspect the saved ledger before another run.</p>
+                              </>}
+                            <p>To research more experts, plan a fresh campaign
+                              with the same criteria and approve a new bounded
+                              run. Planning is free and does not call a provider.</p>
                             <button type="button" className="secondary"
                               disabled={campaignTestBusy ||
                                 campaignTestQuery.trim().length < 12}
