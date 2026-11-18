@@ -228,6 +228,18 @@ export async function finishApprovedRunTask(db, {
           data: { status: "PARTIAL" },
         });
         boundedPartial = saved.count === 1;
+        if (boundedPartial) {
+          await tx.auditEvent.create({ data: {
+            actorId: ownerId, action: "research.campaign.finalized",
+            entityId: campaignId, metadata: {
+              workspaceId, status: "PARTIAL",
+              reason: "IMMUTABLE_APPROVED_RUN_LIMIT_REACHED",
+              approvedCalls: run.maxTasks, startedCalls: run.startedTasks,
+              committedWorstCaseCents: run.committedWorstCaseCents,
+              automaticBillableReplay: false, sendingEnabled: false,
+            },
+          } });
+        }
       }
     }
     const status = qualityStopped ? "PAUSED" :
