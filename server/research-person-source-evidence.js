@@ -1,7 +1,7 @@
 // Independently inspect one provider-proposed public person profile.
 // Never infer email patterns, consent, mailbox validity or contact acceptance.
-import { isWorkspaceId, lockActiveWorkspaceMembership }
-  from "./workspace-access.js";
+import { isWorkspaceId, lockActiveWorkspaceMembership,
+  requireWorkspaceMembership } from "./workspace-access.js";
 import { retrieveCitedPublicPage } from "./research-public-pages.js";
 import { classifyExplicitPersonEmailPage }
   from "./candidate-direct-email-evidence.js";
@@ -30,6 +30,11 @@ export async function verifyPersonSourceProposal(db, scope, {
   if (!(clock instanceof Date) || !Number.isFinite(clock.getTime())) {
     throw new TypeError("Valid public inspection clock required");
   }
+  // Avoid even making an external public-page request for a revoked user.
+  // The locked check below protects the later evidence write independently.
+  if (!await requireWorkspaceMembership(db, {
+    workspaceId: scope.workspaceId, userId: scope.ownerId,
+  })) return { status: 403, code: "WORKSPACE_ACCESS_REVOKED" };
   const campaign = await db.researchCampaign.findFirst({
     where: { id: scope.campaignId, workspaceId: scope.workspaceId,
       ownerId: scope.ownerId },
