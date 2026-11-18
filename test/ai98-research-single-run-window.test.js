@@ -57,3 +57,10 @@ test("activity remains visible between polls, including approved and reconnectin
   assert.match(research, /research-run-loading/);
   assert.match(research, /Connecting to saved research progress/);
 });
+
+test("single running window shows only reliable saved email evidence, never inferred accepted contacts", () => {
+  assert.match(research, /campaignEmailTriage\?\.qualification\?\.countReliable/);
+  assert.match(research, /qualification\.qualifiedEvidence/);
+  assert.match(research, /email evidence ready for review/);
+  assert.doesNotMatch(research, /email evidence ready to send/);
+});

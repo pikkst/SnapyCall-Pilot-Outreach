@@ -309,3 +309,45 @@ test("summary reports independently verified observations, not email contacts", 
   assert.equal(result.providerCalls, 0);
   assert.equal(result.sendingEnabled, false);
 });
+
+test("explicit partial approval processes only uniquely inspectable sources", async () => {
+  const sources = [
+    { id: "cmabcdefghijklmnopqrs11", citationUrl: "https://experts.example.org/team" },
+    { id: "cmabcdefghijklmnopqrs12", citationUrl: "https://experts.example.org/team" },
+    { id: "cmabcdefghijklmnopqrs13", citationUrl: "https://experts.example.org/ada" },
+    { id: "cmabcdefghijklmnopqrs14", citationUrl:
+      "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abcdefgh" },
+  ];
+  const strict = fixture({ status: "IDLE", observed: 4, sourceEntries: sources });
+  const rejected = await approveEmailTriage(strict.db, {
+    ...scope, maxPages: 4, confirmPublicInspection: true,
+  }, { now: () => now });
+  assert.equal(rejected.status, 409);
+  assert.equal(rejected.eligibleSubsetObservations, 1);
+  assert.equal(strict.events.includes("observation-BLOCKED"), false);
+  const partial = fixture({ status: "IDLE", observed: 4, sourceEntries: sources });
+  const approved = await approveEmailTriage(partial.db, {
+    ...scope, maxPages: 4, confirmPublicInspection: true,
+    confirmSkipUninspectable: true,
+  }, { now: () => now });
+  assert.equal(approved.status, 201);
+  assert.equal(approved.eligibleSources, 1);
+  assert.equal(approved.excludedSources, 3);
+  assert.equal(partial.events.filter(e => e === "observation-BLOCKED").length, 3);
+  assert.equal(partial.events.includes("campaign-RUNNING"), true);
+});
+
+test("partial approval rejects zero safe sources even with explicit skip consent", async () => {
+  const shared = [
+    { id: "cmabcdefghijklmnopqrs11", citationUrl: "https://experts.example.org/team" },
+    { id: "cmabcdefghijklmnopqrs12", citationUrl: "https://experts.example.org/team" },
+  ];
+  const { db, events } = fixture({ status: "IDLE", observed: 2, sourceEntries: shared });
+  const result = await approveEmailTriage(db, {
+    ...scope, maxPages: 2, confirmPublicInspection: true,
+    confirmSkipUninspectable: true,
+  }, { now: () => now });
+  assert.equal(result.code, "EMAIL_TRIAGE_SHARED_SOURCE_REVIEW_REQUIRED");
+  assert.equal(events.includes("campaign-RUNNING"), false);
+  assert.equal(events.includes("observation-BLOCKED"), false);
+});

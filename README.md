@@ -68,6 +68,10 @@ Do not put real credentials or Google refresh tokens in the repository. The Rend
 *This README describes implemented behavior separately from planned work. Do not treat an authorized connector, a merged foundation, or a green CI as proof that an optional external integration is activated.*
 
 
+## Autonomous 100-contact pipeline — engineering tracker
+
+The owner-approved product target is **one bounded run for up to 100 publicly attributable professional email contacts**, minimizing manual research. The existing research and email-triage stages are **not yet a completed autonomous contact pipeline**. Architecture, state/evidence contracts, risks, delivery checklist and next engineering steps are maintained in [docs/AI98_AUTONOMOUS_CONTACT_PIPELINE.md](docs/AI98_AUTONOMOUS_CONTACT_PIPELINE.md). This document distinguishes automatically qualified evidence, human-accepted contacts and outreach eligibility; do not conflate them or bypass approval gates.
+
 ## Gemini 3 Flash + Tavily Basic research pipeline (AI98)
 
 The **exact** `gemini:gemini-3-flash-preview` tariff is approved in
