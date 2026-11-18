@@ -223,16 +223,20 @@ export function calculateCombinedRetrievalAndTextCeilingCents({
       !valid(textModel.inputCentsPerMillion, 1_000_000) ||
       !valid(textModel.outputCentsPerMillion, 1_000_000)) return null;
 
-  // Round each independently charged provider upward BEFORE summing. Using
-  // floating-point dollars or rounding once after addition can under-reserve.
-  const retrievalCents =
-    (BigInt(retrieval.maxRequests) *
-      BigInt(retrieval.centsPerThousandRequests) + 999n) / 1000n;
-  const modelCents =
-    (BigInt(textModel.maxInputTokens) *
-      BigInt(textModel.inputCentsPerMillion) +
-     BigInt(textModel.maxOutputTokens) *
-      BigInt(textModel.outputCentsPerMillion) + 999999n) / 1000000n;
+  // Round each independently billable component upward before adding it.
+  // Individual input/output components may be rounded on the invoice;
+  // rounding only their sum can under-reserve one cent.
+  const ceilDiv = (amount, divisor) => (amount + divisor - 1n) / divisor;
+  const retrievalCents = ceilDiv(
+    BigInt(retrieval.maxRequests) *
+      BigInt(retrieval.centsPerThousandRequests), 1000n);
+  const inputCents = ceilDiv(
+    BigInt(textModel.maxInputTokens) *
+      BigInt(textModel.inputCentsPerMillion), 1000000n);
+  const outputCents = ceilDiv(
+    BigInt(textModel.maxOutputTokens) *
+      BigInt(textModel.outputCentsPerMillion), 1000000n);
+  const modelCents = inputCents + outputCents;
   const total = retrievalCents + modelCents;
   if (total < 1n || total > BigInt(Number.MAX_SAFE_INTEGER)) return null;
   return Object.freeze({
