@@ -1299,7 +1299,7 @@ app.patch("/api/candidates/:id/expert-review", candidateReadScope, requireOrigin
         userId: actorId, workspaceId: req.candidateScope,
       })) return { status: 403, error: "Workspace membership revoked" };
       const row = await tx.candidate.findFirst({
-        where: { id: req.params.id, workspaceId: req.candidateScope },
+        where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null },
       });
       if (!row) return { status: 404, error: "Candidate not found" };
       if (!row.discoveryKey) return { status: 409, error: "Only discovered candidates use this review flow" };
@@ -1338,7 +1338,7 @@ app.patch("/api/candidates/:id/expert-review", candidateReadScope, requireOrigin
 // eligibility, ownership of the identity, or consent to contact.
 app.get("/api/candidates/:id/evidence", candidateReadScope, safe(async (req, res) => {
   const candidate = await prisma.candidate.findFirst({
-    where: { id: req.params.id, workspaceId: req.candidateScope },
+    where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null },
     select: { id: true },
   });
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
@@ -1365,7 +1365,7 @@ app.post("/api/candidates/:id/evidence", candidateReadScope, requireOrigin, safe
       workspaceId: req.candidateScope, userId: actorId,
     })) return { status: 403, body: { error: "Workspace membership revoked" } };
     const row = await tx.candidate.findFirst({
-      where: { id: req.params.id, workspaceId: req.candidateScope }, select: { id: true },
+      where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null }, select: { id: true },
     });
     if (!row) return { status: 404, body: { error: "Candidate not found" } };
     const existing = await tx.candidateEvidence.findUnique({ where: key });
@@ -1388,7 +1388,7 @@ app.post("/api/candidates/:id/evidence", candidateReadScope, requireOrigin, safe
       workspaceId: req.candidateScope, userId: actorId,
     })) return { status: 403, body: { error: "Workspace membership revoked" } };
     const candidate = await prisma.candidate.findFirst({
-      where: { id: req.params.id, workspaceId: req.candidateScope }, select: { id: true },
+      where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null }, select: { id: true },
     });
     if (!candidate) return { status: 404, body: { error: "Candidate not found" } };
     const existing = await prisma.candidateEvidence.findUnique({ where: key });
@@ -1425,7 +1425,7 @@ app.get("/api/candidates/:id/direct-email-evidence", candidateReadScope,
     const identity = await partnerIdentity(req);
     if (!identity) return res.status(401).json({ error: "Unauthorized" });
     const row = await prisma.candidate.findFirst({
-      where: { id: req.params.id, workspaceId: req.candidateScope },
+      where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null },
       select: { id: true, name: true, email: true, expertProfileUrl: true },
     });
     if (!row) return res.status(404).json({ error: "Candidate not found" });
@@ -1476,7 +1476,7 @@ app.get("/api/candidates/:id/email-check", candidateReadScope,
       return res.status(401).json({ error: "Unauthorized" });
     }
     const row = await prisma.candidate.findFirst({
-      where: { id: req.params.id, workspaceId: req.candidateScope },
+      where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null },
       select: { id: true, email: true, suppressed: true,
         contactReviewed: true, legalBasis: true },
     });
@@ -1522,7 +1522,7 @@ app.post("/api/candidates/:id/email-check", candidateReadScope,
 
 app.get("/api/candidates/:id/possible-duplicates", candidateReadScope, safe(async (req, res) => {
   const candidate = await prisma.candidate.findFirst({
-    where: { id: req.params.id, workspaceId: req.candidateScope },
+    where: { id: req.params.id, workspaceId: req.candidateScope, removedAt: null },
   });
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
   if (!candidate.expertProfileUrl && !candidate.emailNormalized) {
