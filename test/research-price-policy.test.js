@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { requireResearchPriceEnvelope, ResearchPricingUnavailable,
-  researchPriceReadiness, calculateBoundedWorstCaseCents } from "../server/research-price-policy.js";
+  researchPriceReadiness, calculateBoundedWorstCaseCents , calculateResearchPricePolicyCeilingCents
+} from "../server/research-price-policy.js";
 
 test("only Claude Sonnet 4.6 has a dated server-authorized bounded pricing envelope", () => {
   const policy = requireResearchPriceEnvelope({
@@ -422,4 +423,26 @@ test("existing dual-provider adapter telemetry cannot certify a budget refund", 
   assert.throws(() => requireResearchPriceEnvelope({
     provider: "gemini", model: "gemini-3-flash-preview",
   }), ResearchPricingUnavailable);
+});
+
+
+test("staged dual-provider tariff remains disabled even if external account switches are on", () => {
+  const shape = calculateResearchPricePolicyCeilingCents({
+    provider: "gemini", model: "gemini-3-flash-preview",
+    retrievalProvider: "tavily",
+    billingContractVersion: "tavily-basic-gemini3-text-v1",
+    retrieval: { maxRequests: 1, centsPerThousandRequests: 800 },
+    textModel: {
+      maxInputTokens: 16_384, maxOutputTokens: 2048,
+      inputCentsPerMillion: 50, outputCentsPerMillion: 300,
+    },
+  });
+  assert.equal(shape, 3);
+  assert.throws(() => requireResearchPriceEnvelope({
+    provider: "gemini", model: "gemini-3-flash-preview",
+  }), ResearchPricingUnavailable);
+  assert.equal(researchPriceReadiness({
+    setting: { provider: "gemini", model: "gemini-3-flash-preview" },
+    enabled: true, remainingCents: 100_000,
+  }).enforcedForPaidSearch, false);
 });
