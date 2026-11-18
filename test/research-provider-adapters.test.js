@@ -659,4 +659,7 @@ test("Gemini countTokens preflight denies mismatched contents and invalid respon
       ...payload, tools: [{ google_search: {} }],
     },
   }), TypeError);
+  payload.contents[0].parts[0].text += " Tampered after count";
+  assert.throws(() => check({ totalTokens: 850 }), TypeError,
+    "Changes to generation contents after countTokens must invalidate preflight");
 });
