@@ -1937,7 +1937,9 @@ app.get("/api/research-campaigns/:id/qualified-contacts",
       ownerId: identity.id,
     });
     res.set("Cache-Control", "no-store");
-    return res.status(result.status).json(result);
+    return res.status(result.status).json({
+      ...result, batchEnabled: env.AI_CONTACT_BATCH_ENABLED === "true",
+    });
   }));
 
 // One explicit batch approval, zero per-person clicks, no email sending.
