@@ -40,6 +40,14 @@ export function emailTriageSourceReadiness(campaignStatus, sources) {
   const directSources = sources.map(observationInspectionSource);
   const inspectable = directSources.filter(Boolean);
   const uniqueSources = new Set(inspectable).size;
+  const frequencies = new Map();
+  for (const url of inspectable) {
+    frequencies.set(url, (frequencies.get(url) ?? 0) + 1);
+  }
+  // A repeated directory is unsafe for *every* named observation sharing it.
+  const eligibleSubsetObservations = directSources.filter(url =>
+    url && frequencies.get(url) === 1).length;
+  const excludedObservations = total - eligibleSubsetObservations;
   const code = !["COMPLETED", "PARTIAL"].includes(campaignStatus)
     ? "DISCOVERY_NOT_TERMINAL"
     : total === 0 ? "NO_OBSERVATIONS"
@@ -49,8 +57,11 @@ export function emailTriageSourceReadiness(campaignStatus, sources) {
     : "READY_FOR_OWNER_APPROVAL";
   return Object.freeze({
     eligible: code === "READY_FOR_OWNER_APPROVAL",
+    partialEligible: ["COMPLETED", "PARTIAL"].includes(campaignStatus) &&
+      total > 0 && total <= MAX_PAGES && eligibleSubsetObservations > 0 &&
+      eligibleSubsetObservations < total,
     code, observations: total, inspectableObservations: inspectable.length,
-    uniqueSources,
+    uniqueSources, eligibleSubsetObservations, excludedObservations,
     // Shared or directory references are not independently verified profiles.
     namedPersonEmailVerified: false,
     sendingEnabled: false,
@@ -59,10 +70,12 @@ export function emailTriageSourceReadiness(campaignStatus, sources) {
 
 export async function approveEmailTriage(db, {
   campaignId, workspaceId, ownerId, maxPages, confirmPublicInspection,
+  confirmSkipUninspectable = false,
 }, { now = () => new Date() } = {}) {
   validateScope({ campaignId, workspaceId, ownerId });
   if (!Number.isInteger(maxPages) || maxPages < 1 ||
-      maxPages > MAX_PAGES || confirmPublicInspection !== true) {
+      maxPages > MAX_PAGES || confirmPublicInspection !== true ||
+      typeof confirmSkipUninspectable !== "boolean") {
     throw new TypeError("An explicit bounded public-inspection approval is required");
   }
   const clock = now();
@@ -102,9 +115,9 @@ export async function approveEmailTriage(db, {
     // or independently supplied direct profiles in a separate reviewed flow.
     const sources = await tx.researchCampaignObservation.findMany({
       where: { campaignId },
-      select: { citationUrl: true, groundingStatus: true,
+      select: { id: true, citationUrl: true, groundingStatus: true,
         groundingResolvedUrl: true, groundingProvenance: true },
-      take: maxPages,
+      take: maxPages, orderBy: { id: "asc" },
     });
     if (sources.length !== count) {
       return { status: 409, code: "EMAIL_TRIAGE_SOURCE_SNAPSHOT_CHANGED" };
@@ -112,17 +125,50 @@ export async function approveEmailTriage(db, {
     const readiness = emailTriageSourceReadiness(campaign.status, sources);
     // Do not consume one-shot approval for an uninspectable or shared URL.
     // The GET preflight and the transactional approval use this SAME rule.
-    if (!readiness.eligible) {
+    if (!readiness.eligible &&
+        !(confirmSkipUninspectable && readiness.partialEligible)) {
       return { status: 409, code: readiness.code,
         availableObservations: count,
         inspectableObservations: readiness.inspectableObservations,
-        uniqueSources: readiness.uniqueSources };
+        uniqueSources: readiness.uniqueSources,
+        eligibleSubsetObservations: readiness.eligibleSubsetObservations };
     }
     // Reject reauthorization if any previously claimed page exists.
     const previouslyChecked = await tx.researchCampaignObservation.count({
       where: { campaignId, emailTriageStatus: { not: "UNCHECKED" } },
     });
     if (previouslyChecked) return { status: 409, code: "EMAIL_TRIAGE_ALREADY_ATTEMPTED" };
+    // Explicit partial-batch approval excludes ambiguous observations in the
+    // same locked transaction. The worker never fetches these URLs.
+    let skipped = 0;
+    if (!readiness.eligible) {
+      const resolved = sources.map(observationInspectionSource);
+      const occurrences = new Map();
+      for (const url of resolved) {
+        if (url) occurrences.set(url, (occurrences.get(url) ?? 0) + 1);
+      }
+      for (let i = 0; i < sources.length; i++) {
+        const url = resolved[i];
+        if (url && occurrences.get(url) === 1) continue;
+        const blockedCode = url ? "SHARED_SOURCE_REQUIRES_REVIEW" :
+          "DIRECT_PROFILE_SOURCE_REQUIRED";
+        const updated = await tx.researchCampaignObservation.updateMany({
+          where: { id: sources[i].id, campaignId,
+            emailTriageStatus: "UNCHECKED" },
+          data: { emailTriageStatus: "BLOCKED", emailTriageCode: blockedCode,
+            emailTriageEmail: null, emailTriageDigest: null,
+            emailTriageAt: clock },
+        });
+        if (updated.count !== 1) {
+          throw new Error("EMAIL_TRIAGE_PARTIAL_SNAPSHOT_CONFLICT");
+        }
+        skipped++;
+      }
+      if (skipped !== readiness.excludedObservations ||
+          count - skipped !== readiness.eligibleSubsetObservations) {
+        throw new Error("EMAIL_TRIAGE_PARTIAL_SNAPSHOT_CONFLICT");
+      }
+    }
     const expiresAt = new Date(clock.getTime() + APPROVAL_MS);
     await tx.researchCampaign.update({
       where: { id: campaignId },
@@ -133,11 +179,13 @@ export async function approveEmailTriage(db, {
       actorId: ownerId, entityId: campaignId,
       action: "research.campaign.email-triage.approved",
       metadata: { workspaceId, maxPages, expiresAt: expiresAt.toISOString(),
-        providerCallsAuthorized: false, sendingEnabled: false,
-        automaticRetryAllowed: false },
+        eligibleSources: count - skipped, excludedSources: skipped,
+        partialBatch: skipped > 0, providerCallsAuthorized: false,
+        sendingEnabled: false, automaticRetryAllowed: false },
     } });
     return { status: 201, code: "EMAIL_TRIAGE_APPROVED",
-      maxPages, expiresAt, providerCallsAuthorized: false,
+      maxPages, expiresAt, eligibleSources: count - skipped,
+      excludedSources: skipped, providerCallsAuthorized: false,
       sendingEnabled: false };
   });
 }
