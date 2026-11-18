@@ -240,7 +240,14 @@ export function buildGemini3TextOnlyPayload({ query, limit, manifest, maxInputTo
   if (conservativeInputUnits > maxInputTokens) {
     throw new TypeError("Text-only input exceeds approved token ceiling");
   }
-  return payload;
+  // Keep the exact bounded generation payload immutable across token counting.
+  Object.freeze(payload.contents[0].parts[0]);
+  Object.freeze(payload.contents[0].parts);
+  Object.freeze(payload.contents[0]);
+  Object.freeze(payload.contents);
+  Object.freeze(payload.generationConfig.thinkingConfig);
+  Object.freeze(payload.generationConfig);
+  return Object.freeze(payload);
 }
 
 
@@ -248,17 +255,32 @@ export function buildGemini3TextOnlyPayload({ query, limit, manifest, maxInputTo
 // Use the exact same contents as generateContent. Callers must send this
 // request to models/gemini-3-flash-preview:countTokens through the existing
 // trusted HTTP client, before a separately approved paid generation call.
+function exactKeys(value, keys) {
+  return value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).length === keys.length &&
+    keys.every(key => Object.hasOwn(value, key));
+}
+
+function validGemini3TextOnlyPayload(payload) {
+  return exactKeys(payload, ["contents", "generationConfig"]) &&
+    Array.isArray(payload.contents) && payload.contents.length === 1 &&
+    exactKeys(payload.contents[0], ["parts"]) &&
+    Array.isArray(payload.contents[0].parts) &&
+    payload.contents[0].parts.length === 1 &&
+    exactKeys(payload.contents[0].parts[0], ["text"]) &&
+    typeof payload.contents[0].parts[0].text === "string" &&
+    payload.contents[0].parts[0].text.length > 0 &&
+    exactKeys(payload.generationConfig,
+      ["maxOutputTokens", "responseMimeType", "thinkingConfig"]) &&
+    payload.generationConfig.maxOutputTokens === 2048 &&
+    payload.generationConfig.responseMimeType === "application/json" &&
+    exactKeys(payload.generationConfig.thinkingConfig, ["thinkingLevel"]) &&
+    payload.generationConfig.thinkingConfig.thinkingLevel === "minimal";
+}
+
 export function buildGemini3CountTokensRequest({ model, payload }) {
   if (model !== "gemini-3-flash-preview" ||
-      !payload || Object.hasOwn(payload, "tools") ||
-      !Array.isArray(payload.contents) || payload.contents.length !== 1 ||
-      !Array.isArray(payload.contents[0]?.parts) ||
-      payload.contents[0].parts.length !== 1 ||
-      typeof payload.contents[0].parts[0]?.text !== "string" ||
-      !payload.contents[0].parts[0].text ||
-      payload.generationConfig?.maxOutputTokens !== 2048 ||
-      payload.generationConfig?.responseMimeType !== "application/json" ||
-      payload.generationConfig?.thinkingConfig?.thinkingLevel !== "minimal") {
+      !validGemini3TextOnlyPayload(payload)) {
     throw new TypeError("Unapproved Gemini 3 text-only token count request");
   }
   // Copy the exact counted input. A later mutation of the generation payload
