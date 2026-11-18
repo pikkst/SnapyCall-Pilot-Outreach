@@ -91,6 +91,24 @@ export function calculateBoundedWorstCaseCents(pricing, limits) {
   return Number(rounded);
 }
 
+// Exact dual-provider billing shape. This validates a *candidate* server-owned
+// tariff; it does not register it or authorize any billable execution. Existing
+// single-provider policy behavior is unchanged.
+export function calculateResearchPricePolicyCeilingCents(policy) {
+  if (policy?.billingContractVersion === "tavily-basic-gemini3-text-v1") {
+    if (policy.provider !== "gemini" ||
+        policy.model !== "gemini-3-flash-preview" ||
+        policy.retrievalProvider !== "tavily" ||
+        policy.retrieval?.maxRequests !== 1 ||
+        policy.textModel?.maxOutputTokens !== 2048 ||
+        policy.textModel?.maxInputTokens > 16_384) return null;
+    return calculateCombinedRetrievalAndTextCeilingCents({
+      retrieval: policy.retrieval, textModel: policy.textModel,
+    })?.worstCaseCents ?? null;
+  }
+  return calculateBoundedWorstCaseCents(policy?.pricing, policy?.usageLimits);
+}
+
 export class ResearchPricingUnavailable extends Error {
   constructor() {
     super("Paid AI research pricing and monetary enforcement are not available");
@@ -112,9 +130,8 @@ export function requireResearchPriceEnvelope({ provider, model }) {
       policy.worstCaseCents <= 0 ||
       // A positive client-independent amount alone proves nothing. Require
       // the reviewed tariff's conservative worst-case calculation.
-      calculateBoundedWorstCaseCents(policy.pricing, policy.usageLimits) === null ||
-      policy.worstCaseCents <
-        calculateBoundedWorstCaseCents(policy.pricing, policy.usageLimits) ||
+      calculateResearchPricePolicyCeilingCents(policy) === null ||
+      policy.worstCaseCents < calculateResearchPricePolicyCeilingCents(policy) ||
       typeof policy.priceVersion !== "string" || !policy.priceVersion ||
       !(policy.expiresAt instanceof Date) ||
       policy.expiresAt.getTime() <= Date.now()) {
