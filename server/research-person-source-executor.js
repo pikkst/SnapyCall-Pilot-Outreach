@@ -56,16 +56,48 @@ const PERSON_SOURCE_PRIORITY = Object.freeze({
   PERSON_SOURCE_REQUIRED: 1,
   SHARED_SOURCE: 2,
 });
+// Conservative campaign-local feedback only: completed source research is
+// not evidence of success unless independent person-email verification passed.
+// Require four terminal observations of the SAME reason before changing the
+// existing priority. No host inference, historical cross-tenant data, or
+// mutation of the approved job manifest.
+const PRIORITY_MIN_SAMPLE = 4;
+const FINISHED_SOURCE_STATUSES = new Set(["COMPLETED", "VERIFIED"]);
+function sourcePriorityAdjustments(jobs) {
+  const groups = new Map();
+  for (const job of jobs) {
+    if (!Object.hasOwn(PERSON_SOURCE_PRIORITY, job?.reason) ||
+        !FINISHED_SOURCE_STATUSES.has(job.status) ||
+        job.attempts < 1) continue;
+    const prior = groups.get(job.reason) ?? { total: 0, verified: 0 };
+    prior.total++;
+    if (job.status === "VERIFIED") prior.verified++;
+    groups.set(job.reason, prior);
+  }
+  const adjustments = new Map();
+  for (const [reason, outcome] of groups) {
+    if (outcome.total < PRIORITY_MIN_SAMPLE) continue;
+    // One positive observation can be noise. Require two verified outcomes
+    // for promotion, while four zero-yield calls permit a mild demotion.
+    if (outcome.verified >= 2) adjustments.set(reason, -5);
+    else if (outcome.verified === 0) adjustments.set(reason, 5);
+  }
+  return adjustments;
+}
 export function selectNextPersonSourceJob(jobs) {
   if (!Array.isArray(jobs) || jobs.length > MAX_JOBS) {
     throw new TypeError("Bounded persisted person source jobs required");
   }
+  const adjustments = sourcePriorityAdjustments(jobs);
   let selected = null;
   let selectedRank = Infinity;
   for (const job of jobs) {
     if (job?.status !== "QUEUED" || job.attempts !== 0 ||
         typeof job.observationId !== "string") continue;
-    const rank = PERSON_SOURCE_PRIORITY[job.reason] ?? 3;
+    // Existing reason tiers remain the default. Adjustments can cross one
+    // tier only with adequate campaign-local evidence; never remove a job.
+    const rank = (PERSON_SOURCE_PRIORITY[job.reason] ?? 3) * 4 +
+      (adjustments.get(job.reason) ?? 0);
     if (rank < selectedRank ||
         (rank === selectedRank &&
           job.observationId < selected.observationId)) {
