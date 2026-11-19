@@ -479,7 +479,7 @@ export function buildBoundedTavilySearchRequest({
       !Array.isArray(excludeDomains) || excludeDomains.length > 20 ||
       new Set(excludeDomains).size !== excludeDomains.length ||
       excludeDomains.some(host => typeof host !== "string" ||
-        host.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$/.test(host))) {
+        host.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host))) {
     throw new TypeError("Invalid bounded retrieval criteria");
   }
   return Object.freeze({
