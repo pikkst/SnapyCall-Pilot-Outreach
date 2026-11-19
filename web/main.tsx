@@ -2754,9 +2754,9 @@ function App() {
                                 })}
                               </div>
                               <p className="muted research-timer-note">
-                                Timers use saved timestamps. Work bars use server
-                                counters; search bars show approved call usage, not
-                                a remaining-time estimate.
+                                Timers use saved timestamps and work bars use
+                                persisted server counters; no completion estimate is implied.
+                                Search bars show approved call usage, not remaining time.
                               </p>
                             </section>;
                           })()}
