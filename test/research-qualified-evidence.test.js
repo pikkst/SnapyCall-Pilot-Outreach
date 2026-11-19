@@ -57,3 +57,43 @@ test("maximum-sized snapshots and incomplete reads do not invent success", () =>
     .qualifiedEvidence, 0);
   assert.throws(() => summarizeQualifiedEmailEvidence([...batch, ada, ben]), TypeError);
 });
+
+test("independently scoped Person evidence qualifies two distinct emails on one URL", () => {
+  const url = "https://example.org/team";
+  const scoped = {
+    citationUrl: url, personSourceUrl: url,
+    personSourceProvenance: "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE",
+    personSourceVerifiedAt: new Date("2026-11-19T12:00:00Z"),
+  };
+  const a = { ...ada, ...scoped };
+  const b = { ...ben, ...scoped, emailTriageDigest: "b".repeat(64) };
+  const result = summarizeQualifiedEmailEvidence([a, b]);
+  assert.equal(result.qualifiedEvidence, 2);
+  assert.equal(result.ambiguous, 0);
+  assert.equal(result.sendEligible, 0);
+  assert.equal(result.sendingEnabled, false);
+  assert.equal(summarizeQualifiedEmailEvidence([
+    a, { ...b, emailTriageEmail: a.emailTriageEmail },
+  ]).qualifiedEvidence, 0);
+});
+
+test("shared URL with unproven scope never becomes a qualified contact", () => {
+  const url = "https://example.org/team";
+  const a = { ...ada, citationUrl: url,
+    personSourceUrl: url,
+    personSourceProvenance: "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE",
+    personSourceVerifiedAt: new Date("2026-11-19T12:00:00Z") };
+  for (const other of [
+    { ...ben, citationUrl: url },
+    { ...ben, citationUrl: url, personSourceUrl: url,
+      personSourceProvenance: a.personSourceProvenance,
+      personSourceVerifiedAt: null },
+  ]) {
+    const outcome = summarizeQualifiedEmailEvidence([a, other]);
+    assert.equal(outcome.qualifiedEvidence, 1);
+    assert.equal(outcome.ambiguous, 1);
+  }
+  assert.equal(summarizeQualifiedEmailEvidence([
+    { ...a, personSourceProvenance: null }, { ...ben, citationUrl: url },
+  ]).qualifiedEvidence, 0);
+});
