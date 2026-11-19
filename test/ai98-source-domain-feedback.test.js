@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { repeatedUnavailableSourceDomains }
   from "../server/research-source-domain-feedback.js";
-import { buildBoundedTavilySearchRequest }
+import { buildBoundedTavilySearchRequest, searchWithBoundedTavily }
   from "../server/research-provider-adapters.js";
 
 const unavailable = url => ({
@@ -90,4 +90,37 @@ test("source-only domain feedback is scoped to a claimed campaign and does not a
   assert.match(ai, /maxInputTokens, sourceSubject, excludeDomains/);
   assert.match(adapter, /query, maxResults, observedAt, apiKey: tavilyApiKey, excludeDomains/);
   assert.doesNotMatch(scoped, /reserveOwnerSpend|runOnePersonSourceJob|createMany|updateMany/);
+});
+
+test("transport dispatches exactly one Tavily Basic call with campaign exclusions", async () => {
+  const requests = [];
+  const result = await searchWithBoundedTavily({
+    query: '"Ada Lovelace" official biography and published contact',
+    maxResults: 5, observedAt: "2026-11-19T00:00:00.000Z",
+    apiKey: "tvly-test_public_token_12345678",
+    excludeDomains: ["example.org"],
+  }, async (url, headers, body) => {
+    requests.push({ url, headers, body });
+    return { results: [] };
+  });
+  assert.equal(result.status, "NO_USABLE_EVIDENCE");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://api.tavily.com/search");
+  assert.equal(requests[0].body.search_depth, "basic");
+  assert.deepEqual(requests[0].body.exclude_domains, ["example.org"]);
+  assert.equal(requests[0].body.include_raw_content, false);
+});
+
+test("invalid domain filter is rejected before any potentially billable transport", async () => {
+  let calls = 0;
+  await assert.rejects(
+    searchWithBoundedTavily({
+      query: '"Ada Lovelace" public professional biography',
+      maxResults: 5, observedAt: "2026-11-19T00:00:00.000Z",
+      apiKey: "tvly-test_public_token_12345678",
+      excludeDomains: ["example.org/path"],
+    }, async () => { calls++; return { results: [] }; }),
+    TypeError,
+  );
+  assert.equal(calls, 0);
 });
