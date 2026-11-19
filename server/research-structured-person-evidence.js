@@ -34,7 +34,9 @@ function personNodes(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
   if (!schemaContext(value)) return [];
   const graph = Array.isArray(value["@graph"]) ? value["@graph"] : [];
-  return [value, ...graph.slice(0, 20)].filter(node => node &&
+  // Never silently ignore later identities in an oversized graph.
+  if (graph.length > 20) return null;
+  return [value, ...graph].filter(node => node &&
     typeof node === "object" && !Array.isArray(node) &&
     (typeof node["@type"] === "string"
       ? PERSON_TYPE.test(node["@type"])
@@ -55,7 +57,11 @@ export function explicitJsonLdPersonEmail(html) {
     catch { return null; }
     const roots = Array.isArray(data) ? data.slice(0, 20) : [data];
     if (Array.isArray(data) && data.length > 20) return null;
-    for (const root of roots) people.push(...personNodes(root));
+    for (const root of roots) {
+      const nodes = personNodes(root);
+      if (nodes === null) return null;
+      people.push(...nodes);
+    }
     if (people.length > 1) return null;
   }
   if (people.length !== 1) return null;
