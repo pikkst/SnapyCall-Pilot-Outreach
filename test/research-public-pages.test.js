@@ -184,3 +184,23 @@ test("trusted reader never exposes contact link from plain text", async () => {
   });
   assert.equal(page.linkedContactUrl, undefined);
 });
+
+test("public-page MIME, encoding and non-200 failures expose only safe subtypes", async () => {
+  const cases = [
+    { page: { status: 200, contentType: "application/octet-stream",
+        contentEncoding: "", body: "private" }, expected: "mime" },
+    { page: { status: 200, contentType: "text/html",
+        contentEncoding: "gzip", body: "private" }, expected: "encoding" },
+    { page: { status: 404, contentType: "text/html",
+        contentEncoding: "", body: "Not found" }, expected: "status" },
+  ];
+  for (const { page, expected } of cases) {
+    await assert.rejects(retrieveCitedPublicPage(source, {
+      resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+      request: async url => String(url).endsWith("/robots.txt")
+        ? { status: 404, contentType: "text/plain", contentEncoding: "", body: "" }
+        : page,
+    }), error => error.message === "PUBLIC_PAGE_CONTENT_REJECTED" &&
+        error.contentFailureSubtype === expected);
+  }
+});
