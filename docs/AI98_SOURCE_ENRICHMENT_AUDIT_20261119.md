@@ -6,7 +6,10 @@ Campaign `cmwmq6dck0001en3ljwqoiw23` was stopped by the owner and must not be
 restarted, reconciled, replayed or rewritten as part of this change.
 
 - Discovery: 100 completed searches, 244 observations, 214 distinct
-  normalized names, 130 distinct citation URLs.
+  normalized names, 130 distinct citation URLs. The 242 source jobs in
+  this specific historical run have 242 distinct tuples of normalized
+  name/category/citation; the new exact-duplicate suppression is a
+  future-run safeguard, **not** a claim that 242 old jobs were duplicated.
 - Triage: 162 shared-source blocks, 80 inaccessible public profiles,
   2 ambiguous/unpublished addresses. No qualified email evidence.
 - Source: 25 attempted; 12 no unique direct source, 12 public page
@@ -36,7 +39,11 @@ restarted, reconciled, replayed or rewritten as part of this change.
    queue jobs only when the name (NFKC/case-normalized), category AND
    exact citation URL match. Retain unresolved-observation counts and
    never merge potential namesakes across different citations.
-3. Preserve owner/workspace authentication, immutable campaign approvals,
+3. Retain the existing fail-closed source inspection outcome but record
+   a bounded sanitized audit reason for known public-page reader failures
+   (robots, HTTP access, redirect, DNS, timeout, content/size). Never
+   record arbitrary external error messages or bypass access controls.
+4. Preserve owner/workspace authentication, immutable campaign approvals,
    price and token guards, atomic quota and budget reservations,
    idempotency, SSRF protection and email evidence acceptance.
 
