@@ -3,8 +3,8 @@
 import { isWorkspaceId, lockActiveWorkspaceMembership,
   requireWorkspaceMembership } from "./workspace-access.js";
 import { retrieveCitedPublicPage } from "./research-public-pages.js";
-import { classifyExplicitPersonEmailPage }
-  from "./candidate-direct-email-evidence.js";
+import { inspectNamedPublicContactEvidence, LINKED_CONTACT_PROVENANCE }
+  from "./research-linked-contact-proof.js";
 import { isDirectPublicProfileUrl }
   from "./research-observation-email.js";
 import { personSourceFingerprint }
@@ -136,25 +136,29 @@ export async function verifyPersonSourceProposal(db, scope, {
   if (shared || observedShared) {
     return { status: 409, code: "SHARED_SOURCE_REQUIRES_REVIEW" };
   }
-  let page;
-  try { page = await retrieve(url); }
-  catch (error) {
+  let inspected;
+  try {
+    inspected = await inspectNamedPublicContactEvidence({
+      url, name: observation.name, retrieve,
+    });
+  } catch (error) {
     return await persistPersonSourceInspection(db, scope, job, observation, {
       clock, url, evidence: null, errorCode: "PUBLIC_PAGE_INSPECTION_UNAVAILABLE",
       inspectionFailureReason: classifyPersonSourceInspectionFailure(error),
     });
   }
-  const evidence = classifyExplicitPersonEmailPage({
-    name: observation.name, expertProfileUrl: url, email: null,
-  }, page);
   return persistPersonSourceInspection(db, scope, job, observation, {
-    clock, url, evidence: evidence.status === "REVIEW_REQUIRED" ? evidence : null,
-    errorCode: evidence.status === "REVIEW_REQUIRED" ? null : evidence.reason,
+    clock, url, evidence: inspected.evidence,
+    linkedContact: inspected.linked,
+    errorCode: inspected.evidence ? null :
+      inspected.linkedUnavailable ? "LINKED_CONTACT_UNAVAILABLE" :
+      "NO_EXPLICIT_NAMED_EMAIL_ON_PROFILE_OR_CONTACT",
   });
 }
 
 async function persistPersonSourceInspection(db, scope, job, observation, {
-  clock, url, evidence, errorCode, inspectionFailureReason = null,
+  clock, url, evidence, errorCode, linkedContact = false,
+  inspectionFailureReason = null,
 }) {
   return db.$transaction(async tx => {
     if (!await lockActiveWorkspaceMembership(tx, {
@@ -218,7 +222,8 @@ async function persistPersonSourceInspection(db, scope, job, observation, {
           emailTriageStatus: current.emailTriageStatus,
           personSourceUrl: null, candidateId: null, emailTriageLeaseToken: null },
         data: {
-          personSourceUrl: url, personSourceProvenance: PROOF,
+          personSourceUrl: url,
+          personSourceProvenance: linkedContact ? LINKED_CONTACT_PROVENANCE : PROOF,
           personSourceVerifiedAt: clock,
           emailTriageStatus: "REVIEW_REQUIRED", emailTriageCode: REVIEW,
           emailTriageEmail: evidence.emailNormalized,
@@ -248,7 +253,8 @@ async function persistPersonSourceInspection(db, scope, job, observation, {
         // The original terminal job status is unchanged; this audit-only
         // category diagnoses independent public-page access restrictions.
         ...(inspectionFailureReason ? { inspectionFailureReason } : {}),
-        independentlyFetched: true, personEmailEvidence: !!evidence,
+        independentlyFetched: true, linkedContactEvidence: !!evidence && linkedContact,
+        personEmailEvidence: !!evidence,
         humanReviewed: false, contactCreated: false,
         mailboxVerified: false, sendingEnabled: false },
     } });
