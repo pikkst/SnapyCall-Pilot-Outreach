@@ -371,6 +371,9 @@ function App() {
   const [qualifiedManifestBusy, setQualifiedManifestBusy] = useState(false);
   const [qualifiedBatchConfirmed, setQualifiedBatchConfirmed] = useState(false);
   const [qualifiedBatchNotice, setQualifiedBatchNotice] = useState("");
+  // Exactly one read-only final manifest request per opened full-run. Never
+  // trigger paid searches or implicitly authorize contact acceptance.
+  const autoQualifiedManifestRequested = useRef<string | null>(null);
 
   const [campaignRunApproval, setCampaignRunApproval] =
     useState<CampaignRunApprovalState | null>(null);
@@ -587,6 +590,24 @@ function App() {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [loggedIn, partnerSession?.authenticated]);
+
+  useEffect(() => {
+    // The approved full run performs all intermediate stages server-side.
+    // Only terminal, non-reconciliation outcomes expose the human checklist.
+    if (!activeWorkspaceId || !campaignProgressId ||
+        campaignProgressStatus !== "ready" ||
+        !["PARTIAL", "READY_FOR_REVIEW", "COMPLETED"].includes(
+          campaignRunApproval?.fullRun?.status ?? "") ||
+        !["PARTIAL", "COMPLETED"].includes(campaignProgress?.status ?? "") ||
+        qualifiedManifest || qualifiedManifestBusy) return;
+    const key = activeWorkspaceId + ":" + campaignProgressId;
+    if (autoQualifiedManifestRequested.current === key) return;
+    autoQualifiedManifestRequested.current = key;
+    // Owner-scoped, read-only endpoint: never import contacts or call a provider.
+    void loadQualifiedContactManifest(activeWorkspaceId, campaignProgressId);
+  }, [activeWorkspaceId, campaignProgressId, campaignProgressStatus,
+    campaignProgress?.status, campaignRunApproval?.fullRun?.status,
+    qualifiedManifest, qualifiedManifestBusy]);
 
   useEffect(() => {
     // Read-only server progress refresh, not an autonomous executor or AI call.
@@ -1303,6 +1324,7 @@ function App() {
     setCampaignTriageBusy(false);
     setCampaignTriageConfirmed(false);
     setCampaignTriageNotice("");
+    autoQualifiedManifestRequested.current = null;
     setQualifiedManifest(null);
     setQualifiedManifestBusy(false);
     setQualifiedBatchConfirmed(false);
@@ -2753,12 +2775,16 @@ function App() {
                               {campaignObservationsStatus === "idle" ? "View findings" : "Refresh findings"}
                             </button>
                             {["COMPLETED", "PARTIAL"].includes(campaignProgress.status) &&
+                              (!campaignRunApproval?.fullRun ||
+                                ["PARTIAL", "READY_FOR_REVIEW", "COMPLETED"].includes(
+                                  campaignRunApproval.fullRun.status)) &&
                               <button type="button" className="secondary"
                                 disabled={qualifiedManifestBusy}
                                 onClick={() => void loadQualifiedContactManifest(
                                   p.id, campaignProgress.id)}>
-                                {qualifiedManifest ? "Refresh qualified contacts" :
-                                  "Review qualified emails"}
+                                {qualifiedManifest ? "Refresh contact list" :
+                                  qualifiedManifestBusy ? "Preparing list…" :
+                                  "View contact list"}
                               </button>}
                           </div>
                         </div>
@@ -2767,9 +2793,13 @@ function App() {
                             className="qualified-contact-review"
                             aria-label="Qualified email contacts for batch review">
                           <div className="qualified-contact-header">
-                            <strong>{qualifiedManifest.selectedCount} verified-source
-                              email pairs</strong>
-                            <span className="muted">Review evidence only — not send-eligible</span>
+                            <strong>{qualifiedManifest.selectedCount > 0
+                              ? "Contact list ready for confirmation"
+                              : "No verified person-email contacts found"}</strong>
+                            <span className="muted">
+                              {qualifiedManifest.selectedCount} verified-source email pairs.
+                              Review evidence only — not send-eligible.
+                            </span>
                           </div>
                           {!qualifiedManifest.reliable && <p role="alert">
                             The saved evidence snapshot is incomplete. No batch can be approved.
@@ -2791,6 +2821,14 @@ function App() {
                                   rel="noopener noreferrer">Public evidence</a>
                               </li>)}
                             </ul>
+                            {qualifiedManifest.reliable &&
+                              qualifiedManifest.selectedCount === 0 && !qualifiedManifest.batch &&
+                              <p role="status">
+                                No sufficiently attributed public person-email
+                                evidence was found within this run's approved
+                                limits. There is no list to confirm.
+                                No email addresses were guessed.
+                              </p>}
                             {qualifiedManifest.selectedCount > 0 &&
                               qualifiedManifest.reliable &&
                               qualifiedManifest.batchEnabled && <>
@@ -2801,16 +2839,17 @@ function App() {
                                     event.target.checked)}/>
                                 I have reviewed all {qualifiedManifest.selectedCount}
                                 {" "}displayed name, email and source pairs.
-                                Save them as review-pending contacts. This does
-                                not verify mailbox delivery or authorize sending.
+                                Confirm this exact displayed list of name, email
+                                and source pairs. Contacts will be saved for review
+                                only — no mailbox validation or sending permission.
                               </label>
                               <button type="button"
                                 disabled={!qualifiedBatchConfirmed ||
                                   qualifiedManifestBusy}
                                 onClick={() => void approveQualifiedContactBatchFromManifest(
                                   p.id, campaignProgress.id)}>
-                                {qualifiedManifestBusy ? "Approving…" :
-                                  "Save reviewed contact batch"}
+                                {qualifiedManifestBusy ? "Confirming…" :
+                                  "Confirm contact list"}
                               </button>
                             </>}
                             {!qualifiedManifest.batchEnabled &&
