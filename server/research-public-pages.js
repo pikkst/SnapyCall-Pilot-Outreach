@@ -267,7 +267,7 @@ export async function retrieveCitedPublicPage(url, {
       Buffer.byteLength(page.body, "utf8") > MAX_BYTES) {
     throw new Error("PUBLIC_PAGE_TOO_LARGE");
   }
-  const linkedContact = /^text\\/html(?:;|$)/i.test(page.contentType)
+  const linkedContact = /^text\/html(?:;|$)/i.test(page.contentType)
     ? linkedPublicContactUrl(canonical, page.body) : null;
   return {
     url: canonical, text: htmlText(page.body),
