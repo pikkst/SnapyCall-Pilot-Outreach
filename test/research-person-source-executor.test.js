@@ -52,6 +52,9 @@ function fixture({ member = true, campaignStatus = "PARTIAL",
     startedCalls: 0, committedWorstCaseCents: 0,
     expiresAt: new Date("2026-11-19T12:00:00Z"),
   };
+  const cycle = { ...approval, id: "cmabcdefghijklmnopqrs4",
+    status: "APPROVED", cycleIndex: 1,
+    startedCalls: 0, committedWorstCaseCents: 0 };
   const currentEvidence = changedEvidence
     ? { ...evidence, name: "Another Person" } : evidence;
   const reservations = new Map();
@@ -81,8 +84,10 @@ function fixture({ member = true, campaignStatus = "PARTIAL",
     $executeRaw: async () => { events.push("concurrency"); return 1; },
     researchPersonSourceApproval: {
       findUnique: async () => approved ? approval : null,
-      updateMany: async ({ data }) => {
-        events.push("approval-counter");
+      updateMany: async ({ data, where }) => {
+        // A cycle ID must never write to the original approval table.
+        assert.equal(where.id, approval.id);
+        events.push("original-approval-counter");
         approval.startedCalls += data.startedCalls.increment;
         approval.committedWorstCaseCents +=
           data.committedWorstCaseCents.increment;
@@ -97,13 +102,15 @@ function fixture({ member = true, campaignStatus = "PARTIAL",
       }),
     },
     researchPersonSourceCycle: {
-      findFirst: async () => continuation ? ({
-        ...approval, id: "cmabcdefghijklmnopqrs4",
-        status: "APPROVED", cycleIndex: 1,
-      }) : null,
+      findFirst: async () => continuation ? cycle : null,
       count: async () => 0,
-      updateMany: async ({ data }) => {
-        events.push("approval-counter");
+      updateMany: async ({ data, where }) => {
+        assert.equal(where.id, cycle.id);
+        assert.equal(where.cycleIndex, 1);
+        events.push("cycle-counter");
+        cycle.startedCalls += data.startedCalls.increment;
+        cycle.committedWorstCaseCents += data.committedWorstCaseCents.increment;
+        cycle.status = data.status;
         return { count: 1 };
       },
     },
@@ -145,7 +152,7 @@ function fixture({ member = true, campaignStatus = "PARTIAL",
     } },
   };
   return { db: { $transaction: async fn => fn(tx) },
-    events, job, approval, reservations };
+    events, job, approval, cycle, reservations };
 }
 
 test("atomically claims one job after tenant, spend and daily quota reservations", async () => {
@@ -158,7 +165,7 @@ test("atomically claims one job after tenant, spend and daily quota reservations
   assert.match(claim.reservationId, /^[a-f0-9-]{36}$/);
   assert.deepEqual(state.events, [
     "concurrency", "spend-reserved", "spend-ledger", "quota", "quota",
-    "approval-counter", "job-claimed", "audit",
+    "original-approval-counter", "job-claimed", "audit",
   ]);
   assert.equal(state.job.status, "RUNNING");
   assert.equal(state.approval.startedCalls, 1);
@@ -240,7 +247,11 @@ test("new continuation claims exactly one never-attempted job under frozen cycle
   assert.equal(f.job.cycleIndex, 1);
   assert.equal(f.job.attempts, 1);
   assert.equal(f.reservations.size, 1);
-  assert.equal(f.events.filter(x => x === "approval-counter").length, 1);
+  assert.equal(f.events.filter(x => x === "cycle-counter").length, 1);
+  assert.equal(f.events.filter(x => x === "original-approval-counter").length, 0);
+  assert.equal(f.cycle.startedCalls, 1);
+  assert.equal(f.cycle.committedWorstCaseCents, price.worstCaseCents);
+  assert.equal(f.approval.startedCalls, 0);
   assert.equal(f.events.filter(x => x === "spend-reserved").length, 1);
   const replay = await claimPersonSourceJob(f.db, scope, { now: clock });
   assert.equal(replay.code, "SOURCE_JOB_UNSETTLED");
