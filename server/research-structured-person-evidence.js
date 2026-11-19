@@ -45,7 +45,7 @@ function personNodes(value) {
 }
 
 export function explicitJsonLdPersonEmail(html) {
-  if (typeof html !== "string" || Buffer.byteLength(html, "utf8") > 128 * 1024)
+  if (typeof html !== "string" || Buffer.byteLength(html, "utf8") > 512 * 1024)
     return null;
   const people = [];
   for (const match of html.matchAll(JSON_LD_TAG)) {
