@@ -3230,8 +3230,9 @@ function App() {
                           </div>
                           <p className="muted">Separate optional Google
                             redirect-header check. This is not the paid
-                            Source enrichment stage shown above. A resolved link
-                            is only an unverified hint, not person-email evidence.</p>
+                            Source enrichment stage shown above.
+                            A resolved link is an unverified source hint,
+                            not person-email evidence.</p>
                           <p role="status">
                             <strong>{campaignGrounding.sourceHints}</strong> source hints ·
                             {" "}{campaignGrounding.unresolved} unresolved ·
@@ -3280,7 +3281,7 @@ function App() {
                           {campaignGrounding.status === "IDLE" &&
                             !campaignGrounding.canApprove &&
                             <p className="muted" role="status">
-                              Optional resolver unavailable: {
+                              Source resolution unavailable: {
                                 ({
                                   SERVER_DISABLED: "the server feature is disabled",
                                   DISCOVERY_NOT_TERMINAL: "the research campaign has not finished",
