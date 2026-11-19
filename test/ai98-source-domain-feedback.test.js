@@ -111,6 +111,30 @@ test("transport dispatches exactly one Tavily Basic call with campaign exclusion
   assert.equal(requests[0].body.include_raw_content, false);
 });
 
+test("provider-returned excluded domains and subdomains never reach Gemini's evidence manifest", async () => {
+  const queries = [];
+  const result = await searchWithBoundedTavily({
+    query: '"Ada Lovelace" official biography and published contact',
+    maxResults: 4, observedAt: "2026-11-19T00:00:00.000Z",
+    apiKey: "tvly-test_public_token_12345678",
+    excludeDomains: ["example.org"],
+  }, async (_url, _headers, body) => {
+    queries.push(body);
+    return { results: [
+      { url: "https://www.example.org/profiles/ada", title: "Blocked profile",
+        content: "Ada Lovelace public expert" },
+      { url: "https://team.example.org/about", title: "Blocked subdomain",
+        content: "Ada Lovelace public expert" },
+      { url: "https://person.example.net/ada", title: "Public biography",
+        content: "Ada Lovelace is a professional" },
+    ] };
+  });
+  assert.equal(queries.length, 1);
+  assert.equal(result.status, "EVIDENCE_AVAILABLE");
+  assert.equal(result.manifest.records.length, 1);
+  assert.equal(result.manifest.records[0].url, "https://person.example.net/ada");
+});
+
 test("invalid domain filter is rejected before any potentially billable transport", async () => {
   let calls = 0;
   await assert.rejects(
