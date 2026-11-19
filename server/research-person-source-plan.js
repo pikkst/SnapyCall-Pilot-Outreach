@@ -41,6 +41,11 @@ export function planPersonSourceResolution(observations, {
     if (source) frequencies.set(source, (frequencies.get(source) ?? 0) + 1);
   }
   const jobs = [];
+  // Observations are source assertions, not distinct payable individuals.
+  // Deduplicate only when BOTH normalized person identity and the same exact
+  // citation match. Different source URLs remain distinct to avoid merging
+  // unrelated namesakes or silently suppressing independent evidence.
+  const scheduled = new Set();
   let needsResolution = 0;
   let alreadyInspectable = 0;
   let alreadyInspected = 0;
@@ -69,6 +74,12 @@ export function planPersonSourceResolution(observations, {
       continue;
     }
     needsResolution++;
+    const duplicateKey = JSON.stringify([
+      identity.name.toLocaleLowerCase("en-US"), identity.category,
+      typeof row.citationUrl === "string" ? row.citationUrl : null,
+    ]);
+    if (scheduled.has(duplicateKey)) continue;
+    scheduled.add(duplicateKey);
     // The plan is research-only. The paid executor MUST recheck current row,
     // owner scope, entitlement, source provenance and budget before dispatch.
     if (jobs.length < maxJobs) jobs.push(Object.freeze({
