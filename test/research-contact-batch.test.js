@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildQualifiedContactManifest, approveQualifiedContactBatch }
+import { buildQualifiedContactManifest, approveQualifiedContactBatch,
+  readQualifiedContactManifest, contactBatchFullRunReady }
   from "../server/research-contact-batch.js";
 
 const scope = {
@@ -66,9 +67,18 @@ test("caps the review action at 100, with honest total and stable manifest", () 
 });
 
 function fixture({ currentRows = rows, existingBatch = null,
-  revoked = false, status = "PARTIAL" } = {}) {
+  revoked = false, status = "PARTIAL", fullRunStatus = null,
+  mismatchedFullRun = false } = {}) {
   const calls = [];
+  const full = fullRunStatus === null ? null : {
+    status: fullRunStatus,
+    workspaceId: mismatchedFullRun ? "cmotherworkspaceabcdefgh" : scope.workspaceId,
+    ownerId: scope.ownerId,
+  };
   const tx = {
+    researchFullRun: {
+      findUnique: async () => full,
+    },
     $queryRaw: async chunks => {
       const sql = chunks.join("?");
       if (sql.includes('FROM "PartnerMembership"'))
@@ -101,7 +111,20 @@ function fixture({ currentRows = rows, existingBatch = null,
       assert.equal(JSON.stringify(data.metadata).includes("expert1@example"), false);
     } },
   };
-  return { db: { $transaction: fn => fn(tx) }, calls };
+  const db = {
+    $transaction: fn => fn(tx),
+    researchFullRun: { findUnique: async () => full },
+    researchCampaign: { findFirst: async () => ({
+      id: scope.campaignId, status,
+    }) },
+    researchCampaignObservation: { findMany: async () => currentRows },
+    researchContactBatch: { findUnique: async () => existingBatch },
+    partnerMembership: { findUnique: async () => revoked ? null : ({
+      id: "membership", role: "MEMBER", revokedAt: null,
+      user: { id: scope.ownerId, googleSub: "google-sub" },
+    }) },
+  };
+  return { db, calls };
 }
 
 test("one reviewed manifest approval materializes 2 durable independent work items", async () => {
@@ -138,4 +161,45 @@ test("stale email, revoked membership and implicit consent fail closed before wr
     ...scope, manifestHash, confirmEveryDisplayedPair: false,
     confirmNoAutomaticSending: true,
   }), TypeError);
+});
+
+test("full-run terminal review is required before list read or final batch approval", async () => {
+  const manifestHash = buildQualifiedContactManifest(rows).manifestHash;
+  const input = { ...scope, manifestHash, confirmEveryDisplayedPair: true,
+    confirmNoAutomaticSending: true };
+  for (const active of [
+    "DISCOVERY", "EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING",
+    "NEEDS_REVIEW", "STOPPED",
+  ]) {
+    const f = fixture({ fullRunStatus: active });
+    assert.equal(contactBatchFullRunReady({ status: active }), false);
+    const read = await readQualifiedContactManifest(f.db, scope);
+    assert.equal(read.code, "FULL_RUN_LIST_NOT_READY", active);
+    const approved = await approveQualifiedContactBatch(f.db, input);
+    assert.equal(approved.code, "FULL_RUN_LIST_NOT_READY", active);
+    assert.deepEqual(f.calls, []);
+  }
+  for (const terminal of ["PARTIAL", "READY_FOR_REVIEW", "COMPLETED"]) {
+    const f = fixture({ fullRunStatus: terminal });
+    assert.equal(contactBatchFullRunReady({ status: terminal }), true);
+    const read = await readQualifiedContactManifest(f.db, scope);
+    assert.equal(read.status, 200);
+    assert.equal(read.selectedCount, 2);
+    const approved = await approveQualifiedContactBatch(f.db, input);
+    assert.equal(approved.code, "CONTACT_BATCH_APPROVED");
+    assert.deepEqual(f.calls, ["batch", "items", "audit"]);
+  }
+  assert.equal(contactBatchFullRunReady(null), true,
+    "Legacy campaigns without a full run preserve their existing review flow");
+});
+
+test("mismatched full-run ownership blocks approval without modifying contacts", async () => {
+  const f = fixture({ fullRunStatus: "READY_FOR_REVIEW",
+    mismatchedFullRun: true });
+  const result = await approveQualifiedContactBatch(f.db, {
+    ...scope, manifestHash: buildQualifiedContactManifest(rows).manifestHash,
+    confirmEveryDisplayedPair: true, confirmNoAutomaticSending: true,
+  });
+  assert.equal(result.code, "FULL_RUN_SCOPE_MISMATCH");
+  assert.deepEqual(f.calls, []);
 });
