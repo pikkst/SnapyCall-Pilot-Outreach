@@ -189,15 +189,25 @@ export async function claimPersonSourceJob(db, {
       workspaceId, userId: ownerId,
       dailyLimit: preferences.dailyLimit, now,
     });
-    const updated = await tx.researchPersonSourceApproval.updateMany({
-      where: { id: approval.id, campaignId, workspaceId, ownerId,
-        status: { in: ["APPROVED", "RUNNING"] }, expiresAt: { gt: now },
-        startedCalls: { lt: approval.maxCalls },
-        committedWorstCaseCents: { lte:
-          approval.maxWorstCaseCents - price.worstCaseCents } },
-      data: { status: "RUNNING", startedCalls: { increment: 1 },
-        committedWorstCaseCents: { increment: price.worstCaseCents } },
-    });
+    // Continuation authorizations live in ResearchPersonSourceCycle, not the
+    // original approval table. Update the correct row under the same campaign
+    // lock, budget reservation and job CAS transaction.
+    const approvalWhere = { id: approval.id, campaignId, workspaceId, ownerId,
+      status: { in: ["APPROVED", "RUNNING"] }, expiresAt: { gt: now },
+      startedCalls: { lt: approval.maxCalls },
+      committedWorstCaseCents: { lte:
+        approval.maxWorstCaseCents - price.worstCaseCents } };
+    const approvalData = { status: "RUNNING",
+      startedCalls: { increment: 1 },
+      committedWorstCaseCents: { increment: price.worstCaseCents } };
+    const updated = continuation
+      ? await tx.researchPersonSourceCycle.updateMany({
+        where: { ...approvalWhere, cycleIndex },
+        data: approvalData,
+      })
+      : await tx.researchPersonSourceApproval.updateMany({
+        where: approvalWhere, data: approvalData,
+      });
     if (updated.count !== 1) {
       throw new PersonSourceExecutionBlocked("SOURCE_APPROVAL_CONFLICT");
     }

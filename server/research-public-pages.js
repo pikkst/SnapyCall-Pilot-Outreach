@@ -133,7 +133,21 @@ export function robotsAllows(text, pathname) {
 }
 
 function htmlText(input) {
-  return input.replace(/<(?:script|style|noscript)\b[^>]*>[\s\S]*?<\/\s*(?:script|style|noscript)\s*>/gi, " ")
+  const cleaned = input.replace(/<(?:script|style|noscript)\b[^>]*>[\s\S]*?<\/\s*(?:script|style|noscript)\s*>/gi, " ");
+  // A sole literal H1 is a semantic person-name label, not a guessed
+  // identity. Multiple H1 headings or complex markup cannot be promoted.
+  // Actual person equality and uniquely attributed email remain downstream.
+  const soleHeading = [...cleaned.matchAll(/<h1\b/gi)].length === 1;
+  const labeled = soleHeading
+    ? cleaned.replace(/<h1\b[^>]*>([^<>]{5,160})<\/h1\s*>/gi,
+      (_whole, title) => " Name: " + title + " ")
+    : cleaned;
+  return labeled
+    // Only promote a literal, visible "Email" link to plaintext evidence.
+    // Do not extract arbitrary hrefs, infer patterns or follow mailto links.
+    // The downstream classifier still requires an explicitly labeled person.
+    .replace(/<a\b[^>]*\s+href\s*=\s*(["'])mailto:([a-z0-9][a-z0-9._%+-]{0,63}@[a-z0-9.-]{1,190}\.[a-z]{2,24})\1[^>]*>\s*E-?mail\s*<\/a\s*>/gi,
+      (_match, _quote, address) => " Email: " + address + " ")
     .replace(/<[^>]*>/g, " ")
     .replace(/&(?:nbsp|#160);/gi, " ")
     .replace(/&(?:amp|#38);/gi, "&")
