@@ -13,7 +13,7 @@ test("approved full-run uses one authoritative pipeline instead of legacy manual
 
 test("discovery-only next-action and optional Google redirect are not mistaken for active full run", () => {
   assert.match(ui, /\{!campaignRunApproval\?\.fullRun &&\s*<p className="muted">Discovery next step:/);
-  assert.match(ui, /Optional Google redirect resolver/);
+  assert.match(ui, /Source resolution agent \(optional Google redirect only\)/);
   assert.match(ui, /not the paid\s*Source enrichment stage/);
   assert.doesNotMatch(ui, /<strong>Source resolution agent<\/strong>/);
   assert.doesNotMatch(ui, /<p className="muted">Next step: \{campaignProgress\.action\}/);
