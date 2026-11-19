@@ -13,6 +13,8 @@ import { reserveOwnerSpend, settleOwnerSpend } from "./research-budget.js";
 import { normalizeCampaignObservations } from "./research-campaign-observations.js";
 import { isDirectPublicProfileUrl } from "./research-observation-email.js";
 import { researchCandidates } from "./ai-research.js";
+import { retrieveCitedPublicPage } from "./research-public-pages.js";
+import { classifyExplicitPersonEmailPage } from "./candidate-direct-email-evidence.js";
 import { repeatedUnavailableSourceDomains } from "./research-source-domain-feedback.js";
 import { resolveCampaignResearchExecution } from "./research-campaign-worker.js";
 import { decryptKey } from "./security.js";
@@ -290,6 +292,48 @@ export function proposedPersonSource(preview, { name, category }) {
   return urls.length === 1 ? urls[0] : null;
 }
 
+// Inspect at most three provider-cited exact-person sources within ONE
+// already authorized source job. Local HTTPS reads are not additional AI
+// searches, and their results never create a contact or grant sending consent.
+// Multiple independently verified, conflicting mailboxes fail closed.
+export async function selectEvidenceBackedPersonSource(preview, subject, {
+  retrieve = retrieveCitedPublicPage,
+} = {}) {
+  if (typeof retrieve !== "function" ||
+      typeof subject?.name !== "string" ||
+      typeof subject?.category !== "string") {
+    throw new TypeError("Trusted named source inspection required");
+  }
+  const entries = normalizeCampaignObservations(preview, 5);
+  const name = value => value.normalize("NFKC")
+    .replace(/\\s+/g, " ").trim().toLocaleLowerCase("en-US");
+  const cited = new Set((Array.isArray(preview?.sources) ? preview.sources : [])
+    .map(item => isDirectPublicProfileUrl(item?.url)).filter(Boolean));
+  const urls = [...new Set(entries.filter(entry =>
+    name(entry.name) === name(subject.name) &&
+    entry.category === subject.category &&
+    cited.has(isDirectPublicProfileUrl(entry.citationUrl)))
+    .map(entry => isDirectPublicProfileUrl(entry.citationUrl))
+    .filter(Boolean))].slice(0, 3);
+  let verified = null;
+  for (const url of urls) {
+    let page;
+    try { page = await retrieve(url); }
+    catch { continue; } // A robots/DNS/transport failure cannot be evidence.
+    const proof = classifyExplicitPersonEmailPage({
+      name: subject.name, expertProfileUrl: url, email: null,
+    }, page);
+    if (proof.status !== "REVIEW_REQUIRED") continue;
+    if (verified && verified.email !== proof.emailNormalized) {
+      return null; // Contradictory published person addresses require review.
+    }
+    if (!verified) verified = { url, email: proof.emailNormalized };
+  }
+  // The downstream source worker MUST inspect the chosen page again before
+  // promoting it to a persisted named-email observation.
+  return verified?.url ?? null;
+}
+
 // Finish is a single fenced DB transaction, including conservative ledger
 // settlement. If the fence expired after dispatch, only explicit
 // reconciliation may decide next steps; never replay the paid provider.
@@ -400,9 +444,11 @@ export async function runOnePersonSourceJob(db, {
   tavilyApiKey = process.env.TAVILY_API_KEY,
   tavilyEnabled = process.env.TAVILY_DUAL_PROVIDER_ENABLED === "true",
   accountCapVerified = process.env.TAVILY_ACCOUNT_CAP_VERIFIED === "true",
+  retrieve = retrieveCitedPublicPage,
 } = {}) {
   if (typeof encryptionKey !== "string" || encryptionKey.length < 16 ||
-      typeof search !== "function" || typeof decrypt !== "function") {
+      typeof search !== "function" || typeof decrypt !== "function" ||
+      typeof retrieve !== "function") {
     throw new TypeError("Trusted source worker configuration required");
   }
   const setting = await db.aiSetting.findUnique({ where: { ownerId } });
@@ -473,7 +519,7 @@ export async function runOnePersonSourceJob(db, {
         excludeDomains,
       } : {}),
     });
-    const source = proposedPersonSource(result, claim);
+    const source = await selectEvidenceBackedPersonSource(result, claim, { retrieve });
     return await finishPersonSourceJob(db, claim,
       { proposedUrl: source, providerInvoked: true }, { now: now() });
   } catch {
