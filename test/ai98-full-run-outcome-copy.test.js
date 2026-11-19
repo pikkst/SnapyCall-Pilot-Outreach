@@ -7,7 +7,9 @@ const ui = readFileSync(new URL("../web/main.tsx", import.meta.url), "utf8");
 test("legacy discovery-only budget outcome cannot override a full-run result", () => {
   const banner = ui.indexOf('aria-label="Paid campaign run outcome"');
   assert.ok(banner > 0);
-  const before = ui.slice(banner - 630, banner);
+  const gate = ui.lastIndexOf("{campaignRunApproval?.run &&", banner);
+  assert.ok(gate > 0 && gate < banner);
+  const before = ui.slice(gate, banner);
   assert.match(before, /campaignRunApproval\?\.run/);
   assert.match(before, /!campaignRunApproval\.fullRun/);
   assert.match(ui, /Approved research limit reached successfully/);
