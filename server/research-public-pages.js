@@ -146,7 +146,7 @@ function htmlText(input) {
     // Only promote a literal, visible "Email" link to plaintext evidence.
     // Do not extract arbitrary hrefs, infer patterns or follow mailto links.
     // The downstream classifier still requires an explicitly labeled person.
-    .replace(/<a\b[^>]*\bhref\s*=\s*(["'])mailto:([a-z0-9][a-z0-9._%+-]{0,63}@[a-z0-9.-]{1,190}\.[a-z]{2,24})\1[^>]*>\s*E-?mail\s*<\/a\s*>/gi,
+    .replace(/<a\b[^>]*\s+href\s*=\s*(["'])mailto:([a-z0-9][a-z0-9._%+-]{0,63}@[a-z0-9.-]{1,190}\.[a-z]{2,24})\1[^>]*>\s*E-?mail\s*<\/a\s*>/gi,
       (_match, _quote, address) => " Email: " + address + " ")
     .replace(/<[^>]*>/g, " ")
     .replace(/&(?:nbsp|#160);/gi, " ")
