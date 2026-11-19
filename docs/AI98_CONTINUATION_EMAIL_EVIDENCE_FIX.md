@@ -30,7 +30,10 @@ The existing bounded public HTML reader previously stripped all anchor
 attributes, so a public `<a href="mailto:jane@example.org">Email</a>`
 would be reduced to `Email` without the address. It now renders only
 **explicitly labeled** literal `mailto:` links into the inspected
-plaintext as `Email: jane@example.org`. This is one additional
+plaintext as `Email: jane@example.org`. A sole literal `<h1>Jane Doe</h1>`
+can also supply the explicit `Name: Jane Doe` label. Multiple headings,
+complex headings, team titles, hidden scripts or multiple email addresses
+remain insufficient. This is one additional
 *publicly published* source format, not an inferred email address.
 
 Existing independent HTTPS fetch, SSRF DNS pinning, robots/redirect
