@@ -2892,8 +2892,20 @@ function App() {
                             </>}
                             {qualifiedManifest.selectedCount > 0 &&
                               !qualifiedManifest.batchEnabled &&
-                              <p className="muted">Batch contact saving is not
-                                enabled in this environment.</p>}
+                              <div role="status">
+                                <p className="muted">Batch saving is disabled.
+                                  You can still review and save individual
+                                  contacts using the existing independent
+                                  evidence check. No messages will be sent.</p>
+                                <button type="button" className="secondary"
+                                  disabled={campaignObservationsStatus === "loading"}
+                                  onClick={() => void loadCampaignObservations(
+                                    p.id, campaignProgress.id)}>
+                                  {campaignObservationsStatus === "loading"
+                                    ? "Loading findings…" :
+                                    "Review contacts individually"}
+                                </button>
+                              </div>}
                           </>}
                           {qualifiedBatchNotice && <p role="status">
                             {qualifiedBatchNotice}
@@ -3134,8 +3146,8 @@ function App() {
                             <p className="muted" role="status">
                               Showing {campaignObservations.length} of
                               {" "}{campaignProgress.uniqueSourcedCandidates} saved
-                              observations · 0 verified contacts in this
-                              research view · Email not checked</p>
+                              observations · Qualified evidence still requires
+                              independent readback and human review</p>
                           )}
                           {campaignObservationsStatus === "ready" &&
                             campaignObservations.length === 0 &&
