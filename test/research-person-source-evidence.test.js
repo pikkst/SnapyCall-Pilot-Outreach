@@ -438,6 +438,6 @@ test("shared source readback refuses a concurrent evidence digest change", async
     f.state.row.emailTriageDigest = "f".repeat(64);
     return { url, text: "Professional team", structuredContacts: contacts };
   } });
-  assert.equal(readback.code, "PROFILE_SOURCE_CHANGED");
+  assert.equal(readback.code, "SHARED_SOURCE_EVIDENCE_CHANGED");
   assert.equal(readback.observedEmail, undefined);
 });
