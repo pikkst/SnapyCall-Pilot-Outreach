@@ -1,5 +1,6 @@
 // Read-only, bounded HTTPS retrieval of provider-cited public pages.
-// This adapter never executes scripts, follows redirects or accesses private IPs.
+// This adapter never executes scripts or accesses private IPs. It may follow
+// exactly one revalidated HTTPS canonical redirect on the same site.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
@@ -7,7 +8,7 @@ import { publicCitationUrl } from "./research-evidence.js";
 
 // The prior 64 KiB cap rejected legitimate public biography pages. Keep an
 // explicit, finite limit (128 KiB) for both declared and streamed bodies.
-// No redirects, scripts, robots bypass or private-network fetches are enabled.
+// No cross-site redirects, scripts, robots bypass or private-network fetches.
 const MAX_BYTES = 128 * 1024;
 const TIMEOUT_MS = 4000;
 const USER_AGENT = "SnapyCallResearchPreview/1.0 (+https://pilot.eventnexus.eu)";
@@ -64,8 +65,15 @@ function pinnedHttps(url, address, timeoutMs = TIMEOUT_MS) {
       },
     }, response => {
       if (response.statusCode >= 300 && response.statusCode < 400) {
+        // Do not let the transport follow a Location header. The caller
+        // must validate the target, its robots policy and pinned DNS afresh.
+        const location = response.headers.location;
         response.resume();
-        reject(new Error("PUBLIC_PAGE_REDIRECT_REJECTED")); return;
+        resolve({
+          status: response.statusCode,
+          location: typeof location === "string" ? location : null,
+        });
+        return;
       }
       const status = response.statusCode;
       if (status !== 200 && status !== 404) {
@@ -162,29 +170,72 @@ function htmlText(input) {
     .replace(/\s+/g, " ").trim();
 }
 
+// Redirects are source hints, not fetch permission. Only a single canonical
+// HTTPS redirect between the exact host and its www/apex variant is permitted.
+// Both source and destination independently require safe DNS and robots
+// authorization. The original provider-cited URL remains the auditable
+// citation: it resolves directly to the inspected document.
+export function canonicalPublicProfileRedirect(original, location) {
+  const start = publicCitationUrl(original);
+  if (!start || typeof location !== "string" ||
+      location.length < 1 || location.length > 2048) return null;
+  let absolute;
+  try { absolute = new URL(location, start).href; }
+  catch { return null; }
+  const target = publicCitationUrl(absolute);
+  if (!target || target === start) return null;
+  const first = new URL(start);
+  const last = new URL(target);
+  const baseHost = host => host.startsWith("www.") ? host.slice(4) : host;
+  if (baseHost(first.hostname) !== baseHost(last.hostname)) return null;
+  return target;
+}
+
 export async function retrieveCitedPublicPage(url, {
   resolve = dnsLookup, request = pinnedHttps,
 } = {}) {
   const canonical = publicCitationUrl(url);
   if (!canonical) throw new Error("PUBLIC_PAGE_URL_REJECTED");
-  const parsed = new URL(canonical);
-  const robots = new URL("/robots.txt", parsed);
-  const robotsAddress = await resolvePublicAddress(parsed.hostname, resolve);
-  const policy = await request(robots, robotsAddress);
-  if (policy.status !== 404 && (policy.status !== 200 ||
-      !/^text\/plain(?:;|$)/i.test(policy.contentType) ||
-      policy.contentEncoding || !robotsAllows(policy.body, parsed.pathname))) {
-    throw new Error("PUBLIC_PAGE_ROBOTS_REJECTED");
+
+  async function inspectOne(targetUrl) {
+    const parsed = new URL(targetUrl);
+    const robots = new URL("/robots.txt", parsed);
+    const robotsAddress = await resolvePublicAddress(parsed.hostname, resolve);
+    const policy = await request(robots, robotsAddress);
+    if (policy.status !== 404 && (policy.status !== 200 ||
+        !/^text\\/plain(?:;|$)/i.test(policy.contentType) ||
+        policy.contentEncoding || !robotsAllows(policy.body, parsed.pathname))) {
+      throw new Error("PUBLIC_PAGE_ROBOTS_REJECTED");
+    }
+    // Independently resolve before each document request to defend DNS
+    // rebinding even when robots and the page share the same hostname.
+    const pageAddress = await resolvePublicAddress(parsed.hostname, resolve);
+    return request(parsed, pageAddress);
   }
-  // Re-resolve and revalidate for the document request, then pin again.
-  const pageAddress = await resolvePublicAddress(parsed.hostname, resolve);
-  const page = await request(parsed, pageAddress);
+
+  let target = canonical;
+  let page = await inspectOne(target);
+  if (page.status >= 300 && page.status < 400) {
+    if (![301, 302, 307, 308].includes(page.status)) {
+      throw new Error("PUBLIC_PAGE_REDIRECT_REJECTED");
+    }
+    const redirected = canonicalPublicProfileRedirect(target, page.location);
+    if (!redirected) throw new Error("PUBLIC_PAGE_REDIRECT_REJECTED");
+    target = redirected;
+    page = await inspectOne(target);
+  }
+  // Never follow a second redirect. No arbitrary link discovery or
+  // automatic cross-site navigation is authorized by this reader.
+  if (page.status >= 300 && page.status < 400) {
+    throw new Error("PUBLIC_PAGE_REDIRECT_REJECTED");
+  }
   if (page.status !== 200 || page.contentEncoding ||
-      !/^(text\/html|text\/plain)(?:;|$)/i.test(page.contentType) ||
-      /charset\s*=\s*(?!utf-8)([^;]+)/i.test(page.contentType)) {
+      !/^(text\\/html|text\\/plain)(?:;|$)/i.test(page.contentType) ||
+      /charset\\s*=\\s*(?!utf-8)([^;]+)/i.test(page.contentType)) {
     throw new Error("PUBLIC_PAGE_CONTENT_REJECTED");
   }
-  if (typeof page.body !== "string" || Buffer.byteLength(page.body, "utf8") > MAX_BYTES) {
+  if (typeof page.body !== "string" ||
+      Buffer.byteLength(page.body, "utf8") > MAX_BYTES) {
     throw new Error("PUBLIC_PAGE_TOO_LARGE");
   }
   return { url: canonical, text: htmlText(page.body) };
