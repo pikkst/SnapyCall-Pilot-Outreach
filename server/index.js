@@ -2606,15 +2606,26 @@ async function start() {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    stopApprovedWorker();
+    // Stop new paid dispatch first; then drain the already claimed Discovery
+    // task while HTTP stops accepting requests. Do not disconnect Prisma
+    // during its fenced spend settlement or final observation transaction.
+    const discoveryDrained = stopApprovedWorker();
     stopPersonSourceWorker();
     stopFullRunWorker();
     stopContactBatchWorker();
     stopGroundingWorker();
     stopEmailTriageWorker();
     server.close(async () => {
-      await prisma.$disconnect();
-      process.exit(0);
+      try {
+        await discoveryDrained;
+        await prisma.$disconnect();
+        process.exit(0);
+      } catch {
+        // External shutdown grace may expire mid-provider-call. A missing
+        // settlement remains a no-replay operator reconciliation task.
+        console.warn("[shutdown] Discovery drain failed; reconciliation required");
+        process.exitCode = 1;
+      }
     });
   };
   process.once("SIGTERM", shutdown);

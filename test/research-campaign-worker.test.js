@@ -13,7 +13,8 @@ const input = { campaignId, workspaceId, ownerId, encryptionKey: "test-only-encr
 function fakeDatabase({ queued = true, member = true,
   memberAtCommit = true, providerResult = "ok", failedCAS = false,
   settlementUnavailable = false, certifiedUsage = null, approvedRun = false,
-  failedZeroEvidenceCAS = false, pacingWaitMs = 0 } = {}) {
+  failedZeroEvidenceCAS = false, pacingWaitMs = 0,
+  intentAuditUnavailable = false } = {}) {
   const events = [];
   let reservation;
   let membershipLocks = 0;
@@ -96,7 +97,18 @@ function fakeDatabase({ queued = true, member = true,
       upsert: async () => ({ reservedCents: 0, settledCents: 0 }),
       update: async () => ({}),
     },
-    auditEvent: { create: async () => ({ id: "audit" }) },
+    auditEvent: { create: async ({ data }) => {
+      if (data.action === "research.campaign.dispatch.intent") {
+        if (intentAuditUnavailable) throw new Error("Intent audit unavailable");
+        events.push("dispatch-intent");
+        assert.equal(data.metadata.automaticRetryAllowed, false);
+        assert.equal(data.metadata.dispatchPossible, true);
+      } else if (data.action === "research.campaign.provider.returned") {
+        events.push("provider-returned");
+        assert.equal(data.metadata.responseReturned, true);
+      }
+      return { id: "audit" };
+    } },
     researchCampaignObservation: {
       count: async () => 1,
       createMany: async ({ data }) => {
@@ -180,9 +192,25 @@ test("worker reserves money and quota before a single provider call, then stores
   assert.equal(output.sendingEnabled, false);
   assert.equal(events.filter(x => x === "provider-called").length, 1);
   assert.ok(events.indexOf("money-reserved") < events.indexOf("provider-called"));
+  assert.ok(events.indexOf("dispatch-intent") < events.indexOf("provider-called"));
+  assert.ok(events.indexOf("provider-called") < events.indexOf("provider-returned"));
   assert.ok(events.indexOf("money-settled") < events.indexOf("evidence-saved"));
   assert.equal(getReservation().chargedCents, 200);
   assert.equal(events.at(-1), "concurrency-released");
+});
+
+test("unavailable dispatch-intent audit prevents provider call and settles without charge", async () => {
+  const { db, events, search, getReservation } =
+    fakeDatabase({ intentAuditUnavailable: true });
+  const result = await runOneCampaignTask(db, input, {
+    search, decrypt: () => "test-only-provider-key", now: () => now,
+  });
+  assert.equal(result.attempted, false);
+  assert.equal(result.status, "PAUSED");
+  assert.equal(events.includes("provider-called"), false);
+  assert.equal(events.includes("money-settled"), true);
+  assert.equal(getReservation().chargedCents, 0);
+  assert.equal(events.includes("task-paused"), true);
 });
 
 test("DB pacing rejects a second paid task with no provider, money or quota use", async () => {

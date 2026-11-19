@@ -188,6 +188,17 @@ export async function runOneCampaignTask(db, {
       failure = "UNCLASSIFIED";
       outcome = { status: "PAUSED", attempted: false, code: failure };
     } else {
+      // Persist the possible paid-dispatch boundary BEFORE calling a
+      // provider. This is not proof of a charge; it is the durable evidence
+      // that an interrupted lease must never be replayed automatically.
+      await db.$transaction(tx => tx.auditEvent.create({ data: {
+        actorId: ownerId, action: "research.campaign.dispatch.intent",
+        entityId: claim.taskId, metadata: {
+          campaignId, workspaceId, reservationId,
+          provider: setting.provider, model: setting.model,
+          dispatchPossible: true, automaticRetryAllowed: false,
+        },
+      } }));
       invoked = true;
       const result = await plan.search({
         query: claim.query, limit: claim.limit,
@@ -199,6 +210,20 @@ export async function runOneCampaignTask(db, {
         } : {}),
       });
       providerReturned = true;
+      // Best-effort receipt only; telemetry failure must not turn a valid
+      // provider response into another chargeable attempt.
+      try {
+        await db.$transaction(tx => tx.auditEvent.create({ data: {
+          actorId: ownerId, action: "research.campaign.provider.returned",
+          entityId: claim.taskId, metadata: {
+            campaignId, workspaceId, reservationId,
+            provider: setting.provider, responseReturned: true,
+            automaticRetryAllowed: false,
+          },
+        } }));
+      } catch {
+        console.warn("[research-campaign] Provider receipt audit unavailable");
+      }
       // A future reviewed dual-provider policy uses its own complete Tavily
       // + Gemini billing contract. Never apply legacy single-provider tool
       // rates to the combined call. Missing receipts retain the full ceiling.
