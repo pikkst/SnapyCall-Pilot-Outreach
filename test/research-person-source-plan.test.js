@@ -27,10 +27,11 @@ test("plans only unresolved person-specific source tasks, never links namesakes"
   assert.equal(plan.alreadyInspectable, 1);
   assert.equal(plan.alreadyInspected, 1);
   assert.equal(plan.inFlight, 1);
-  assert.equal(plan.jobs.length, 3);
+  // Both Alex observations describe the same name and exact citation;
+  // keep the source assertion count but spend on it only once.
+  assert.equal(plan.jobs.length, 2);
   assert.equal(plan.jobs[0].reason, "SHARED_SOURCE");
-  assert.notEqual(plan.jobs[0].observationId, plan.jobs[1].observationId);
-  assert.equal(plan.jobs[2].reason, "ALTERNATE_EMAIL_SOURCE");
+  assert.equal(plan.jobs[1].reason, "ALTERNATE_EMAIL_SOURCE");
   assert.equal(plan.jobs[0].query.includes("Alex Example"), true);
   const projection = publicPersonSourcePlan(plan);
   assert.equal(projection.needsResolution, 3);
@@ -38,6 +39,22 @@ test("plans only unresolved person-specific source tasks, never links namesakes"
   assert.equal(JSON.stringify(projection).includes("https://"), false);
   assert.equal(projection.paidCallsAuthorized, false);
   assert.equal(projection.emailSendingEnabled, false);
+});
+
+test("distinct citations and categories never collapse namesakes", () => {
+  const inputs = [
+    make("100", "Jordan Smith", "https://people.example.org/jordan-a", "BLOCKED"),
+    make("101", "Jordan Smith", "https://people.example.org/jordan-b", "BLOCKED"),
+    make("102", "Jordan Smith", "https://people.example.org/jordan-a", "BLOCKED", {
+      category: "AI_AUTOMATION",
+    }),
+    make("103", "Jordan Smith", "https://people.example.org/jordan-a", "BLOCKED"),
+  ];
+  const plan = planPersonSourceResolution(inputs);
+  assert.equal(plan.needsResolution, 4);
+  assert.equal(plan.jobs.length, 3);
+  assert.deepEqual(plan.jobs.map(job => job.observationId),
+    inputs.slice(0, 3).map(row => row.id));
 });
 
 test("opaque and untrusted source hints remain unresolved, without guessing URLs", () => {
