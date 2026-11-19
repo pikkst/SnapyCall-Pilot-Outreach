@@ -23,6 +23,21 @@ function validNamedEmail(row) {
     Number.isFinite(row.emailTriageAt.getTime());
 }
 
+// A repeated page is safe only for an already bound, independently verified
+// person-scoped JSON-LD proof. Raw shared citations never qualify. This is a
+// persisted evidence contract, not a substitute for a fresh source readback.
+export function isScopedPersonEmailEvidence(row) {
+  return row?.personSourceProvenance ===
+      "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE" &&
+    row?.emailTriageStatus === "REVIEW_REQUIRED" &&
+    row?.emailTriageCode === "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED" &&
+    row?.personSourceVerifiedAt instanceof Date &&
+    Number.isFinite(row.personSourceVerifiedAt.getTime()) &&
+    validNamedEmail(row) &&
+    typeof row?.personSourceUrl === "string" &&
+    observationInspectionSource(row) === row.personSourceUrl;
+}
+
 // Counts only independently sourced, non-colliding, already-inspected named
 // email evidence. Never return contact addresses or source URLs in this summary.
 // Do not deduplicate conflicting identities by name alone.
@@ -53,7 +68,8 @@ export function summarizeQualifiedEmailEvidence(rows, { complete = true } = {}) 
     reviewRequired++;
     const source = observationInspectionSource(row);
     if (!validNamedEmail(row) || !source ||
-        sourceCounts.get(source) !== 1 ||
+        (sourceCounts.get(source) !== 1 &&
+          !isScopedPersonEmailEvidence(row)) ||
         emailCounts.get(row.emailTriageEmail) !== 1) {
       ambiguous++;
       continue;
