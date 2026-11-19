@@ -164,7 +164,9 @@ export async function inspectDiscoveryLeaseReconciliation(db, {
     const matching = reserved.filter(event =>
       event.metadata?.campaignId === campaignId &&
       event.metadata?.workspaceId === workspaceId &&
-      event.metadata?.taskId === task.id);
+      (event.action === "research.campaign.spend.reserved"
+        ? event.metadata?.taskId === task.id
+        : event.entityId === task.id));
     const reservations = matching.filter(event =>
       event.action === "research.campaign.spend.reserved");
     let spend = null;
