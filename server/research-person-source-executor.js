@@ -79,7 +79,7 @@ function sourcePriorityAdjustments(jobs) {
     if (outcome.total < PRIORITY_MIN_SAMPLE) continue;
     // One positive observation can be noise. Require two verified outcomes
     // for promotion, while four zero-yield calls permit a mild demotion.
-    if (outcome.verified >= 2) adjustments.set(reason, -3);
+    if (outcome.verified >= 2) adjustments.set(reason, -5);
     else if (outcome.verified === 0) adjustments.set(reason, 5);
   }
   return adjustments;
