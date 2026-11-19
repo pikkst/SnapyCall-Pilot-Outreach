@@ -13,6 +13,7 @@ import { reserveOwnerSpend, settleOwnerSpend } from "./research-budget.js";
 import { normalizeCampaignObservations } from "./research-campaign-observations.js";
 import { isDirectPublicProfileUrl } from "./research-observation-email.js";
 import { researchCandidates } from "./ai-research.js";
+import { repeatedUnavailableSourceDomains } from "./research-source-domain-feedback.js";
 import { resolveCampaignResearchExecution } from "./research-campaign-worker.js";
 import { decryptKey } from "./security.js";
 
@@ -40,6 +41,35 @@ function validateScope({ campaignId, workspaceId, ownerId }, now) {
       !(now instanceof Date) || !Number.isFinite(now.getTime())) {
     throw new TypeError("Verified person-source campaign and clock required");
   }
+}
+
+// Prioritize the already-inspected but unqualified individual evidence first,
+// then unresolved individual sources, and only then shared directory citations.
+// The immutable job snapshot, id ordering and owner budget remain unchanged.
+// No prior attempted job can be selected or replayed.
+const PERSON_SOURCE_PRIORITY = Object.freeze({
+  ALTERNATE_EMAIL_SOURCE: 0,
+  PERSON_SOURCE_REQUIRED: 1,
+  SHARED_SOURCE: 2,
+});
+export function selectNextPersonSourceJob(jobs) {
+  if (!Array.isArray(jobs) || jobs.length > MAX_JOBS) {
+    throw new TypeError("Bounded persisted person source jobs required");
+  }
+  let selected = null;
+  let selectedRank = Infinity;
+  for (const job of jobs) {
+    if (job?.status !== "QUEUED" || job.attempts !== 0 ||
+        typeof job.observationId !== "string") continue;
+    const rank = PERSON_SOURCE_PRIORITY[job.reason] ?? 3;
+    if (rank < selectedRank ||
+        (rank === selectedRank &&
+          job.observationId < selected.observationId)) {
+      selected = job;
+      selectedRank = rank;
+    }
+  }
+  return selected;
 }
 
 // Search for an attributable personal website rather than a generic category
@@ -159,7 +189,7 @@ export async function claimPersonSourceJob(db, {
           approval.maxWorstCaseCents) {
       return { status: "BLOCKED", code: "SOURCE_APPROVED_SPEND_EXHAUSTED" };
     }
-    const queued = jobs.find(job => job.status === "QUEUED" && job.attempts === 0);
+    const queued = selectNextPersonSourceJob(jobs);
     if (!queued) return { status: "IDLE", code: "NO_SOURCE_JOB_READY" };
     const observation = await tx.researchCampaignObservation.findFirst({
       where: { campaignId, id: queued.observationId },
@@ -413,6 +443,25 @@ export async function runOnePersonSourceJob(db, {
       return await finishPersonSourceJob(db, claim,
         { providerInvoked: false }, { now: now() });
     }
+    // Reuse only independently settled failures from THIS campaign.
+    // Repeated unavailable public domains are not useful for the same
+    // inspection contract. Feed bounded exclusions only to Tavily Basic,
+    // never to Gemini instructions, browser inputs, or a new paid call.
+    // A failed optional feedback read leaves the previous search behavior.
+    let excludeDomains = [];
+    if (plan.dualProvider) {
+      try {
+        const previous = await db.researchPersonSourceJob.findMany({
+          where: { campaignId, status: "SOURCE_UNAVAILABLE",
+            proposedSourceUrl: { not: null } },
+          select: { status: true, proposedSourceUrl: true },
+          take: 250,
+        });
+        excludeDomains = repeatedUnavailableSourceDomains(previous);
+      } catch {
+        excludeDomains = [];
+      }
+    }
     invoked = true;
     result = await plan.search({
       query: claim.query, limit: 5, provider: claim.provider,
@@ -421,6 +470,7 @@ export async function runOnePersonSourceJob(db, {
         tavilyApiKey: plan.tavilyApiKey, maxResults: plan.maxResults,
         maxInputTokens: plan.maxInputTokens,
         sourceSubject: { name: claim.name, category: claim.category },
+        excludeDomains,
       } : {}),
     });
     const source = proposedPersonSource(result, claim);
