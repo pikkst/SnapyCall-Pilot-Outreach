@@ -100,7 +100,12 @@ type FullRunTiming = {
     finishedAt: string | null;
   }>;
 };
+type StageWorkMetric = {
+  completed: number; total: number; unit: string;
+  currentCycle?: number | null; cyclesCreated?: number;
+};
 type CampaignRunApprovalState = {
+  stageProgress?: Record<string, StageWorkMetric> | null;
   run: ApprovedCampaignRun | null; autonomousRunEnabled: boolean;
   timing?: FullRunTiming | null; serverNow?: string; receivedAt?: number;
   fullRun: FullRunStatus | null; fullRunEnabled: boolean;
@@ -2701,24 +2706,57 @@ function App() {
                                 {timeline.stages.map(stage => {
                                   const active = timeline.currentStage === stage.key;
                                   const complete = !!stage.finishedAt;
+                                  const metric = campaignRunApproval?.stageProgress?.[stage.key];
+                                  // Work counters express actual processed items or
+                                  // consumed call allowance, never estimated time left.
+                                  const workPercent = metric && metric.total > 0
+                                    ? Math.round(100 * Math.min(metric.completed,
+                                        metric.total) / metric.total) : 0;
                                   return <div key={stage.key}
                                     className={"research-timer-stage" +
                                       (active ? " active" : complete ? " complete" : "")}>
-                                    <span>{stage.label}</span>
-                                    <span className="research-timer-value">
-                                      {stage.startedAt
-                                        ? elapsedRunClock(stage.startedAt,
-                                          stage.finishedAt, nowMs)
-                                        : "Not started"}
-                                      {active && <span className="research-timer-running">
-                                        {" "}· Running</span>}
-                                    </span>
+                                    <div className="research-timer-stage-header">
+                                      <span>{stage.label}</span>
+                                      <span className="research-timer-value">
+                                        {stage.startedAt
+                                          ? elapsedRunClock(stage.startedAt,
+                                            stage.finishedAt, nowMs)
+                                          : "Not started"}
+                                        {active && <span className="research-timer-running">
+                                          {" "}· Running</span>}
+                                      </span>
+                                    </div>
+                                    {metric && <div className="research-stage-work">
+                                      <div className="research-stage-work-label">
+                                        <span>{metric.completed} / {metric.total} {metric.unit}</span>
+                                        <span>{complete ? "Stage complete" :
+                                          stage.startedAt && metric.total > 0
+                                            ? workPercent + "% of planned work" :
+                                            "Not started"}</span>
+                                      </div>
+                                      <div className="research-stage-work-track"
+                                        role="progressbar"
+                                        aria-label={stage.label + " work progress"}
+                                        aria-valuemin={0} aria-valuemax={metric.total || 1}
+                                        aria-valuenow={metric.completed}
+                                        aria-valuetext={metric.completed + " of " +
+                                          metric.total + " " + metric.unit}>
+                                        <div className="research-stage-work-fill"
+                                          style={{ width: (complete ? 100 : workPercent) + "%" }}/>
+                                      </div>
+                                      {stage.key === "SOURCE_RUNNING" &&
+                                        (metric.cyclesCreated ?? 0) > 0 &&
+                                        <span className="research-stage-work-cycle">
+                                          Source continuation cycles: {metric.cyclesCreated}
+                                        </span>}
+                                    </div>}
                                   </div>;
                                 })}
                               </div>
                               <p className="muted research-timer-note">
-                                Measured from saved server timestamps. Running times
-                                update live; no completion estimate is implied.
+                                Timers use saved timestamps. Work bars use server
+                                counters; search bars show approved call usage, not
+                                a remaining-time estimate.
                               </p>
                             </section>;
                           })()}
