@@ -43,6 +43,21 @@ manifest or exhausted authorization still **fails closed** and may require
 operator reconciliation. It must never be auto-retried in order to satisfy the
 one-click UX goal.
 
+## Evidence quality improvements
+
+- The source-only Gemini 3 prompt now prioritizes a single attributable
+  public official biography/contact citation over shared directories. The
+  model still cannot manufacture an address or certify identity: the
+  independent page reader and exact person/email classifier remain the sole
+  evidence acceptance path.
+- The strict public HTML reader's byte cap is raised from 64 KiB to 128 KiB
+  because real source inspections hit `PUBLIC_PAGE_TOO_LARGE`. Responses are
+  still bounded by declared content-length and streamed byte count. All DNS
+  pinning, robots rules, no-redirect, no-script and HTTPS-only restrictions
+  are unchanged.
+- These are evidence coverage improvements, not a guarantee of usable
+  emails or permission to send messages.
+
 ## Scope
 
 This PR is stacked on #165 and should only be merged after #165.
