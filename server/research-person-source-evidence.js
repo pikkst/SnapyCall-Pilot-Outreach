@@ -12,6 +12,21 @@ import { personSourceFingerprint }
 
 const REVIEW = "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED";
 const PROOF = "AI98_EXPLICIT_NAMED_EMAIL_ON_PUBLIC_PROFILE";
+const PUBLIC_PAGE_FAILURE_CODES = new Set([
+  "PUBLIC_PAGE_URL_REJECTED", "PUBLIC_PAGE_DNS_REJECTED",
+  "PUBLIC_PAGE_NO_VALID_IPV4", "PUBLIC_PAGE_REDIRECT_REJECTED",
+  "PUBLIC_PAGE_HTTP_REJECTED", "PUBLIC_PAGE_TOO_LARGE",
+  "PUBLIC_PAGE_TIMEOUT", "PUBLIC_PAGE_ROBOTS_REJECTED",
+  "PUBLIC_PAGE_CONTENT_REJECTED",
+]);
+
+// Only static errors from the trusted public HTTPS reader are observable.
+// Do not persist exception messages, URLs, response bodies or private DNS.
+export function classifyPersonSourceInspectionFailure(error) {
+  return error instanceof Error && PUBLIC_PAGE_FAILURE_CODES.has(error.message)
+    ? error.message : "PUBLIC_PAGE_OTHER_UNAVAILABLE";
+}
+
 
 function scopeValid({ campaignId, workspaceId, ownerId, jobId }) {
   return [campaignId, workspaceId, ownerId, jobId].every(isWorkspaceId);
@@ -123,9 +138,10 @@ export async function verifyPersonSourceProposal(db, scope, {
   }
   let page;
   try { page = await retrieve(url); }
-  catch {
+  catch (error) {
     return await persistPersonSourceInspection(db, scope, job, observation, {
       clock, url, evidence: null, errorCode: "PUBLIC_PAGE_INSPECTION_UNAVAILABLE",
+      inspectionFailureReason: classifyPersonSourceInspectionFailure(error),
     });
   }
   const evidence = classifyExplicitPersonEmailPage({
@@ -138,7 +154,7 @@ export async function verifyPersonSourceProposal(db, scope, {
 }
 
 async function persistPersonSourceInspection(db, scope, job, observation, {
-  clock, url, evidence, errorCode,
+  clock, url, evidence, errorCode, inspectionFailureReason = null,
 }) {
   return db.$transaction(async tx => {
     if (!await lockActiveWorkspaceMembership(tx, {
@@ -229,6 +245,9 @@ async function persistPersonSourceInspection(db, scope, job, observation, {
       action: "research.person-source.inspected",
       metadata: { workspaceId: scope.workspaceId,
         campaignId: scope.campaignId, code: evidence ? REVIEW : errorCode,
+        // The original terminal job status is unchanged; this audit-only
+        // category diagnoses independent public-page access restrictions.
+        ...(inspectionFailureReason ? { inspectionFailureReason } : {}),
         independentlyFetched: true, personEmailEvidence: !!evidence,
         humanReviewed: false, contactCreated: false,
         mailboxVerified: false, sendingEnabled: false },
