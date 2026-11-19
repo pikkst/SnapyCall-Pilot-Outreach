@@ -101,6 +101,6 @@ export function startApprovedCampaignWorker(db, {
   return () => {
     stopped = true;
     clearInterval(interval);
-    return activeTick ?? Promise.resolve();
+    return activeTick ? activeTick.catch(() => {}) : Promise.resolve();
   };
 }
