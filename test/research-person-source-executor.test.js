@@ -305,3 +305,65 @@ test("source queue excludes billed attempts, preserves stable ordering, and fail
   assert.throws(() => selectNextPersonSourceJob(Array(251).fill(a)),
     TypeError);
 });
+
+test("campaign-local zero-yield source reasons defer to untried next tier", () => {
+  const job = (reason, id, status = "QUEUED", attempts = 0) => ({
+    id, observationId: id, reason, status, attempts,
+  });
+  const jobs = [
+    job("ALTERNATE_EMAIL_SOURCE", "c100"),
+    job("PERSON_SOURCE_REQUIRED", "c200"),
+    ...Array.from({ length: 4 }, (_, i) =>
+      job("ALTERNATE_EMAIL_SOURCE", "c3" + i, "COMPLETED", 1)),
+  ];
+  assert.equal(selectNextPersonSourceJob(jobs).observationId, "c200");
+  assert.deepEqual(jobs[0], job("ALTERNATE_EMAIL_SOURCE", "c100"),
+    "selection must not mutate queued or approved job metadata");
+});
+
+test("verified person-email yield can promote a reason over the default tier", () => {
+  const job = (reason, id, status = "QUEUED", attempts = 0) => ({
+    id, observationId: id, reason, status, attempts,
+  });
+  const jobs = [
+    job("ALTERNATE_EMAIL_SOURCE", "c100"),
+    job("PERSON_SOURCE_REQUIRED", "c200"),
+    ...Array.from({ length: 2 }, (_, i) =>
+      job("PERSON_SOURCE_REQUIRED", "c3" + i, "VERIFIED", 1)),
+    ...Array.from({ length: 2 }, (_, i) =>
+      job("PERSON_SOURCE_REQUIRED", "c4" + i, "COMPLETED", 1)),
+  ];
+  assert.equal(selectNextPersonSourceJob(jobs).observationId, "c200");
+});
+
+test("small samples, incomplete tasks and merely completed calls never imply yield", () => {
+  const job = (reason, id, status = "QUEUED", attempts = 0) => ({
+    id, observationId: id, reason, status, attempts,
+  });
+  const jobs = [
+    job("ALTERNATE_EMAIL_SOURCE", "c100"),
+    job("PERSON_SOURCE_REQUIRED", "c200"),
+    ...Array.from({ length: 3 }, (_, i) =>
+      job("ALTERNATE_EMAIL_SOURCE", "c3" + i, "COMPLETED", 1)),
+    job("ALTERNATE_EMAIL_SOURCE", "c400", "PAUSED", 1),
+    job("ALTERNATE_EMAIL_SOURCE", "c401", "RUNNING", 1),
+  ];
+  assert.equal(selectNextPersonSourceJob(jobs).observationId, "c100");
+  jobs.push(job("ALTERNATE_EMAIL_SOURCE", "c500", "VERIFIED", 1));
+  assert.equal(selectNextPersonSourceJob(jobs).observationId, "c100",
+    "one verified email does not justify a promotion");
+});
+
+test("reason feedback remains scoped to supplied jobs; stable tie break and no retries", () => {
+  const jobs = [
+    { reason: "SHARED_SOURCE", observationId: "c900",
+      status: "QUEUED", attempts: 0 },
+    { reason: "SHARED_SOURCE", observationId: "c800",
+      status: "QUEUED", attempts: 0 },
+    { reason: "SHARED_SOURCE", observationId: "c700",
+      status: "VERIFIED", attempts: 1 },
+  ];
+  assert.equal(selectNextPersonSourceJob(jobs).observationId, "c800");
+  assert.equal(selectNextPersonSourceJob(jobs.slice(0, 2)).observationId, "c800");
+  assert.equal(selectNextPersonSourceJob(jobs.slice(2)), null);
+});
