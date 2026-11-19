@@ -36,16 +36,23 @@ test("tries next independently cited profile after an unreadable source", async 
   assert.deepEqual(visited, [urls[0], urls[1]]);
 });
 
-test("does not turn unrelated, uncited or shared directory hits into evidence", async () => {
+test("off-target cited results do not become person evidence", async () => {
   const visited = [];
   const found = await selectEvidenceBackedPersonSource(preview([
     candidate(urls[0], "Grace Hopper"),
-    candidate(urls[1]),
-  ], [urls[0]]), subject, {
+  ]), subject, {
     retrieve: async url => { visited.push(url); return page(url); },
   });
   assert.equal(found, null);
   assert.deepEqual(visited, []);
+});
+
+test("uncited AI suggestions fail the existing provider evidence contract", async () => {
+  await assert.rejects(selectEvidenceBackedPersonSource(preview([
+    candidate(urls[0]), candidate(urls[1]),
+  ], [urls[0]]), subject, {
+    retrieve: async () => { throw new Error("Must not fetch"); },
+  }), /Candidate source missing from provider citations/);
 });
 
 test("rejects name-only pages and ambiguous mailboxes", async () => {
