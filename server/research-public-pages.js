@@ -91,11 +91,23 @@ function pinnedHttps(url, address, { maxBytes = MAX_BYTES } = {}) {
         }
         chunks.push(chunk);
       });
-      response.on("end", () => resolve({
-        status, contentType: response.headers["content-type"] ?? "",
-        contentEncoding: response.headers["content-encoding"] ?? "",
-        body: Buffer.concat(chunks).toString("utf8"),
-      }));
+      response.on("end", () => {
+        // Never interpret a truncated transport body as a complete source.
+        // Node tracks HTTP framing; declared lengths are checked separately
+        // to defend against inconsistent upstream/proxy responses.
+        if (!response.complete ||
+            (Number.isSafeInteger(declared) && declared >= 0 &&
+              bytes !== declared)) {
+          reject(new Error("PUBLIC_PAGE_INCOMPLETE"));
+          return;
+        }
+        resolve({
+          status, contentType: response.headers["content-type"] ?? "",
+          contentEncoding: response.headers["content-encoding"] ?? "",
+          body: Buffer.concat(chunks).toString("utf8"),
+        });
+      });
+      response.on("aborted", () => reject(new Error("PUBLIC_PAGE_INCOMPLETE")));
       response.on("error", reject);
     });
     req.on("timeout", () => req.destroy(new Error("PUBLIC_PAGE_TIMEOUT")));
