@@ -4,6 +4,7 @@ import {
   isPublicIpv4, resolvePublicAddress, robotsAllows,
   retrieveCitedPublicPage,
 } from "../server/research-public-pages.js";
+import { classifyExplicitPersonEmailPage } from "../server/candidate-direct-email-evidence.js";
 
 const source = "https://consultants.example.org/experts/abc";
 
@@ -80,6 +81,30 @@ test("inspector retains only explicitly labeled public mailto links", async () =
   const query = await retrieve(
     '<a href="mailto:ada@example.org?subject=hello">Email</a>');
   assert.equal(query.text, "Email");
+});
+
+test("one exact public H1 and mailto yield review-only evidence, not shared/ambiguous email", async () => {
+  const inspect = async html => retrieveCitedPublicPage(source, {
+    resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+    request: async url => String(url).endsWith("/robots.txt")
+      ? { status: 404, contentType: "text/plain", contentEncoding: "", body: "" }
+      : { status: 200, contentType: "text/html", contentEncoding: "", body: html },
+  });
+  const candidate = { name: "Ada Lovelace", expertProfileUrl: source, email: null };
+  const good = await inspect('<h1>Ada Lovelace</h1><a href="mailto:ada@example.org">Email</a>');
+  assert.equal(good.text, "Name: Ada Lovelace Email: ada@example.org");
+  const evidence = classifyExplicitPersonEmailPage(candidate, good);
+  assert.equal(evidence.status, "REVIEW_REQUIRED");
+  assert.equal(evidence.emailNormalized, "ada@example.org");
+  assert.equal(evidence.usableAsContact, false);
+  for (const html of [
+    '<h1>Our Team</h1><a href="mailto:ada@example.org">Email</a>',
+    '<h1>Ada Lovelace</h1><h1>Grace Hopper</h1><a href="mailto:ada@example.org">Email</a>',
+    '<h1>Ada Lovelace</h1><a href="mailto:ada@example.org">Email</a><p>office@example.org</p>',
+  ]) {
+    const page = await inspect(html);
+    assert.equal(classifyExplicitPersonEmailPage(candidate, page).status, "UNVERIFIED");
+  }
 });
 
 test("inspector blocks disallowed robots, invalid MIME, redirect and oversized body", async () => {
