@@ -27,6 +27,7 @@ import { startPersonSourceWorker } from "./research-person-source-runner.js";
 import { startFullRunStageWorker } from "./research-full-run-stages.js";
 import { fullRunReadiness } from "./research-full-run-readiness.js";
 import { projectFullRunTiming } from "./research-run-timing.js";
+import { projectFullRunStageProgress } from "./research-run-progress.js";
 import { readQualifiedContactManifest, approveQualifiedContactBatch }
   from "./research-contact-batch.js";
 import { startContactBatchWorker } from "./research-contact-batch-worker.js";
@@ -2124,6 +2125,30 @@ app.get("/api/research-campaigns/:id/approved-run",
     }) : [];
     const timing = fullRun && timingTransitions.length <= 40
       ? projectFullRunTiming(fullRun, timingTransitions) : null;
+    // Aggregate only this previously owner-authorized campaign's counters.
+    // No raw candidate emails, source URLs or provider keys are returned.
+    // These queries are read-only and must not claim or dispatch worker jobs.
+    const [emailCounts, sourceApproval, sourceCycles] = fullRun
+      ? await Promise.all([
+        prisma.researchCampaignObservation.groupBy({
+          by: ["emailTriageStatus"], where: { campaignId: campaign.id },
+          _count: { id: true },
+        }),
+        prisma.researchPersonSourceApproval.findUnique({
+          where: { campaignId: campaign.id },
+          select: { startedCalls: true },
+        }),
+        prisma.researchPersonSourceCycle.findMany({
+          where: { campaignId: campaign.id },
+          select: { cycleIndex: true, status: true, startedCalls: true },
+          orderBy: { cycleIndex: "asc" },
+          take: 8,
+        }),
+      ]) : [[], null, []];
+    const stageProgress = fullRun ? projectFullRunStageProgress({
+      fullRun, discoveryRun: run, emailCounts, sourceApproval,
+      sourceCycles, timing,
+    }) : null;
     let priceEnvelope = null;
     if (!run && env.AI_AGENT_AUTORUN_ENABLED === "true") {
       const setting = await prisma.aiSetting.findUnique({
@@ -2151,7 +2176,7 @@ app.get("/api/research-campaigns/:id/approved-run",
     res.set("Cache-Control", "no-store");
     return res.json({ run: run ? publicRunStatus(run) : null,
       dailyQuota,
-      timing,
+      timing, stageProgress,
       serverNow: new Date().toISOString(),
       fullRun: fullRun ? { ...fullRun, contactAcceptanceAuthorized: false,
         sendingEnabled: false } : null,
