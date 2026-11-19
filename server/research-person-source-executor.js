@@ -43,6 +43,35 @@ function validateScope({ campaignId, workspaceId, ownerId }, now) {
   }
 }
 
+// Prioritize the already-inspected but unqualified individual evidence first,
+// then unresolved individual sources, and only then shared directory citations.
+// The immutable job snapshot, id ordering and owner budget remain unchanged.
+// No prior attempted job can be selected or replayed.
+const PERSON_SOURCE_PRIORITY = Object.freeze({
+  ALTERNATE_EMAIL_SOURCE: 0,
+  PERSON_SOURCE_REQUIRED: 1,
+  SHARED_SOURCE: 2,
+});
+export function selectNextPersonSourceJob(jobs) {
+  if (!Array.isArray(jobs) || jobs.length > MAX_JOBS) {
+    throw new TypeError("Bounded persisted person source jobs required");
+  }
+  let selected = null;
+  let selectedRank = Infinity;
+  for (const job of jobs) {
+    if (job?.status !== "QUEUED" || job.attempts !== 0 ||
+        typeof job.observationId !== "string") continue;
+    const rank = PERSON_SOURCE_PRIORITY[job.reason] ?? 3;
+    if (rank < selectedRank ||
+        (rank === selectedRank &&
+          job.observationId < selected.observationId)) {
+      selected = job;
+      selectedRank = rank;
+    }
+  }
+  return selected;
+}
+
 // Search for an attributable personal website rather than a generic category
 // enum string, which overweights shared directories and social mentions.
 const SOURCE_CATEGORY_SEARCH = Object.freeze({
@@ -160,7 +189,7 @@ export async function claimPersonSourceJob(db, {
           approval.maxWorstCaseCents) {
       return { status: "BLOCKED", code: "SOURCE_APPROVED_SPEND_EXHAUSTED" };
     }
-    const queued = jobs.find(job => job.status === "QUEUED" && job.attempts === 0);
+    const queued = selectNextPersonSourceJob(jobs);
     if (!queued) return { status: "IDLE", code: "NO_SOURCE_JOB_READY" };
     const observation = await tx.researchCampaignObservation.findFirst({
       where: { campaignId, id: queued.observationId },
