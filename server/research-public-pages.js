@@ -347,7 +347,7 @@ export async function retrieveCitedPublicPage(url, {
     ? linkedPublicContactUrl(canonical, page.body) : null;
   const structuredPerson = mediaType === "text/html"
     ? explicitJsonLdPersonEmail(page.body) : null;
-  const text = mediaType === "text/html" ? htmlText(page.body) : page.body;
+  const text = htmlText(page.body);
   // A fully downloaded large document may contain bounded useful evidence,
   // but never allow an oversized resulting evidence envelope downstream.
   if (Buffer.byteLength(text, "utf8") > MAX_BYTES) {
