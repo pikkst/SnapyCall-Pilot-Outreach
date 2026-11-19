@@ -5,7 +5,10 @@ import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { publicCitationUrl } from "./research-evidence.js";
 
-const MAX_BYTES = 64 * 1024;
+// The prior 64 KiB cap rejected legitimate public biography pages. Keep an
+// explicit, finite limit (128 KiB) for both declared and streamed bodies.
+// No redirects, scripts, robots bypass or private-network fetches are enabled.
+const MAX_BYTES = 128 * 1024;
 const TIMEOUT_MS = 4000;
 const USER_AGENT = "SnapyCallResearchPreview/1.0 (+https://pilot.eventnexus.eu)";
 
