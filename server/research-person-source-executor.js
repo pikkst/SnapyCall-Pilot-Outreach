@@ -392,6 +392,7 @@ export async function runOnePersonSourceJob(db, {
       ...(plan.dualProvider ? {
         tavilyApiKey: plan.tavilyApiKey, maxResults: plan.maxResults,
         maxInputTokens: plan.maxInputTokens,
+        sourceSubject: { name: claim.name, category: claim.category },
       } : {}),
     });
     const source = proposedPersonSource(result, claim);
