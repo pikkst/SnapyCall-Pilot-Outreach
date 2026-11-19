@@ -174,6 +174,9 @@ test("multi-Person schema never promotes ambiguous, generic or duplicate contact
     [person("Ada Lovelace", "ada@example.org"),
       person("Grace Hopper", "info@example.org")],
     [person("Ada Lovelace", "ada@example.org"),
+      { ...person("Grace Hopper", "grace@example.org"),
+        "@type": ["Organization", "Person"] }],
+    [person("Ada Lovelace", "ada@example.org"),
       { "@context": "https://schema.org", "@type": "Person", name: "Grace Hopper" }],
   ];
   for (const records of bad) {
