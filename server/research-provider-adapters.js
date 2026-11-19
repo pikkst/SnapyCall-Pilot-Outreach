@@ -470,10 +470,16 @@ export function parseGemini3TextOnlyResponse({
 // Tavily candidate only: pure request/response contract, no fetch or credentials.
 // Pricing, contractual approval, upstream credit hard-stop and task-lease
 // reservation are NOT established by this code. No dispatch path is wired.
-export function buildBoundedTavilySearchRequest({ query, maxResults }) {
+export function buildBoundedTavilySearchRequest({
+  query, maxResults, excludeDomains = [],
+}) {
   if (typeof query !== "string" || query.trim().length < 12 ||
       query.length > 350 || !Number.isSafeInteger(maxResults) ||
-      maxResults < 1 || maxResults > 20) {
+      maxResults < 1 || maxResults > 20 ||
+      !Array.isArray(excludeDomains) || excludeDomains.length > 20 ||
+      new Set(excludeDomains).size !== excludeDomains.length ||
+      excludeDomains.some(host => typeof host !== "string" ||
+        host.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$/.test(host))) {
     throw new TypeError("Invalid bounded retrieval criteria");
   }
   return Object.freeze({
@@ -481,6 +487,7 @@ export function buildBoundedTavilySearchRequest({ query, maxResults }) {
     search_depth: "basic",
     topic: "general",
     max_results: maxResults,
+    ...(excludeDomains.length ? { exclude_domains: Object.freeze([...excludeDomains]) } : {}),
     include_answer: false,
     include_raw_content: false,
     include_images: false,
@@ -554,10 +561,12 @@ function requireBoundedTavilyTransportConfig({ apiKey, observedAt, post }) {
 }
 
 export async function searchWithBoundedTavily({
-  query, maxResults, observedAt, apiKey,
+  query, maxResults, observedAt, apiKey, excludeDomains = [],
 }, post, signal) {
   // Validate the complete local request BEFORE any potentially charged call.
-  const request = buildBoundedTavilySearchRequest({ query, maxResults });
+  const request = buildBoundedTavilySearchRequest({
+    query, maxResults, excludeDomains,
+  });
   requireBoundedTavilyTransportConfig({ apiKey, observedAt, post });
   // A second call after a transport error could charge again: no retry here.
   const response = await post("https://api.tavily.com/search",
@@ -626,11 +635,11 @@ export function fitGemini3RetrievalEvidence({
 // There are no retries, even if one provider returns incomplete evidence.
 export async function runBoundedTavilyGemini3Stages({
   query, limit, maxResults, observedAt, tavilyApiKey, geminiApiKey,
-  model, maxInputTokens, sourceSubject = null,
+  model, maxInputTokens, sourceSubject = null, excludeDomains = [],
 }, { tavilyPost, geminiPost, signal } = {}) {
   // Validate both credentials and all static bounds BEFORE calling Tavily.
   // In particular, an absent Gemini key must not waste a Tavily credit.
-  buildBoundedTavilySearchRequest({ query, maxResults });
+  buildBoundedTavilySearchRequest({ query, maxResults, excludeDomains });
   requireBoundedTavilyTransportConfig({
     apiKey: tavilyApiKey, observedAt, post: tavilyPost,
   });
@@ -645,7 +654,7 @@ export async function runBoundedTavilyGemini3Stages({
   let retrieved;
   try {
     retrieved = await searchWithBoundedTavily({
-      query, maxResults, observedAt, apiKey: tavilyApiKey,
+      query, maxResults, observedAt, apiKey: tavilyApiKey, excludeDomains,
     }, tavilyPost, signal);
   } catch {
     // The upstream request may have been billed. Never automatically replay.
