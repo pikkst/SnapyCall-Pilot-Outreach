@@ -199,11 +199,11 @@ function validatedSourceSubject(subject) {
       Object.keys(subject).length !== 2 ||
       typeof subject.name !== "string" ||
       subject.name.length < 5 || subject.name.length > 160 ||
-      /[\\r\\n]/.test(subject.name) ||
+      /[\r\n]/.test(subject.name) ||
       !allowed.includes(subject.category)) {
     throw new TypeError("Valid bounded source target required");
   }
-  return { name: subject.name.normalize("NFKC").replace(/\\s+/g, " ").trim(),
+  return { name: subject.name.normalize("NFKC").replace(/\s+/g, " ").trim(),
     category: subject.category };
 }
 
@@ -442,7 +442,7 @@ export function parseGemini3TextOnlyResponse({
   // Drop off-target identities AFTER citation validation, not by synthesizing
   // a matching source. Multiple exact-target URLs remain ambiguous downstream.
   const matching = subject ? normalized.candidates.filter(item =>
-    item.name.normalize("NFKC").replace(/\\s+/g, " ").trim()
+    item.name.normalize("NFKC").replace(/\s+/g, " ").trim()
       .toLocaleLowerCase("en-US") ===
       subject.name.toLocaleLowerCase("en-US") &&
     item.category === subject.category) : normalized.candidates;
