@@ -3223,15 +3223,15 @@ function App() {
                           data-state={campaignGrounding.status}
                           aria-label="Google source resolution agent">
                           <div className="campaign-stage-header">
-                            <strong>Source resolution agent</strong>
+                            <strong>Optional Google redirect resolver</strong>
                             <span className="campaign-stage-state">
                               {campaignGrounding.status.replaceAll("_", " ")}
                             </span>
                           </div>
-                          <p className="muted">Checks only the Google grounding
-                            redirect header, not the destination website.
-                            A resolved link is an unverified source hint, not
-                            a confirmed profile or email contact.</p>
+                          <p className="muted">Separate optional Google
+                            redirect-header check. This is not the paid
+                            Source enrichment stage shown above. A resolved link
+                            is only an unverified hint, not person-email evidence.</p>
                           <p role="status">
                             <strong>{campaignGrounding.sourceHints}</strong> source hints ·
                             {" "}{campaignGrounding.unresolved} unresolved ·
@@ -3280,7 +3280,7 @@ function App() {
                           {campaignGrounding.status === "IDLE" &&
                             !campaignGrounding.canApprove &&
                             <p className="muted" role="status">
-                              Source resolution unavailable: {
+                              Optional resolver unavailable: {
                                 ({
                                   SERVER_DISABLED: "the server feature is disabled",
                                   DISCOVERY_NOT_TERMINAL: "the research campaign has not finished",
@@ -3361,8 +3361,9 @@ function App() {
                               attempted source will not be retried automatically.</p>}
                           {campaignTriageNotice && <p role="status">{campaignTriageNotice}</p>}
                         </section>}
-                        <section className="campaign-stage-timeline"
-                          aria-label="Live campaign stages">
+                        {!campaignRunApproval?.fullRun &&
+                          <section className="campaign-stage-timeline"
+                            aria-label="Legacy discovery campaign stages">
                           <div className="campaign-stage-header">
                             <strong>Agent pipeline</strong>
                             <small>{campaignProgressLastSeen
@@ -3390,8 +3391,7 @@ function App() {
                                 </div>
                               </li>)}
                           </ol>
-                        </section>
-                        
+                          </section>}
 
                         {campaignRunApproval?.run && <section
                           className="campaign-approved-run" aria-label="Approved campaign automation">
@@ -3457,8 +3457,9 @@ function App() {
                             No people or emails were accepted from them.
                             Application spend remains conservative, not the provider invoice.
                           </p>}
-                        <p className="muted">Next step: {campaignProgress.action}.
-                          No email checks or messages were sent by this view.</p>
+                        {!campaignRunApproval?.fullRun &&
+                          <p className="muted">Discovery next step: {campaignProgress.action}.
+                            No email checks or messages were sent by this view.</p>}
                         {campaignProgress.pausedTaskReview?.length === 1 &&
                           campaignProgress.tasks.running === 0 && <>
                             <p role="alert">Task #{campaignProgress.pausedTaskReview[0].taskIndex + 1}
