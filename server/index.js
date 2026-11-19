@@ -26,6 +26,7 @@ import { enqueuePersonSourceJobs } from "./research-person-source-queue.js";
 import { startPersonSourceWorker } from "./research-person-source-runner.js";
 import { startFullRunStageWorker } from "./research-full-run-stages.js";
 import { fullRunReadiness } from "./research-full-run-readiness.js";
+import { projectFullRunTiming } from "./research-run-timing.js";
 import { readQualifiedContactManifest, approveQualifiedContactBatch }
   from "./research-contact-batch.js";
 import { startContactBatchWorker } from "./research-contact-batch-worker.js";
@@ -2110,8 +2111,19 @@ app.get("/api/research-campaigns/:id/approved-run",
       select: { status: true, targetQualifiedContacts: true,
         maxDiscoveryCalls: true, maxSourceCalls: true,
         maxEmailInspectionPages: true, maxTotalWorstCaseCents: true,
-        lastCode: true, expiresAt: true },
+        lastCode: true, expiresAt: true, approvedAt: true, updatedAt: true },
     });
+    // Fetch only this already owner-authorized campaign's stage transitions.
+    // A bounded audit query preserves stage timing across reloads and workers.
+    const timingTransitions = fullRun ? await prisma.auditEvent.findMany({
+      where: { entityId: campaign.id, actorId: identity.id,
+        action: "research.full-run.stage.changed" },
+      select: { createdAt: true, metadata: true },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 41,
+    }) : [];
+    const timing = fullRun && timingTransitions.length <= 40
+      ? projectFullRunTiming(fullRun, timingTransitions) : null;
     let priceEnvelope = null;
     if (!run && env.AI_AGENT_AUTORUN_ENABLED === "true") {
       const setting = await prisma.aiSetting.findUnique({
@@ -2139,6 +2151,8 @@ app.get("/api/research-campaigns/:id/approved-run",
     res.set("Cache-Control", "no-store");
     return res.json({ run: run ? publicRunStatus(run) : null,
       dailyQuota,
+      timing,
+      serverNow: new Date().toISOString(),
       fullRun: fullRun ? { ...fullRun, contactAcceptanceAuthorized: false,
         sendingEnabled: false } : null,
       fullRunEnabled: fullRunReadiness(env).enabled,
