@@ -4,6 +4,7 @@ import { lockActiveWorkspaceMembership } from "./workspace-access.js";
 import { inspectCampaignObservationEmail, observationInspectionSource }
   from "./research-observation-email.js";
 import { normalizeVerificationAddress } from "./email-deliverability.js";
+import { isScopedPersonEmailEvidence } from "./research-qualified-evidence.js";
 import { canonicalEvidenceUrl } from "../src/evidence.js";
 
 const ID = /^c[a-z0-9]{10,40}$/;
@@ -61,7 +62,8 @@ export async function acceptReviewedCampaignContact(db, {
       SELECT "id", "name", "category", "citationUrl", "candidateId",
         "groundingStatus", "groundingResolvedUrl", "groundingProvenance",
         "personSourceUrl", "personSourceProvenance", "personSourceVerifiedAt",
-        "emailTriageStatus", "emailTriageDigest"
+        "emailTriageStatus", "emailTriageCode", "emailTriageEmail",
+        "emailTriageDigest", "emailTriageAt"
       FROM "ResearchCampaignObservation"
       WHERE "id" = ${observationId} AND "campaignId" = ${campaignId}
       FOR UPDATE`;
@@ -80,7 +82,13 @@ export async function acceptReviewedCampaignContact(db, {
           { groundingResolvedUrl: finding.sourceUrl },
           { personSourceUrl: finding.sourceUrl }] },
     });
-    if (sharedSources) {
+    // Reuse the same persisted attribution contract as the read-only
+    // summary and batch manifest. The earlier independent inspect() call
+    // must also have matched this exact immutable digest and email.
+    const scopedProof = isScopedPersonEmailEvidence(observation) &&
+      observation.emailTriageDigest === expectedDigest &&
+      observation.emailTriageEmail === normalized.email;
+    if (sharedSources && !scopedProof) {
       return { status: 409, code: "SHARED_SOURCE_REQUIRES_REVIEW",
         contactCreated: false };
     }
@@ -93,10 +101,14 @@ export async function acceptReviewedCampaignContact(db, {
       return { status: 403, code: "WORKSPACE_UNAVAILABLE", contactCreated: false };
     }
     const existing = await tx.candidate.findFirst({
-      where: { workspaceId, OR: [
-        { emailNormalized: normalized.email },
-        { expertProfileUrl: finding.sourceUrl },
-      ] },
+      where: scopedProof
+        // A shared, explicitly scoped document may describe two different
+        // people. Never interpret their *URL* as one person's identity.
+        ? { workspaceId, emailNormalized: normalized.email }
+        : { workspaceId, OR: [
+            { emailNormalized: normalized.email },
+            { expertProfileUrl: finding.sourceUrl },
+          ] },
       select: { id: true, name: true, category: true,
         emailNormalized: true, expertProfileUrl: true, removedAt: true },
     });
