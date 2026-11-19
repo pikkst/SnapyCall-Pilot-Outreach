@@ -48,7 +48,7 @@ export function classifyExplicitPersonEmailPage(candidate, page) {
     const structured = page.structuredPerson;
     const structuredEmail = normalizedEmail(structured?.email);
     const structuredName = typeof structured?.name === "string"
-      ? structured.name.normalize("NFKC").replace(/\\s+/g, " ").trim() : "";
+      ? structured.name.normalize("NFKC").replace(/\s+/g, " ").trim() : "";
     if (!structuredEmail ||
         structuredName.toLocaleLowerCase("en-US") !== name.toLocaleLowerCase("en-US") ||
         (priorEmail && priorEmail !== structuredEmail) ||
@@ -57,7 +57,7 @@ export function classifyExplicitPersonEmailPage(candidate, page) {
     }
     // A differently labelled human identity on this document makes an
     // otherwise valid schema Person unsafe for automatic attribution.
-    const labeledNames = [...text.matchAll(/(?:^|\\s)(?:Name|Full name|Expert):\\s*([^:]{5,160}?)(?=\\s+(?:Email|E-mail|Expertise):|$)/gi)];
+    const labeledNames = [...text.matchAll(/(?:^|\s)(?:Name|Full name|Expert):\s*([^:]{5,160}?)(?=\s+(?:Email|E-mail|Expertise):|$)/gi)];
     if (labeledNames.some(m => m[1].trim().toLocaleLowerCase("en-US") !==
         name.toLocaleLowerCase("en-US"))) {
       return { status: "UNVERIFIED", reason: "STRUCTURED_PERSON_EVIDENCE_CONFLICT" };
