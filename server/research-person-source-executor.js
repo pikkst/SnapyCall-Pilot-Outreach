@@ -13,6 +13,7 @@ import { reserveOwnerSpend, settleOwnerSpend } from "./research-budget.js";
 import { normalizeCampaignObservations } from "./research-campaign-observations.js";
 import { isDirectPublicProfileUrl } from "./research-observation-email.js";
 import { researchCandidates } from "./ai-research.js";
+import { repeatedUnavailableSourceDomains } from "./research-source-domain-feedback.js";
 import { resolveCampaignResearchExecution } from "./research-campaign-worker.js";
 import { decryptKey } from "./security.js";
 
@@ -413,6 +414,25 @@ export async function runOnePersonSourceJob(db, {
       return await finishPersonSourceJob(db, claim,
         { providerInvoked: false }, { now: now() });
     }
+    // Reuse only independently settled failures from THIS campaign.
+    // Repeated unavailable public domains are not useful for the same
+    // inspection contract. Feed bounded exclusions only to Tavily Basic,
+    // never to Gemini instructions, browser inputs, or a new paid call.
+    // A failed optional feedback read leaves the previous search behavior.
+    let excludeDomains = [];
+    if (plan.dualProvider) {
+      try {
+        const previous = await db.researchPersonSourceJob.findMany({
+          where: { campaignId, status: "SOURCE_UNAVAILABLE",
+            proposedSourceUrl: { not: null } },
+          select: { status: true, proposedSourceUrl: true },
+          take: 250,
+        });
+        excludeDomains = repeatedUnavailableSourceDomains(previous);
+      } catch {
+        excludeDomains = [];
+      }
+    }
     invoked = true;
     result = await plan.search({
       query: claim.query, limit: 5, provider: claim.provider,
@@ -421,6 +441,7 @@ export async function runOnePersonSourceJob(db, {
         tavilyApiKey: plan.tavilyApiKey, maxResults: plan.maxResults,
         maxInputTokens: plan.maxInputTokens,
         sourceSubject: { name: claim.name, category: claim.category },
+        excludeDomains,
       } : {}),
     });
     const source = proposedPersonSource(result, claim);
