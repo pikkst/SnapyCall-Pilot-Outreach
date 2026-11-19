@@ -8,6 +8,14 @@ import { completeResearchTask } from "./research-campaign-leases.js";
 import { maybeAppendAdaptiveDiscoveryTask } from "./research-adaptive-discovery.js";
 import { consecutiveQualityFailures, shouldStopForQuality } from "./research-quality-gate.js";
 
+// The campaign list UI always supplies workspaceId in its scoped GET URL.
+// Keep the URL envelope strict and validate a scoped workspace value rather
+// than rejecting every legitimate findings request before the owner check.
+export const campaignFindingsQuerySchema = z.object({
+  workspaceId: z.string().regex(/^c[a-z0-9]{10,40}$/),
+  after: z.string().regex(/^c[a-z0-9]{10,40}$/).optional(),
+}).strict();
+
 const observationSchema = z.object({
   name: z.string().trim().min(2).max(160),
   category: z.enum(["AI_AUTOMATION", "COACHING", "MARKETING_GROWTH", "BUSINESS_STRATEGY"]),
