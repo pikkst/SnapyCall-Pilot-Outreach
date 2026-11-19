@@ -419,3 +419,25 @@ test("revocation after reading a shared source prevents persistence", async () =
   assert.deepEqual(f.events, []);
   assert.equal(f.state.row.emailTriageEmail, null);
 });
+
+test("shared source readback refuses a concurrent evidence digest change", async () => {
+  const f = fixture({ shared: true });
+  const contacts = [
+    { name: "Ada Lovelace", email: "ada@example.org" },
+    { name: "Grace Hopper", email: "grace@example.org" },
+  ];
+  const original = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve: async () => ({ url, text: "Professional team",
+      structuredContacts: contacts }), now: () => clock,
+  });
+  assert.equal(original.qualifiedEvidence, true);
+  const readback = await inspectCampaignObservationEmail(f.db, {
+    campaignId: scope.campaignId, observationId: observation.id,
+    workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+  }, { retrieve: async () => {
+    f.state.row.emailTriageDigest = "f".repeat(64);
+    return { url, text: "Professional team", structuredContacts: contacts };
+  } });
+  assert.equal(readback.code, "PROFILE_SOURCE_CHANGED");
+  assert.equal(readback.observedEmail, undefined);
+});
