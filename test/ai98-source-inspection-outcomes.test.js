@@ -6,6 +6,9 @@ import { inspectEvidenceBackedPersonSources, finishPersonSourceJob }
 const person = { name: "Ada Lovelace", category: "AI_AUTOMATION" };
 const emptyFailures = () => ({ robots: 0, redirect: 0, dns: 0,
   http: 0, timeout: 0, content: 0, linked: 0, other: 0 });
+const emptyContentFailures = () => ({
+  mime: 0, encoding: 0, status: 0, size: 0, other: 0,
+});
 const urls = ["https://example.org/ada", "https://example.net/ada",
   "https://example.com/ada"];
 const input = (list = urls) => ({
@@ -26,6 +29,7 @@ test("no cited target produces a precise no-source outcome without fetching", as
   assert.deepEqual(result.diagnostics, {
     cited: 0, attempted: 0, unavailable: 0, noNamedEmail: 0,
     verified: 0, conflicting: false, accessFailures: emptyFailures(),
+    contentFailures: emptyContentFailures(),
     reason: "SOURCE_NO_MATCHING_CITED_PROFILE",
   });
 });
@@ -129,6 +133,36 @@ test("linked page unavailability has its own bucket", async () => {
   assert.equal(result.diagnostics.noNamedEmail, 0);
 });
 
+test("categorizes HTTP content failures without logging source headers", async () => {
+  const failures = [
+    Object.assign(new Error("PUBLIC_PAGE_CONTENT_REJECTED"),
+      { contentFailureSubtype: "mime" }),
+    Object.assign(new Error("PUBLIC_PAGE_CONTENT_REJECTED"),
+      { contentFailureSubtype: "encoding" }),
+    new Error("PUBLIC_PAGE_TOO_LARGE"),
+  ];
+  let index = 0;
+  const result = await inspectEvidenceBackedPersonSources(input(), person, {
+    retrieve: async () => { throw failures[index++]; },
+  });
+  assert.equal(result.diagnostics.accessFailures.content, 3);
+  assert.deepEqual(result.diagnostics.contentFailures,
+    { mime: 1, encoding: 1, status: 0, size: 1, other: 0 });
+  assert.equal(result.diagnostics.unavailable, 3);
+  assert.doesNotMatch(JSON.stringify(result.diagnostics),
+    /https?:|Content-Type|ada@/);
+});
+
+test("unknown content subtype is counted as other, never emitted verbatim", async () => {
+  const result = await inspectEvidenceBackedPersonSources(input([urls[0]]),
+    person, { retrieve: async () => {
+      throw Object.assign(new Error("PUBLIC_PAGE_CONTENT_REJECTED"),
+        { contentFailureSubtype: "SECRET_CUSTOMER_URL" });
+    } });
+  assert.equal(result.diagnostics.contentFailures.other, 1);
+  assert.doesNotMatch(JSON.stringify(result.diagnostics), /SECRET_CUSTOMER_URL/);
+});
+
 test("malformed inspection metadata is rejected before any database work", async () => {
   const scope = {
     campaignId: "cmabcdefghijklmnopqrstu",
@@ -139,11 +173,15 @@ test("malformed inspection metadata is rejected before any database work", async
   };
   const valid = { cited: 0, attempted: 0, unavailable: 0, noNamedEmail: 0,
     verified: 0, conflicting: false,
-    reason: "SOURCE_NO_MATCHING_CITED_PROFILE", accessFailures: emptyFailures() };
+    reason: "SOURCE_NO_MATCHING_CITED_PROFILE", accessFailures: emptyFailures(),
+    contentFailures: emptyContentFailures() };
   for (const inspection of [
     { ...valid, accessFailures: { ...emptyFailures(), robots: 1 } },
     { ...valid, accessFailures: { ...emptyFailures(), rawUrl: "https://secret.test" } },
     { ...valid, accessFailures: { ...emptyFailures(), other: 4 } },
+    { ...valid, contentFailures: { ...emptyContentFailures(), raw: 1 } },
+    { ...valid, accessFailures: { ...emptyFailures(), content: 1 },
+      contentFailures: emptyContentFailures() },
     { cited: 99, attempted: 99, unavailable: 0, noNamedEmail: 0,
       verified: 0, conflicting: false, reason: "SOURCE_NO_MATCHING_CITED_PROFILE" },
     { cited: 1, attempted: 1, unavailable: 0, noNamedEmail: 0,
