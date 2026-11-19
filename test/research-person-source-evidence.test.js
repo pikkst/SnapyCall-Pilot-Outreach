@@ -255,3 +255,49 @@ test("stopping full-run revokes continuation public-page reads", async () => {
   assert.equal(f.state.fetched, 0);
   assert.deepEqual(f.events, []);
 });
+
+test("linked contact proof is independently re-fetched and qualifies only for review", async () => {
+  const f = fixture();
+  const contact = "https://example.org/contact";
+  const fetched = [];
+  const retrieve = async input => {
+    fetched.push(input);
+    return input === url
+      ? { url, text: "Name: Ada Lovelace - professional biography",
+          linkedContactUrl: contact }
+      : { url: contact, text: "Name: Ada Lovelace Email: ada@example.org" };
+  };
+  const result = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve, now: () => clock,
+  });
+  assert.equal(result.code, "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED");
+  assert.equal(result.qualifiedEvidence, true);
+  assert.equal(result.sendingEnabled, false);
+  assert.equal(f.state.row.personSourceUrl, url);
+  assert.equal(f.state.row.personSourceProvenance,
+    "AI98_EXPLICIT_NAMED_EMAIL_ON_LINKED_CONTACT");
+  assert.equal(summarizeQualifiedEmailEvidence([f.state.row]).qualifiedEvidence, 1);
+  assert.deepEqual(fetched, [url, contact]);
+
+  const readback = await inspectCampaignObservationEmail(f.db, {
+    campaignId: scope.campaignId, observationId: observation.id,
+    workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+  }, { retrieve });
+  assert.equal(readback.code, "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED");
+  assert.equal(readback.observedEmail, "ada@example.org");
+  assert.equal(readback.evidenceDigest, f.state.row.emailTriageDigest);
+  assert.deepEqual(fetched, [url, contact, url, contact]);
+});
+
+test("linked contact read is fenced by membership revocation after both reads", async () => {
+  const f = fixture({ memberAfterFetch: false });
+  const result = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve: async input => input === url
+      ? { url, text: "Name: Ada Lovelace", linkedContactUrl: "https://example.org/contact" }
+      : { url: input, text: "Name: Ada Lovelace Email: ada@example.org" },
+    now: () => clock,
+  });
+  assert.equal(result.code, "WORKSPACE_ACCESS_REVOKED");
+  assert.equal(f.state.row.emailTriageEmail, null);
+  assert.deepEqual(f.events, []);
+});

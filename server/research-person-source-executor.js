@@ -14,7 +14,7 @@ import { normalizeCampaignObservations } from "./research-campaign-observations.
 import { isDirectPublicProfileUrl } from "./research-observation-email.js";
 import { researchCandidates } from "./ai-research.js";
 import { retrieveCitedPublicPage } from "./research-public-pages.js";
-import { classifyExplicitPersonEmailPage } from "./candidate-direct-email-evidence.js";
+import { inspectNamedPublicContactEvidence } from "./research-linked-contact-proof.js";
 import { repeatedUnavailableSourceDomains } from "./research-source-domain-feedback.js";
 import { resolveCampaignResearchExecution } from "./research-campaign-worker.js";
 import { decryptKey } from "./security.js";
@@ -309,9 +309,10 @@ const SOURCE_INSPECTION_REASONS = new Set([
 // text and email addresses must never enter job status or audit metadata.
 // The independent downstream verifier remains the only proof persistence path.
 export async function inspectEvidenceBackedPersonSources(preview, subject, {
-  retrieve = retrieveCitedPublicPage,
+  retrieve = retrieveCitedPublicPage, mayFollowLinked = () => true,
 } = {}) {
   if (typeof retrieve !== "function" ||
+      typeof mayFollowLinked !== "function" ||
       typeof subject?.name !== "string" ||
       typeof subject?.category !== "string") {
     throw new TypeError("Trusted named source inspection required");
@@ -332,19 +333,25 @@ export async function inspectEvidenceBackedPersonSources(preview, subject, {
     noNamedEmail: 0, verified: 0, conflicting: false,
   };
   let verified = null;
+  let linkedAttempted = false;
   for (const url of urls) {
     diagnostics.attempted++;
-    let page;
-    try { page = await retrieve(url); }
-    catch {
+    let inspected;
+    try {
+      inspected = await inspectNamedPublicContactEvidence({
+        url, name: subject.name, retrieve,
+        // One additional public read per paid job, if enough lease remains.
+        allowLinked: !linkedAttempted && mayFollowLinked(),
+      });
+    } catch {
       diagnostics.unavailable++;
       continue;
     }
-    const proof = classifyExplicitPersonEmailPage({
-      name: subject.name, expertProfileUrl: url, email: null,
-    }, page);
-    if (proof.status !== "REVIEW_REQUIRED") {
-      diagnostics.noNamedEmail++;
+    if (inspected.linkedAttempted) linkedAttempted = true;
+    const proof = inspected.evidence;
+    if (!proof) {
+      if (inspected.linkedUnavailable) diagnostics.unavailable++;
+      else diagnostics.noNamedEmail++;
       continue;
     }
     diagnostics.verified++;
@@ -584,7 +591,8 @@ export async function runOnePersonSourceJob(db, {
       } : {}),
     });
     const inspected = await inspectEvidenceBackedPersonSources(result, claim,
-      { retrieve });
+      { retrieve, mayFollowLinked: () =>
+        claim.leaseUntil.getTime() - now().getTime() > 18000 });
     return await finishPersonSourceJob(db, claim,
       { proposedUrl: inspected.proposedUrl, inspection: inspected.diagnostics,
         providerInvoked: true }, { now: now() });

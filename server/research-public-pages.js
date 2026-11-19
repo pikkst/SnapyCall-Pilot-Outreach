@@ -170,6 +170,38 @@ function htmlText(input) {
     .replace(/\s+/g, " ").trim();
 }
 
+// Extract at most one *explicitly linked* public contact document from a
+// retrieved profile. This is not a crawler: scripts, arbitrary links, query
+// parameters, external hosts and ambiguous contact links are never followed.
+// The target must pass its own DNS/robots/content checks on retrieval.
+export function linkedPublicContactUrl(sourceUrl, html) {
+  const source = publicCitationUrl(sourceUrl);
+  if (!source || typeof html !== "string" ||
+      Buffer.byteLength(html, "utf8") > MAX_BYTES) return null;
+  const withoutScripts = html.replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(
+      /<(?:script|style|noscript|template)\b[^>]*>[\s\S]*?<\/\s*(?:script|style|noscript|template)\s*>/gi,
+      " ");
+  const found = new Set();
+  const anchors = withoutScripts.matchAll(
+    /<a\b[^>]{0,1024}\shref\s*=\s*(["'])([^"'<>]{1,2048})\1[^>]*>([^<>]{1,80})<\/a\s*>/gi);
+  for (const match of anchors) {
+    if (/\s(?:hidden|aria-hidden\s*=\s*["\x27]?true)\b/i.test(match[0]) ||
+        !/^(?:contact|contact me|contact us|get in touch)$/i.test(match[3].trim())) continue;
+    let resolved;
+    try { resolved = new URL(match[2], source); }
+    catch { continue; }
+    const allowed = publicCitationUrl(resolved.href);
+    if (!allowed || resolved.hostname !== new URL(source).hostname ||
+        resolved.search || resolved.username || resolved.password ||
+        !/\/(?:contact|contact-me|get-in-touch)\/?$/i.test(resolved.pathname) ||
+        allowed === source) continue;
+    found.add(allowed);
+    if (found.size > 1) return null;
+  }
+  return found.size === 1 ? [...found][0] : null;
+}
+
 // Redirects are source hints, not fetch permission. Only a single canonical
 // HTTPS redirect between the exact host and its www/apex variant is permitted.
 // Both source and destination independently require safe DNS and robots
@@ -238,5 +270,10 @@ export async function retrieveCitedPublicPage(url, {
       Buffer.byteLength(page.body, "utf8") > MAX_BYTES) {
     throw new Error("PUBLIC_PAGE_TOO_LARGE");
   }
-  return { url: canonical, text: htmlText(page.body) };
+  const linkedContact = /^text\/html(?:;|$)/i.test(page.contentType)
+    ? linkedPublicContactUrl(canonical, page.body) : null;
+  return {
+    url: canonical, text: htmlText(page.body),
+    ...(linkedContact ? { linkedContactUrl: linkedContact } : {}),
+  };
 }

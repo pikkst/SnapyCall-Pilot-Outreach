@@ -156,3 +156,31 @@ test("inspector blocks disallowed robots, invalid MIME, redirect and oversized b
   await assert.rejects(() => retrieveCitedPublicPage("https://127.0.0.1/x"),
     /URL_REJECTED/);
 });
+
+test("trusted HTML reader exposes exactly one same-host contact link", async () => {
+  const page = await retrieveCitedPublicPage(source, {
+    resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+    request: async input => String(input).endsWith("/robots.txt")
+      ? { status: 404, contentType: "text/plain",
+          contentEncoding: "", body: "" }
+      : { status: 200, contentType: "text/html",
+          contentEncoding: "",
+          body: '<h1>Ada Lovelace</h1><a href="/contact">Contact</a>' },
+  });
+  assert.equal(page.linkedContactUrl, "https://consultants.example.org/contact");
+  assert.equal(page.url, source);
+  assert.equal(page.text, "Name: Ada Lovelace Contact");
+});
+
+test("trusted reader never exposes contact link from plain text", async () => {
+  const page = await retrieveCitedPublicPage(source, {
+    resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+    request: async input => String(input).endsWith("/robots.txt")
+      ? { status: 404, contentType: "text/plain",
+          contentEncoding: "", body: "" }
+      : { status: 200, contentType: "text/plain",
+          contentEncoding: "",
+          body: '<a href="/contact">Contact</a>' },
+  });
+  assert.equal(page.linkedContactUrl, undefined);
+});
