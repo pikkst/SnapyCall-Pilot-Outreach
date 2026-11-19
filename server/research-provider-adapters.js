@@ -3,6 +3,7 @@
 import { normalizeResearchEvidence, normalizeBoundedRetrievalEvidence,
   buildBoundedRetrievalManifest, publicCitationUrl } from "./research-evidence.js";
 import { discoverySearchGuidance } from "./research-discovery-guidance.js";
+import { isBoundedSourceDomain } from "./research-source-domain-feedback.js";
 import { createHash } from "node:crypto";
 
 // Sanitized trusted-adapter classification. A provider can successfully
@@ -478,8 +479,7 @@ export function buildBoundedTavilySearchRequest({
       maxResults < 1 || maxResults > 20 ||
       !Array.isArray(excludeDomains) || excludeDomains.length > 20 ||
       new Set(excludeDomains).size !== excludeDomains.length ||
-      excludeDomains.some(host => typeof host !== "string" ||
-        host.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host))) {
+      excludeDomains.some(host => !isBoundedSourceDomain(host))) {
     throw new TypeError("Invalid bounded retrieval criteria");
   }
   return Object.freeze({
@@ -509,8 +509,7 @@ export function normalizeBoundedTavilySearch({
       response.results.length > maxResults ||
       !Array.isArray(excludeDomains) || excludeDomains.length > 20 ||
       new Set(excludeDomains).size !== excludeDomains.length ||
-      excludeDomains.some(host => typeof host !== "string" ||
-        host.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host))) {
+      excludeDomains.some(host => !isBoundedSourceDomain(host))) {
     throw new TypeError("Invalid Tavily search result envelope");
   }
   // Usage is diagnostic only. Missing or ambiguous metadata cannot justify a
