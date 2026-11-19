@@ -86,6 +86,11 @@ export function explicitJsonLdMultiPersonContacts(html) {
   if (!people || people.length < 2 || people.length > 20) return null;
   const names = new Set(), emails = new Set(), contacts = [];
   for (const person of people) {
+    // A multi-typed Organization/Person node is not sufficiently specific
+    // to prove the mailbox belongs to an individual.
+    if (Array.isArray(person["@type"]) &&
+        (person["@type"].length !== 1 ||
+         !PERSON_TYPE.test(person["@type"][0]))) return null;
     if (Array.isArray(person.name) || Array.isArray(person.email)) return null;
     const name = normalizeName(person.name);
     const email = normalizeEmail(person.email);
