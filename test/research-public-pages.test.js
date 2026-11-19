@@ -84,6 +84,16 @@ test("inspector retains only explicitly labeled public mailto links", async () =
   const fake = await retrieve(
     '<a data-href="mailto:ada@example.org">Email</a>');
   assert.equal(fake.text, "Email");
+  const exactText = await retrieve(
+    '<h1>Ada Lovelace</h1><a href="mailto:ada@example.org">ada@example.org</a>');
+  assert.equal(exactText.text, "Name: Ada Lovelace Email: ada@example.org");
+  const misleading = await retrieve(
+    '<h1>Ada Lovelace</h1><a href="mailto:grace@example.org">ada@example.org</a>');
+  assert.equal(misleading.text, "Name: Ada Lovelace ada@example.org");
+  const generic = await retrieve(
+    '<h1>Ada Lovelace</h1><a href="mailto:info@example.org">Contact</a>');
+  assert.equal(generic.text, "Name: Ada Lovelace Contact");
+
 });
 
 test("one exact public H1 and mailto yield review-only evidence, not shared/ambiguous email", async () => {
@@ -110,6 +120,19 @@ test("one exact public H1 and mailto yield review-only evidence, not shared/ambi
   }
 });
 
+test("public 96 KiB HTML is inspectable within the bounded read limit", async () => {
+  const html = "<h1>Ada Lovelace</h1>" + " ".repeat(96 * 1024) +
+    '<a href="mailto:ada@example.org">Email</a>';
+  const page = await retrieveCitedPublicPage(source, {
+    resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+    request: async url => String(url).endsWith("/robots.txt")
+      ? { status: 404, contentType: "text/plain", contentEncoding: "", body: "" }
+      : { status: 200, contentType: "text/html; charset=utf-8",
+        contentEncoding: "", body: html },
+  });
+  assert.equal(page.text, "Name: Ada Lovelace Email: ada@example.org");
+});
+
 test("inspector blocks disallowed robots, invalid MIME, redirect and oversized body", async () => {
   const base = {
     resolve: async () => [{ address: "8.8.8.8", family: 4 }],
@@ -124,7 +147,7 @@ test("inspector blocks disallowed robots, invalid MIME, redirect and oversized b
     { status: 302, contentType: "text/html", contentEncoding: "", body: "" },
     { status: 200, contentType: "application/pdf", contentEncoding: "", body: "" },
     { status: 200, contentType: "text/html", contentEncoding: "gzip", body: "" },
-    { status: 200, contentType: "text/html", contentEncoding: "", body: "x".repeat(65537) },
+    { status: 200, contentType: "text/html", contentEncoding: "", body: "x".repeat(131073) },
   ]) await assert.rejects(() => retrieveCitedPublicPage(source, {
     ...base, request: async url => String(url).endsWith("/robots.txt")
       ? { status: 404, contentType: "text/plain", contentEncoding: "", body: "" }

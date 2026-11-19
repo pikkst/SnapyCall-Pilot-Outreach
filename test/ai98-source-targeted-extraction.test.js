@@ -37,6 +37,10 @@ test("source-only prompt is bounded to the frozen target but discovery remains g
   assert.match(text, /Resolve exactly ONE previously named professional/);
   assert.match(text, /Exact target person: Lorraine Burrell/);
   assert.match(text, /Other experts, commenters, teammates and namesakes are not candidates/);
+  assert.match(text, /Prefer an exact-person official profile, personal site or author biography/);
+  assert.match(text, /Return at most ONE best exact-person cited source/);
+  assert.match(text, /Do not emit or infer email addresses/);
+  assert.doesNotMatch(general.contents[0].parts[0].text, /Return at most ONE best exact-person/);
   assert.doesNotMatch(general.contents[0].parts[0].text, /Exact target person:/);
   assert.equal("tools" in targeted, false);
 });
