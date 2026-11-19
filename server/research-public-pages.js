@@ -184,7 +184,7 @@ export function linkedPublicContactUrl(sourceUrl, html) {
       " ");
   const found = new Set();
   const anchors = withoutScripts.matchAll(
-    /<a\b[^>]{0,1024}\bhref\s*=\s*(["'])([^"'<>]{1,2048})\1[^>]*>([^<>]{1,80})<\/a\s*>/gi);
+    /<a\b[^>]{0,1024}\shref\s*=\s*(["'])([^"'<>]{1,2048})\1[^>]*>([^<>]{1,80})<\/a\s*>/gi);
   for (const match of anchors) {
     if (/\s(?:hidden|aria-hidden\s*=\s*["\x27]?true)\b/i.test(match[0]) ||
         !/^(?:contact|contact me|contact us|get in touch)$/i.test(match[3].trim())) continue;
