@@ -158,6 +158,10 @@ export async function inspectCampaignObservationEmail(db, {
   if (!current || current.name !== observation.name ||
       current.category !== observation.category ||
       current.citationUrl !== observation.citationUrl ||
+      (observation.personSourceProvenance === SCOPED_SHARED_PROOF &&
+        (current.personSourceProvenance !== SCOPED_SHARED_PROOF ||
+         current.emailTriageDigest !== observation.emailTriageDigest ||
+         evidence.evidenceDigest !== current.emailTriageDigest)) ||
       observationInspectionSource(current) !== url) {
     return { status: 409, code: "PROFILE_SOURCE_CHANGED",
       contactCreated: false, emailChecked: false, sendingEnabled: false };
