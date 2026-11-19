@@ -248,6 +248,28 @@ export function linkedPublicContactUrl(sourceUrl, html) {
   return found.size === 1 ? [...found][0] : null;
 }
 
+// HTTP media-type parameters may legally quote UTF-8 (RFC 9110).
+// Accept only the already-supported text content types and UTF-8 charset.
+// Never sniff application/octet-stream, HTML disguised as JSON, or encoded
+// responses. Reject duplicated/malformed charset rather than guessing.
+export function supportedPublicTextMediaType(value) {
+  if (typeof value !== "string" || value.length > 256) return null;
+  const parts = value.split(";");
+  const type = parts.shift().trim().toLowerCase();
+  if (type !== "text/html" && type !== "text/plain") return null;
+  let charsetSeen = false;
+  for (const param of parts) {
+    const trimmed = param.trim();
+    if (/^charset\b/i.test(trimmed)) {
+      const found = /^charset\s*=\s*(?:"([^"]+)"|([a-z0-9._-]+))$/i.exec(trimmed);
+      if (!found || charsetSeen ||
+          (found[1] ?? found[2]).toLowerCase() !== "utf-8") return null;
+      charsetSeen = true;
+    }
+  }
+  return type;
+}
+
 // Redirects are source hints, not fetch permission. Only a single canonical
 // HTTPS redirect between the exact host and its www/apex variant is permitted.
 // Both source and destination independently require safe DNS and robots
@@ -281,7 +303,7 @@ export async function retrieveCitedPublicPage(url, {
     const robotsAddress = await resolvePublicAddress(parsed.hostname, resolve);
     const policy = await request(robots, robotsAddress);
     if (policy.status !== 404 && (policy.status !== 200 ||
-        !/^text\/plain(?:;|$)/i.test(policy.contentType) ||
+        supportedPublicTextMediaType(policy.contentType) !== "text/plain" ||
         policy.contentEncoding || !robotsAllows(policy.body, parsed.pathname + parsed.search))) {
       throw new Error("PUBLIC_PAGE_ROBOTS_REJECTED");
     }
@@ -307,16 +329,15 @@ export async function retrieveCitedPublicPage(url, {
   if (page.status >= 300 && page.status < 400) {
     throw new Error("PUBLIC_PAGE_REDIRECT_REJECTED");
   }
-  if (page.status !== 200 || page.contentEncoding ||
-      !/^(text\/html|text\/plain)(?:;|$)/i.test(page.contentType) ||
-      /charset\s*=\s*(?!utf-8)([^;]+)/i.test(page.contentType)) {
+  const mediaType = supportedPublicTextMediaType(page.contentType);
+  if (page.status !== 200 || page.contentEncoding || !mediaType) {
     throw new Error("PUBLIC_PAGE_CONTENT_REJECTED");
   }
   if (typeof page.body !== "string" ||
       Buffer.byteLength(page.body, "utf8") > MAX_BYTES) {
     throw new Error("PUBLIC_PAGE_TOO_LARGE");
   }
-  const linkedContact = /^text\/html(?:;|$)/i.test(page.contentType)
+  const linkedContact = mediaType === "text/html"
     ? linkedPublicContactUrl(canonical, page.body) : null;
   return {
     url: canonical, text: htmlText(page.body),
