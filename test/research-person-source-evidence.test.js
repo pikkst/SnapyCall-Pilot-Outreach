@@ -301,3 +301,51 @@ test("linked contact read is fenced by membership revocation after both reads", 
   assert.equal(f.state.row.emailTriageEmail, null);
   assert.deepEqual(f.events, []);
 });
+
+test("schema.org Person proof survives independent owner-scoped verification and readback", async () => {
+  const f = fixture();
+  const retrieve = async input => {
+    assert.equal(input, url);
+    f.state.fetched++;
+    return {
+      url, text: "Professional biography",
+      structuredPerson: { name: "Ada Lovelace", email: "ada@example.org" },
+    };
+  };
+  const result = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve, now: () => clock,
+  });
+  assert.equal(result.code, "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED");
+  assert.equal(result.qualifiedEvidence, true);
+  assert.equal(f.state.row.personSourceUrl, url);
+  assert.equal(f.state.row.emailTriageEmail, "ada@example.org");
+  assert.equal(f.state.row.personSourceProvenance,
+    "AI98_EXPLICIT_NAMED_EMAIL_ON_PUBLIC_PROFILE");
+  assert.equal(f.state.row.emailTriageStatus, "REVIEW_REQUIRED");
+  assert.deepEqual(f.events, ["evidence", "job", "audit"]);
+
+  const readback = await inspectCampaignObservationEmail(f.db, {
+    campaignId: scope.campaignId, observationId: observation.id,
+    workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+  }, { retrieve });
+  assert.equal(readback.code, "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED");
+  assert.equal(readback.observedEmail, "ada@example.org");
+  assert.equal(readback.evidenceDigest, f.state.row.emailTriageDigest);
+  assert.equal(readback.contactCreated, false);
+  assert.equal(readback.sendingEnabled, false);
+  assert.equal(f.state.fetched, 2);
+});
+
+test("conflicting schema.org Person name never persists a qualified observation", async () => {
+  const f = fixture();
+  const result = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve: async () => ({
+      url, text: "Professional biography",
+      structuredPerson: { name: "Grace Hopper", email: "ada@example.org" },
+    }),
+    now: () => clock,
+  });
+  assert.equal(result.qualifiedEvidence, false);
+  assert.equal(f.state.row.emailTriageEmail, null);
+  assert.equal(f.state.job.status, "SOURCE_NOT_ATTRIBUTABLE");
+});
