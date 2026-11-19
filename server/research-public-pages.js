@@ -178,13 +178,16 @@ export function linkedPublicContactUrl(sourceUrl, html) {
   const source = publicCitationUrl(sourceUrl);
   if (!source || typeof html !== "string" ||
       Buffer.byteLength(html, "utf8") > MAX_BYTES) return null;
-  const withoutScripts = html.replace(
-    /<(?:script|style|noscript)\b[^>]*>[\s\S]*?<\/\s*(?:script|style|noscript)\s*>/gi, " ");
+  const withoutScripts = html.replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(
+      /<(?:script|style|noscript|template)\b[^>]*>[\s\S]*?<\/\s*(?:script|style|noscript|template)\s*>/gi,
+      " ");
   const found = new Set();
   const anchors = withoutScripts.matchAll(
     /<a\b[^>]{0,1024}\bhref\s*=\s*(["'])([^"'<>]{1,2048})\1[^>]*>([^<>]{1,80})<\/a\s*>/gi);
   for (const match of anchors) {
-    if (!/^(?:contact|contact me|contact us|get in touch)$/i.test(match[3].trim())) continue;
+    if (/\s(?:hidden|aria-hidden\s*=\s*["\x27]?true)\b/i.test(match[0]) ||
+        !/^(?:contact|contact me|contact us|get in touch)$/i.test(match[3].trim())) continue;
     let resolved;
     try { resolved = new URL(match[2], source); }
     catch { continue; }
