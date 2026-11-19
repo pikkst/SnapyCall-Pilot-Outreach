@@ -47,8 +47,8 @@ test("complete 320 KiB HTML permits independently classified JSON-LD Person", as
     JSON.stringify({ "@context": "https://schema.org", "@type": "Person",
       name: "Ada Lovelace", email: "ada@example.org" }) +
     "</script>";
-  const page = await fixture("<h2>Expert</h2>" + "<!--" +
-    "x".repeat(320 * 1024) + "-->" + schema).retrieve();
+  const page = await fixture("<h2>Expert</h2>" + "<script>" +
+    "x".repeat(320 * 1024) + "</script>" + schema).retrieve();
   assert.deepEqual(page.structuredPerson,
     { name: "Ada Lovelace", email: "ada@example.org" });
   assert.equal(classifyExplicitPersonEmailPage(candidate, page).status,
