@@ -4,6 +4,8 @@ import { inspectEvidenceBackedPersonSources, finishPersonSourceJob }
   from "../server/research-person-source-executor.js";
 
 const person = { name: "Ada Lovelace", category: "AI_AUTOMATION" };
+const emptyFailures = () => ({ robots: 0, redirect: 0, dns: 0,
+  http: 0, timeout: 0, content: 0, linked: 0, other: 0 });
 const urls = ["https://example.org/ada", "https://example.net/ada",
   "https://example.com/ada"];
 const input = (list = urls) => ({
@@ -23,7 +25,7 @@ test("no cited target produces a precise no-source outcome without fetching", as
   assert.equal(result.proposedUrl, null);
   assert.deepEqual(result.diagnostics, {
     cited: 0, attempted: 0, unavailable: 0, noNamedEmail: 0,
-    verified: 0, conflicting: false,
+    verified: 0, conflicting: false, accessFailures: emptyFailures(),
     reason: "SOURCE_NO_MATCHING_CITED_PROFILE",
   });
 });
@@ -85,6 +87,48 @@ test("more than three cited sources cannot cause an unbounded inspection", async
   assert.equal(result.diagnostics.attempted, 3);
 });
 
+test("categorizes trusted fetch errors without leaking raw error data", async () => {
+  const reasons = [
+    "PUBLIC_PAGE_ROBOTS_REJECTED", "PUBLIC_PAGE_REDIRECT_REJECTED",
+    "PUBLIC_PAGE_DNS_REJECTED",
+  ];
+  const seen = [];
+  const result = await inspectEvidenceBackedPersonSources(input(), person, {
+    retrieve: async () => {
+      const error = new Error(reasons[seen.length] ?? "SECRET_PERSON_EMAIL");
+      seen.push(error.message);
+      throw error;
+    },
+  });
+  assert.equal(result.diagnostics.accessFailures.robots, 1);
+  assert.equal(result.diagnostics.accessFailures.redirect, 1);
+  assert.equal(result.diagnostics.accessFailures.dns, 1);
+  assert.equal(result.diagnostics.unavailable, 3);
+  assert.doesNotMatch(JSON.stringify(result.diagnostics), /SECRET|https:|Ada|@/);
+});
+
+test("unknown transport exception is a bounded other category", async () => {
+  const result = await inspectEvidenceBackedPersonSources(
+    input(urls.slice(0, 2)), person, {
+      retrieve: async () => { throw new Error("SECRET INTERNAL DNS: 192.168.1.1"); },
+    });
+  assert.equal(result.diagnostics.accessFailures.other, 2);
+  assert.equal(result.diagnostics.unavailable, 2);
+  assert.doesNotMatch(JSON.stringify(result.diagnostics), /SECRET|192\.168/);
+});
+
+test("linked page unavailability has its own bucket", async () => {
+  const result = await inspectEvidenceBackedPersonSources(
+    input([urls[0]]), person, { retrieve: async url => {
+      if (url === urls[0]) return { url, text: "Name: Ada Lovelace",
+        linkedContactUrl: "https://example.org/contact" };
+      throw new Error("PUBLIC_PAGE_ROBOTS_REJECTED");
+    } });
+  assert.equal(result.diagnostics.accessFailures.linked, 1);
+  assert.equal(result.diagnostics.unavailable, 1);
+  assert.equal(result.diagnostics.noNamedEmail, 0);
+});
+
 test("malformed inspection metadata is rejected before any database work", async () => {
   const scope = {
     campaignId: "cmabcdefghijklmnopqrstu",
@@ -93,7 +137,13 @@ test("malformed inspection metadata is rejected before any database work", async
     jobId: "cmabcdefghijklmnopqrs2",
     leaseToken: "fence", reservationId: "reserve",
   };
+  const valid = { cited: 0, attempted: 0, unavailable: 0, noNamedEmail: 0,
+    verified: 0, conflicting: false,
+    reason: "SOURCE_NO_MATCHING_CITED_PROFILE", accessFailures: emptyFailures() };
   for (const inspection of [
+    { ...valid, accessFailures: { ...emptyFailures(), robots: 1 } },
+    { ...valid, accessFailures: { ...emptyFailures(), rawUrl: "https://secret.test" } },
+    { ...valid, accessFailures: { ...emptyFailures(), other: 4 } },
     { cited: 99, attempted: 99, unavailable: 0, noNamedEmail: 0,
       verified: 0, conflicting: false, reason: "SOURCE_NO_MATCHING_CITED_PROFILE" },
     { cited: 1, attempted: 1, unavailable: 0, noNamedEmail: 0,

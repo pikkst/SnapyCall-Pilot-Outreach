@@ -15,6 +15,8 @@ import { isDirectPublicProfileUrl } from "./research-observation-email.js";
 import { researchCandidates } from "./ai-research.js";
 import { retrieveCitedPublicPage } from "./research-public-pages.js";
 import { inspectNamedPublicContactEvidence } from "./research-linked-contact-proof.js";
+import { classifyPersonSourceInspectionFailure }
+  from "./research-person-source-evidence.js";
 import { repeatedUnavailableSourceDomains } from "./research-source-domain-feedback.js";
 import { resolveCampaignResearchExecution } from "./research-campaign-worker.js";
 import { decryptKey } from "./security.js";
@@ -305,6 +307,28 @@ const SOURCE_INSPECTION_REASONS = new Set([
   "SOURCE_NAMED_EMAIL_SOURCE_SELECTED",
 ]);
 
+// Only trusted reader error codes enter privacy-safe campaign diagnostics.
+// Never record exception messages, URLs, hostnames or source page contents.
+const SOURCE_ACCESS_FAILURE_FIELDS = Object.freeze([
+  "robots", "redirect", "dns", "http", "timeout", "content", "linked", "other",
+]);
+function emptySourceAccessFailures() {
+  return Object.fromEntries(SOURCE_ACCESS_FAILURE_FIELDS.map(key => [key, 0]));
+}
+function sourceAccessFailureBucket(error) {
+  switch (classifyPersonSourceInspectionFailure(error)) {
+    case "PUBLIC_PAGE_ROBOTS_REJECTED": return "robots";
+    case "PUBLIC_PAGE_REDIRECT_REJECTED": return "redirect";
+    case "PUBLIC_PAGE_DNS_REJECTED":
+    case "PUBLIC_PAGE_NO_VALID_IPV4": return "dns";
+    case "PUBLIC_PAGE_HTTP_REJECTED": return "http";
+    case "PUBLIC_PAGE_TIMEOUT": return "timeout";
+    case "PUBLIC_PAGE_CONTENT_REJECTED":
+    case "PUBLIC_PAGE_TOO_LARGE": return "content";
+    default: return "other";
+  }
+}
+
 // Returns only coarse, bounded operational diagnostics. URLs, names, page
 // text and email addresses must never enter job status or audit metadata.
 // The independent downstream verifier remains the only proof persistence path.
@@ -331,6 +355,7 @@ export async function inspectEvidenceBackedPersonSources(preview, subject, {
   const diagnostics = {
     cited: urls.length, attempted: 0, unavailable: 0,
     noNamedEmail: 0, verified: 0, conflicting: false,
+    accessFailures: emptySourceAccessFailures(),
   };
   let verified = null;
   let linkedAttempted = false;
@@ -343,15 +368,18 @@ export async function inspectEvidenceBackedPersonSources(preview, subject, {
         // One additional public read per paid job, if enough lease remains.
         allowLinked: !linkedAttempted && mayFollowLinked(),
       });
-    } catch {
+    } catch (error) {
       diagnostics.unavailable++;
+      diagnostics.accessFailures[sourceAccessFailureBucket(error)]++;
       continue;
     }
     if (inspected.linkedAttempted) linkedAttempted = true;
     const proof = inspected.evidence;
     if (!proof) {
-      if (inspected.linkedUnavailable) diagnostics.unavailable++;
-      else diagnostics.noNamedEmail++;
+      if (inspected.linkedUnavailable) {
+        diagnostics.unavailable++;
+        diagnostics.accessFailures.linked++;
+      } else diagnostics.noNamedEmail++;
       continue;
     }
     diagnostics.verified++;
@@ -371,7 +399,8 @@ export async function inspectEvidenceBackedPersonSources(preview, subject, {
     : "SOURCE_MIXED_UNQUALIFIED";
   return {
     proposedUrl: verified && !diagnostics.conflicting ? verified.url : null,
-    diagnostics: Object.freeze({ ...diagnostics, reason }),
+    diagnostics: Object.freeze({ ...diagnostics,
+      accessFailures: Object.freeze({ ...diagnostics.accessFailures }), reason }),
   };
 }
 
@@ -400,7 +429,18 @@ export async function finishPersonSourceJob(db, claim, {
       !inspection || typeof inspection !== "object" ||
       Array.isArray(inspection) ||
       Object.keys(inspection).sort().join(",") !==
-        "attempted,cited,conflicting,noNamedEmail,reason,unavailable,verified" ||
+        "accessFailures,attempted,cited,conflicting,noNamedEmail,reason,unavailable,verified" ||
+      !inspection.accessFailures ||
+      typeof inspection.accessFailures !== "object" ||
+      Array.isArray(inspection.accessFailures) ||
+      Object.keys(inspection.accessFailures).sort().join(",") !==
+        SOURCE_ACCESS_FAILURE_FIELDS.slice().sort().join(",") ||
+      SOURCE_ACCESS_FAILURE_FIELDS.some(key =>
+        !Number.isInteger(inspection.accessFailures[key]) ||
+        inspection.accessFailures[key] < 0 ||
+        inspection.accessFailures[key] > 3) ||
+      SOURCE_ACCESS_FAILURE_FIELDS.reduce((sum, key) =>
+        sum + inspection.accessFailures[key], 0) !== inspection.unavailable ||
       !SOURCE_INSPECTION_REASONS.has(inspection.reason) ||
       typeof inspection.conflicting !== "boolean" ||
       ["attempted", "cited", "unavailable", "noNamedEmail", "verified"]
