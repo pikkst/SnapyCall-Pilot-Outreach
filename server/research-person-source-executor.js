@@ -96,7 +96,7 @@ export function personSourceSearchQuery({ name, category }) {
   // Put the exact person and publication intent first instead of broadly
   // searching for a biography. Keep the professional context to disambiguate
   // namesakes, but do not speculate about the person's organization/domain.
-  return '"' + safeName + '" "email" "contact" ' +
+  return '"' + safeName + '" email contact ' +
     SOURCE_CATEGORY_SEARCH[category] + " official";
 }
 
