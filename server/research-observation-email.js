@@ -2,6 +2,8 @@
 // A public name/email match is review evidence, not an approved outreach contact.
 import { retrieveCitedPublicPage } from "./research-public-pages.js";
 import { classifyExplicitPersonEmailPage } from "./candidate-direct-email-evidence.js";
+import { inspectNamedPublicContactEvidence, LINKED_CONTACT_PROVENANCE }
+  from "./research-linked-contact-proof.js";
 import { publicCitationUrl } from "./research-evidence.js";
 import { requireWorkspaceMembership } from "./workspace-access.js";
 import { isGoogleGroundingCitation } from "./research-grounding-location.js";
@@ -25,8 +27,8 @@ export function observationInspectionSource(observation) {
   // Only an independently retrieved page with a deterministic exact-name
   // email label may override the original (possibly shared/opaque) citation.
   // An unverified AI URL proposal cannot satisfy this condition.
-  if (observation.personSourceProvenance ===
-        "AI98_EXPLICIT_NAMED_EMAIL_ON_PUBLIC_PROFILE" &&
+  if (["AI98_EXPLICIT_NAMED_EMAIL_ON_PUBLIC_PROFILE",
+        LINKED_CONTACT_PROVENANCE].includes(observation.personSourceProvenance) &&
       observation.emailTriageStatus === "REVIEW_REQUIRED" &&
       typeof observation.emailTriageDigest === "string" &&
       /^[a-f0-9]{64}$/.test(observation.emailTriageDigest) &&
@@ -86,19 +88,37 @@ export async function inspectCampaignObservationEmail(db, {
     return { status: 200, code: "SHARED_SOURCE_REQUIRES_REVIEW",
       contactCreated: false, emailChecked: false, sendingEnabled: false };
   }
-  let page;
-  try { page = await retrieve(url); }
-  catch {
-    return { status: 200, code: "PROFILE_INSPECTION_UNAVAILABLE",
-      contactCreated: false, emailChecked: false, sendingEnabled: false };
+  let evidence;
+  if (observation.personSourceProvenance === LINKED_CONTACT_PROVENANCE) {
+    // Re-read the provider-cited root and its explicitly linked same-host
+    // contact document. Never turn a stored URL into attribution by itself.
+    try {
+      const inspected = await inspectNamedPublicContactEvidence({
+        url, name: observation.name, retrieve,
+      });
+      evidence = inspected.linked && inspected.evidence
+        ? inspected.evidence
+        : { status: "UNVERIFIED", reason: "LINKED_PERSON_EMAIL_PROOF_MISSING" };
+    } catch {
+      return { status: 200, code: "PROFILE_INSPECTION_UNAVAILABLE",
+        contactCreated: false, emailChecked: false, sendingEnabled: false };
+    }
+  } else {
+    let page;
+    try { page = await retrieve(url); }
+    catch {
+      return { status: 200, code: "PROFILE_INSPECTION_UNAVAILABLE",
+        contactCreated: false, emailChecked: false, sendingEnabled: false };
+    }
+    if (!page || publicCitationUrl(page.url) !== url ||
+        typeof page.text !== "string") {
+      return { status: 200, code: "PROFILE_PROVENANCE_MISMATCH",
+        contactCreated: false, emailChecked: false, sendingEnabled: false };
+    }
+    evidence = classifyExplicitPersonEmailPage({
+      name: observation.name, expertProfileUrl: url, email: null,
+    }, page);
   }
-  if (!page || publicCitationUrl(page.url) !== url || typeof page.text !== "string") {
-    return { status: 200, code: "PROFILE_PROVENANCE_MISMATCH",
-      contactCreated: false, emailChecked: false, sendingEnabled: false };
-  }
-  const evidence = classifyExplicitPersonEmailPage({
-    name: observation.name, expertProfileUrl: url, email: null,
-  }, page);
   if (evidence.status !== "REVIEW_REQUIRED") {
     return { status: 200, code: evidence.reason,
       contactCreated: false, emailChecked: true, sendingEnabled: false };
