@@ -5,6 +5,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { publicCitationUrl } from "./research-evidence.js";
+import { explicitJsonLdPersonEmail } from "./research-structured-person-evidence.js";
 
 // The prior 64 KiB cap rejected legitimate public biography pages. Keep an
 // explicit, finite limit (128 KiB) for both declared and streamed bodies.
@@ -339,8 +340,11 @@ export async function retrieveCitedPublicPage(url, {
   }
   const linkedContact = mediaType === "text/html"
     ? linkedPublicContactUrl(canonical, page.body) : null;
+  const structuredPerson = mediaType === "text/html"
+    ? explicitJsonLdPersonEmail(page.body) : null;
   return {
     url: canonical, text: htmlText(page.body),
     ...(linkedContact ? { linkedContactUrl: linkedContact } : {}),
+    ...(structuredPerson ? { structuredPerson } : {}),
   };
 }

@@ -40,6 +40,39 @@ export function classifyExplicitPersonEmailPage(candidate, page) {
   // A second address makes the page ambiguous even when it is not a usable
   // personal mailbox itself.
   const emails = [...new Set([...text.matchAll(EMAIL)].map(m => m[0].toLowerCase()))];
+  // A JSON-LD Person object is a published explicit name/email declaration,
+  // not a guess derived from a domain. Accept it only when independently
+  // parsed by the bounded HTTPS HTML reader and no visible mailbox conflicts.
+  // A single schema Person does not establish ownership or sending consent.
+  if (page.structuredPerson != null) {
+    const structured = page.structuredPerson;
+    const structuredEmail = normalizedEmail(structured?.email);
+    const structuredName = typeof structured?.name === "string"
+      ? structured.name.normalize("NFKC").replace(/\s+/g, " ").trim() : "";
+    if (!structuredEmail ||
+        structuredName.toLocaleLowerCase("en-US") !== name.toLocaleLowerCase("en-US") ||
+        (priorEmail && priorEmail !== structuredEmail) ||
+        emails.some(address => address !== structuredEmail)) {
+      return { status: "UNVERIFIED", reason: "STRUCTURED_PERSON_EVIDENCE_CONFLICT" };
+    }
+    // A differently labelled human identity on this document makes an
+    // otherwise valid schema Person unsafe for automatic attribution.
+    const labeledNames = [...text.matchAll(/(?:^|\s)(?:Name|Full name|Expert):\s*([^:]{5,160}?)(?=\s+(?:Email|E-mail|Expertise):|$)/gi)];
+    if (labeledNames.some(m => m[1].trim().toLocaleLowerCase("en-US") !==
+        name.toLocaleLowerCase("en-US"))) {
+      return { status: "UNVERIFIED", reason: "STRUCTURED_PERSON_EVIDENCE_CONFLICT" };
+    }
+    const digest = createHash("sha256").update(JSON.stringify([
+      "ai98-schema-person-v1", url,
+      name.toLocaleLowerCase("en-US"), structuredEmail,
+    ])).digest("hex");
+    return {
+      status: "REVIEW_REQUIRED", reason: "EXPLICIT_JSONLD_PERSON_EMAIL",
+      emailNormalized: structuredEmail, profileUrl: url, evidenceDigest: digest,
+      personEmailLinked: false, usableAsContact: false,
+      onboardingEligible: false,
+    };
+  }
   const email = emails.length === 1 ? normalizedEmail(emails[0]) : null;
   if (!email || (priorEmail && priorEmail !== email)) {
     return { status: "UNVERIFIED", reason: "ADDRESS_AMBIGUOUS_OR_NOT_PUBLISHED" };
