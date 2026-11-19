@@ -33,7 +33,7 @@ export async function inspectNamedPublicContactEvidence({
   if (!allowLinked || !linked || linked === source ||
       new URL(linked).hostname !== new URL(source).hostname ||
       new URL(linked).search ||
-      !/\\/(?:contact|contact-me|get-in-touch)\\/?$/i.test(new URL(linked).pathname)) {
+      !/\/(?:contact|contact-me|get-in-touch)\/?$/i.test(new URL(linked).pathname)) {
     return { evidence: null, linkedAttempted: false, linked: false,
       linkedUnavailable: false };
   }
