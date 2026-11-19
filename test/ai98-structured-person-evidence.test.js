@@ -67,6 +67,25 @@ test("multiple people, missing context, malformed scripts and nested identity fa
     assert.equal(explicitJsonLdPersonEmail(html), null);
 });
 
+test("an oversized JSON-LD graph cannot hide a later second identity", () => {
+  const graph = [
+    { "@type": "Person", name: "Ada Lovelace", email: "ada@example.org" },
+    ...Array.from({ length: 19 }, (_, i) => ({
+      "@type": "Organization", name: "Example " + i,
+    })),
+    { "@type": "Person", name: "Grace Hopper", email: "grace@example.org" },
+  ];
+  assert.equal(explicitJsonLdPersonEmail(script({
+    "@context": "https://schema.org", "@graph": graph,
+  })), null);
+  assert.equal(explicitJsonLdPersonEmail(script({
+    "@context": "https://schema.org", "@graph": [
+      ...graph.slice(0, 20),
+      { "@type": "Organization", name: "Later" },
+    ],
+  })), null);
+});
+
 test("generic company email and a wrong person cannot pass classification", () => {
   for (const schema of [
     person("Ada Lovelace", "info@example.org"),
