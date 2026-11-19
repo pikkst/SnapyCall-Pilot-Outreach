@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { robotsAllows, retrieveCitedPublicPage } from "../server/research-public-pages.js";
+import { robotsAllows, retrieveCitedPublicPage,
+  supportedPublicTextMediaType } from "../server/research-public-pages.js";
 
 test("unrelated wildcard rules do not veto access", () => {
   const robots = "User-agent: OtherBot\nDisallow: /*\n" +
@@ -87,4 +88,54 @@ test("robots file remains restrictive when wildcard rule denies a URL", async ()
       },
     }), /PUBLIC_PAGE_ROBOTS_REJECTED/);
   assert.equal(pageRequested, false);
+});
+
+test("RFC 9110 media type accepts quoted UTF-8 but no other encoding", () => {
+  assert.equal(supportedPublicTextMediaType('text/html; charset="utf-8"'),
+    "text/html");
+  assert.equal(supportedPublicTextMediaType("Text/HTML; Charset=UTF-8"),
+    "text/html");
+  assert.equal(supportedPublicTextMediaType("text/plain ; charset=UTF-8"),
+    "text/plain");
+  for (const value of [
+    "application/json", "application/octet-stream",
+    'text/html; charset="iso-8859-1"',
+    "text/html; charset=UTF-8; charset=UTF-8",
+    "text/html; charset=", "text/html; charset=\\"utf-8\\"",
+  ]) {
+    assert.equal(supportedPublicTextMediaType(value), null, value);
+  }
+});
+
+test("retriever allows quoted UTF-8 HTML with canonical robots guards", async () => {
+  const source = "https://experts.example.org/people/ada";
+  const page = await retrieveCitedPublicPage(source, {
+    resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+    request: async url => String(url).endsWith("/robots.txt")
+      ? { status: 200, contentType: 'text/plain; charset="UTF-8"',
+          contentEncoding: "",
+          body: "User-agent: *\nDisallow: /private/*\n" }
+      : { status: 200, contentType: 'text/html; charset="utf-8"',
+          contentEncoding: "",
+          body: '<h1>Ada Lovelace</h1><a href="/contact">Contact</a>' },
+  });
+  assert.equal(page.text, "Name: Ada Lovelace Contact");
+  assert.equal(page.linkedContactUrl, "https://experts.example.org/contact");
+});
+
+test("robots policy still blocks actual wildcard deny", async () => {
+  let fetched = false;
+  await assert.rejects(retrieveCitedPublicPage(
+    "https://experts.example.org/private/ada", {
+      resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+      request: async url => {
+        if (!String(url).endsWith("/robots.txt")) {
+          fetched = true;
+          throw new Error("Blocked page was requested");
+        }
+        return { status: 200, contentType: 'text/plain; charset="utf-8"',
+          contentEncoding: "", body: "User-agent: *\nDisallow: /private/*" };
+      },
+    }), /PUBLIC_PAGE_ROBOTS_REJECTED/);
+  assert.equal(fetched, false);
 });
