@@ -7,10 +7,10 @@ import { isIP } from "node:net";
 import { publicCitationUrl } from "./research-evidence.js";
 import { explicitJsonLdPersonEmail } from "./research-structured-person-evidence.js";
 
-// The prior 64 KiB cap rejected legitimate public biography pages. Keep an
-// explicit, finite limit (128 KiB) for both declared and streamed bodies.
-// No cross-site redirects, scripts, robots bypass or private-network fetches.
-const MAX_BYTES = 128 * 1024;
+// Bound complete document reads independently from robots policy reads.
+// Never promote partial responses to person/email evidence.
+const MAX_BYTES = 128 * 1024; // robots policy and normalized evidence text
+export const MAX_PUBLIC_HTML_BYTES = 512 * 1024;
 const TIMEOUT_MS = 4000;
 const USER_AGENT = "SnapyCallResearchPreview/1.0 (+https://pilot.eventnexus.eu)";
 
@@ -47,14 +47,14 @@ export async function resolvePublicAddress(host, resolve = dnsLookup) {
   return ipv4.address;
 }
 
-function pinnedHttps(url, address, timeoutMs = TIMEOUT_MS) {
+function pinnedHttps(url, address, { maxBytes = MAX_BYTES } = {}) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let bytes = 0;
     const req = httpsRequest(url, {
-      method: "GET", timeout: timeoutMs,
+      method: "GET", timeout: TIMEOUT_MS,
       // A wall-clock deadline also bounds slow-trickle responses.
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
       agent: false, maxRedirects: 0,
       headers: { "user-agent": USER_AGENT, accept: "text/html,text/plain;q=0.9,*/*;q=0.1",
         "accept-encoding": "identity", connection: "close" },
@@ -81,12 +81,12 @@ function pinnedHttps(url, address, timeoutMs = TIMEOUT_MS) {
         response.resume(); reject(new Error("PUBLIC_PAGE_HTTP_REJECTED")); return;
       }
       const declared = Number(response.headers["content-length"]);
-      if (Number.isFinite(declared) && declared > MAX_BYTES) {
+      if (Number.isFinite(declared) && declared > maxBytes) {
         response.destroy(); reject(new Error("PUBLIC_PAGE_TOO_LARGE")); return;
       }
       response.on("data", chunk => {
         bytes += chunk.length;
-        if (bytes > MAX_BYTES) {
+        if (bytes > maxBytes) {
           response.destroy(new Error("PUBLIC_PAGE_TOO_LARGE")); return;
         }
         chunks.push(chunk);
@@ -224,7 +224,7 @@ function htmlText(input) {
 export function linkedPublicContactUrl(sourceUrl, html) {
   const source = publicCitationUrl(sourceUrl);
   if (!source || typeof html !== "string" ||
-      Buffer.byteLength(html, "utf8") > MAX_BYTES) return null;
+      Buffer.byteLength(html, "utf8") > MAX_PUBLIC_HTML_BYTES) return null;
   const withoutScripts = html.replace(/<!--[\s\S]*?-->/g, " ")
     .replace(
       /<(?:script|style|noscript|template)\b[^>]*>[\s\S]*?<\/\s*(?:script|style|noscript|template)\s*>/gi,
@@ -302,7 +302,7 @@ export async function retrieveCitedPublicPage(url, {
     const parsed = new URL(targetUrl);
     const robots = new URL("/robots.txt", parsed);
     const robotsAddress = await resolvePublicAddress(parsed.hostname, resolve);
-    const policy = await request(robots, robotsAddress);
+    const policy = await request(robots, robotsAddress, { maxBytes: MAX_BYTES });
     if (policy.status !== 404 && (policy.status !== 200 ||
         supportedPublicTextMediaType(policy.contentType) !== "text/plain" ||
         policy.contentEncoding || !robotsAllows(policy.body, parsed.pathname + parsed.search))) {
@@ -311,7 +311,7 @@ export async function retrieveCitedPublicPage(url, {
     // Independently resolve before each document request to defend DNS
     // rebinding even when robots and the page share the same hostname.
     const pageAddress = await resolvePublicAddress(parsed.hostname, resolve);
-    return request(parsed, pageAddress);
+    return request(parsed, pageAddress, { maxBytes: MAX_PUBLIC_HTML_BYTES });
   }
 
   let target = canonical;
@@ -340,15 +340,21 @@ export async function retrieveCitedPublicPage(url, {
       { contentFailureSubtype: subtype });
   }
   if (typeof page.body !== "string" ||
-      Buffer.byteLength(page.body, "utf8") > MAX_BYTES) {
+      Buffer.byteLength(page.body, "utf8") > MAX_PUBLIC_HTML_BYTES) {
     throw new Error("PUBLIC_PAGE_TOO_LARGE");
   }
   const linkedContact = mediaType === "text/html"
     ? linkedPublicContactUrl(canonical, page.body) : null;
   const structuredPerson = mediaType === "text/html"
     ? explicitJsonLdPersonEmail(page.body) : null;
+  const text = mediaType === "text/html" ? htmlText(page.body) : page.body;
+  // A fully downloaded large document may contain bounded useful evidence,
+  // but never allow an oversized resulting evidence envelope downstream.
+  if (Buffer.byteLength(text, "utf8") > MAX_BYTES) {
+    throw new Error("PUBLIC_PAGE_TOO_LARGE");
+  }
   return {
-    url: canonical, text: htmlText(page.body),
+    url: canonical, text,
     ...(linkedContact ? { linkedContactUrl: linkedContact } : {}),
     ...(structuredPerson ? { structuredPerson } : {}),
   };
