@@ -203,7 +203,7 @@ export async function retrieveCitedPublicPage(url, {
     const robotsAddress = await resolvePublicAddress(parsed.hostname, resolve);
     const policy = await request(robots, robotsAddress);
     if (policy.status !== 404 && (policy.status !== 200 ||
-        !/^text\\/plain(?:;|$)/i.test(policy.contentType) ||
+        !/^text\/plain(?:;|$)/i.test(policy.contentType) ||
         policy.contentEncoding || !robotsAllows(policy.body, parsed.pathname))) {
       throw new Error("PUBLIC_PAGE_ROBOTS_REJECTED");
     }
@@ -230,8 +230,8 @@ export async function retrieveCitedPublicPage(url, {
     throw new Error("PUBLIC_PAGE_REDIRECT_REJECTED");
   }
   if (page.status !== 200 || page.contentEncoding ||
-      !/^(text\\/html|text\\/plain)(?:;|$)/i.test(page.contentType) ||
-      /charset\\s*=\\s*(?!utf-8)([^;]+)/i.test(page.contentType)) {
+      !/^(text\/html|text\/plain)(?:;|$)/i.test(page.contentType) ||
+      /charset\s*=\s*(?!utf-8)([^;]+)/i.test(page.contentType)) {
     throw new Error("PUBLIC_PAGE_CONTENT_REJECTED");
   }
   if (typeof page.body !== "string" ||
