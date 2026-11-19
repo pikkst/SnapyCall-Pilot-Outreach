@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { isWorkspaceId, lockActiveWorkspaceMembership,
   requireWorkspaceMembership } from "./workspace-access.js";
 import { observationInspectionSource } from "./research-observation-email.js";
-import { summarizeQualifiedEmailEvidence } from "./research-qualified-evidence.js";
+import { summarizeQualifiedEmailEvidence, isScopedPersonEmailEvidence }
+  from "./research-qualified-evidence.js";
 
 const MAX_SNAPSHOT = 250;
 const MAX_BATCH = 100;
@@ -50,7 +51,8 @@ export function buildQualifiedContactManifest(rows) {
     if (typeof row?.id !== "string" || !isWorkspaceId(row.id) ||
         row.candidateId != null || !SHA.test(row.emailTriageDigest ?? "")) continue;
     const source = observationInspectionSource(row);
-    if (!source || sources.get(source) !== 1 ||
+    if (!source ||
+        (sources.get(source) !== 1 && !isScopedPersonEmailEvidence(row)) ||
         emails.get(row.emailTriageEmail) !== 1 ||
         summarizeQualifiedEmailEvidence([row]).qualifiedEvidence !== 1) continue;
     entries.push(Object.freeze({
