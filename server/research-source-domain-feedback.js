@@ -3,6 +3,11 @@
 // Exclude a host only after repeated independently recorded unavailability.
 // A single incident is insufficient evidence to suppress a useful source.
 const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+export function isBoundedSourceDomain(host) {
+  return typeof host === "string" && host.length <= 253 &&
+    HOST.test(host);
+}
+
 
 export function repeatedUnavailableSourceDomains(rows, {
   minFailures = 2, maxDomains = 8,
@@ -22,7 +27,7 @@ export function repeatedUnavailableSourceDomains(rows, {
     if (url.protocol !== "https:" || url.username || url.password ||
         url.port || url.hostname.length > 253) continue;
     const host = url.hostname.toLowerCase().replace(/^www\./, "");
-    if (!HOST.test(host)) continue;
+    if (!isBoundedSourceDomain(host)) continue;
     failures.set(host, (failures.get(host) ?? 0) + 1);
   }
   return Object.freeze([...failures].filter(([, n]) => n >= minFailures)
