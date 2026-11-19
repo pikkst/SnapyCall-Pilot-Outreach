@@ -75,9 +75,14 @@ export async function tickApprovedCampaignRun(db, {
 
 export function startApprovedCampaignWorker(db, {
   encryptionKey, intervalMs = 8000,
+  runTick = tickApprovedCampaignRun,
+  schedule = setInterval, cancel = clearInterval,
 } = {}) {
   if (!Number.isInteger(intervalMs) || intervalMs < 5000 ||
-      intervalMs > 60000) throw new TypeError("Invalid worker interval");
+      intervalMs > 60000 || typeof runTick !== "function" ||
+      typeof schedule !== "function" || typeof cancel !== "function") {
+    throw new TypeError("Invalid worker interval or scheduler");
+  }
   let stopped = false;
   let activeTick = null;
   // A timer callback may already be inside a paid provider call when Render
@@ -85,7 +90,7 @@ export function startApprovedCampaignWorker(db, {
   // settle its existing reservation and fenced task before disconnecting DB.
   async function tick() {
     if (stopped || activeTick) return;
-    const work = tickApprovedCampaignRun(db, { encryptionKey });
+    const work = Promise.resolve().then(() => runTick(db, { encryptionKey }));
     activeTick = work;
     try {
       await work;
@@ -96,11 +101,11 @@ export function startApprovedCampaignWorker(db, {
       if (activeTick === work) activeTick = null;
     }
   }
-  const interval = setInterval(() => { void tick(); }, intervalMs);
+  const interval = schedule(() => { void tick(); }, intervalMs);
   // Intentionally no immediate paid call during startup.
   return () => {
     stopped = true;
-    clearInterval(interval);
+    cancel(interval);
     return activeTick ? activeTick.catch(() => {}) : Promise.resolve();
   };
 }
