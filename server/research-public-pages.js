@@ -146,11 +146,15 @@ function htmlText(input) {
       (_whole, title) => " Name: " + title + " ")
     : cleaned;
   return labeled
-    // Only promote a literal, visible "Email" link to plaintext evidence.
-    // Do not extract arbitrary hrefs, infer patterns or follow mailto links.
-    // The downstream classifier still requires an explicitly labeled person.
-    .replace(/<a\b[^>]*\s+href\s*=\s*(["'])mailto:([a-z0-9][a-z0-9._%+-]{0,63}@[a-z0-9.-]{1,190}\.[a-z]{2,24})\1[^>]*>\s*E-?mail\s*<\/a\s*>/gi,
-      (_match, _quote, address) => " Email: " + address + " ")
+    // Convert only a visible, explicitly named mailto anchor into text.
+    // The visible text must either say Email/E-mail or display the *exact*
+    // linked mailbox. Generic links, hidden scripts and mismatched labels
+    // are never promoted. The named-person verifier still gates acceptance.
+    .replace(/<a\b[^>]*\s+href\s*=\s*(["'])mailto:([a-z0-9][a-z0-9._%+-]{0,63}@[a-z0-9.-]{1,190}\.[a-z]{2,24})\1[^>]*>([^<>]{1,254})<\/a\s*>/gi,
+      (match, _quote, address, label) =>
+        /^(?:e-?mail)$/i.test(label.trim()) ||
+        label.trim().toLowerCase() === address.toLowerCase()
+          ? " Email: " + address + " " : match)
     .replace(/<[^>]*>/g, " ")
     .replace(/&(?:nbsp|#160);/gi, " ")
     .replace(/&(?:amp|#38);/gi, "&")
