@@ -81,6 +81,9 @@ test("inspector retains only explicitly labeled public mailto links", async () =
   const query = await retrieve(
     '<a href="mailto:ada@example.org?subject=hello">Email</a>');
   assert.equal(query.text, "Email");
+  const fake = await retrieve(
+    '<a data-href="mailto:ada@example.org">Email</a>');
+  assert.equal(fake.text, "Email");
 });
 
 test("one exact public H1 and mailto yield review-only evidence, not shared/ambiguous email", async () => {
