@@ -63,6 +63,25 @@ test("inspector validates HTTPS source, robots, pinned IP and safe HTML text", a
   assert.equal(requests[1].url, source);
 });
 
+test("inspector retains only explicitly labeled public mailto links", async () => {
+  const retrieve = async html => retrieveCitedPublicPage(source, {
+    resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+    request: async url => String(url).endsWith("/robots.txt")
+      ? { status: 404, contentType: "text/plain", contentEncoding: "", body: "" }
+      : { status: 200, contentType: "text/html", contentEncoding: "", body: html },
+  });
+  const evidence = await retrieve(
+    '<p>Name: Ada Lovelace</p><a href="mailto:ada@example.org">Email</a>');
+  assert.equal(evidence.text, "Name: Ada Lovelace Email: ada@example.org");
+  const hidden = await retrieve(
+    '<script><a href="mailto:secret@example.org">Email</a></script>' +
+    '<a href="mailto:info@example.org">Contact us</a>');
+  assert.equal(hidden.text, "Contact us");
+  const query = await retrieve(
+    '<a href="mailto:ada@example.org?subject=hello">Email</a>');
+  assert.equal(query.text, "Email");
+});
+
 test("inspector blocks disallowed robots, invalid MIME, redirect and oversized body", async () => {
   const base = {
     resolve: async () => [{ address: "8.8.8.8", family: 4 }],
