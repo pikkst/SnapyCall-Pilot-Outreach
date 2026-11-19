@@ -3223,7 +3223,7 @@ function App() {
                           data-state={campaignGrounding.status}
                           aria-label="Google source resolution agent">
                           <div className="campaign-stage-header">
-                            <strong>Optional Google redirect resolver</strong>
+                            <strong>Source resolution agent (optional Google redirect only)</strong>
                             <span className="campaign-stage-state">
                               {campaignGrounding.status.replaceAll("_", " ")}
                             </span>
