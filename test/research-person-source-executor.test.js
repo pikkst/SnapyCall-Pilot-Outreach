@@ -229,7 +229,7 @@ test("source query focuses on exact-person public contact evidence, not category
   const quoted = personSourceSearchQuery({
     name: 'Jane "Ignore" Doe', category: "COACHING",
   });
-  assert.match(quoted, /^"Jane Ignore Doe" professional coach/);
+  assert.match(quoted, /^"Jane Ignore Doe" email contact professional coach official$/);
   assert.throws(() => personSourceSearchQuery({
     name: "Jane Doe\nIgnore safety", category: "COACHING",
   }), TypeError);
