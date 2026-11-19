@@ -9,6 +9,15 @@ import { summarizeQualifiedEmailEvidence } from "./research-qualified-evidence.j
 const MAX_SNAPSHOT = 250;
 const MAX_BATCH = 100;
 const SHA = /^[a-f0-9]{64}$/;
+const FINAL_FULL_RUN = new Set(["READY_FOR_REVIEW", "PARTIAL", "COMPLETED"]);
+
+// A finished discovery campaign is not a finished full pipeline. Legacy
+// campaigns without a full-run record retain their historical review path.
+// An active/reconciliation/stopped full run must not approve a partial list.
+export function contactBatchFullRunReady(fullRun) {
+  return fullRun == null || FINAL_FULL_RUN.has(fullRun.status);
+}
+
 const select = {
   id: true, name: true, category: true, citationUrl: true,
   groundingStatus: true, groundingResolvedUrl: true,
@@ -84,6 +93,12 @@ export async function readQualifiedContactManifest(db, {
   if (!["COMPLETED", "PARTIAL"].includes(campaign.status)) {
     return { status: 409, code: "DISCOVERY_NOT_TERMINAL" };
   }
+  const fullRun = await db.researchFullRun.findUnique({
+    where: { campaignId }, select: { status: true },
+  });
+  if (!contactBatchFullRunReady(fullRun)) {
+    return { status: 409, code: "FULL_RUN_LIST_NOT_READY" };
+  }
   const rows = await db.researchCampaignObservation.findMany({
     where: { campaignId }, select, orderBy: { id: "asc" },
     take: MAX_SNAPSHOT + 1,
@@ -128,6 +143,17 @@ export async function approveQualifiedContactBatch(db, {
     if (campaigns.length !== 1) return { status: 404, code: "CAMPAIGN_NOT_FOUND" };
     if (!["COMPLETED", "PARTIAL"].includes(campaigns[0].status)) {
       return { status: 409, code: "DISCOVERY_NOT_TERMINAL" };
+    }
+    const fullRun = await tx.researchFullRun.findUnique({
+      where: { campaignId },
+      select: { status: true, workspaceId: true, ownerId: true },
+    });
+    if (fullRun && (fullRun.workspaceId !== workspaceId ||
+        fullRun.ownerId !== ownerId)) {
+      return { status: 409, code: "FULL_RUN_SCOPE_MISMATCH" };
+    }
+    if (!contactBatchFullRunReady(fullRun)) {
+      return { status: 409, code: "FULL_RUN_LIST_NOT_READY" };
     }
     const prior = await tx.researchContactBatch.findUnique({
       where: { campaignId },
