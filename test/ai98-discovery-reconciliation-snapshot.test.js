@@ -33,9 +33,9 @@ function fixture({ authorized = true, receipt = false, intent = true,
         entityId: reservationId, metadata: { ...ids, taskId } };
       return [reserved, ...(duplicate ? [reserved] : []),
         ...(intent ? [{ action: "research.campaign.dispatch.intent",
-          entityId: taskId, metadata: { ...ids, taskId } }] : []),
+          entityId: taskId, metadata: { ...ids } }] : []),
         ...(receipt ? [{ action: "research.campaign.provider.returned",
-          entityId: taskId, metadata: { ...ids, taskId } }] : [])];
+          entityId: taskId, metadata: { ...ids } }] : [])];
     } },
     researchSpendReservation: { findUnique: async () => {
       calls.push("spend");
