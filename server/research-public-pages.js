@@ -332,7 +332,12 @@ export async function retrieveCitedPublicPage(url, {
   }
   const mediaType = supportedPublicTextMediaType(page.contentType);
   if (page.status !== 200 || page.contentEncoding || !mediaType) {
-    throw new Error("PUBLIC_PAGE_CONTENT_REJECTED");
+    // Only a fixed, non-sensitive subtype; never log raw headers, URLs or
+    // upstream status bodies. HTTP access rules stay fail-closed.
+    const subtype = page.status !== 200 ? "status" :
+      page.contentEncoding ? "encoding" : "mime";
+    throw Object.assign(new Error("PUBLIC_PAGE_CONTENT_REJECTED"),
+      { contentFailureSubtype: subtype });
   }
   if (typeof page.body !== "string" ||
       Buffer.byteLength(page.body, "utf8") > MAX_BYTES) {
