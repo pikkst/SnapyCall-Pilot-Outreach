@@ -21,7 +21,7 @@ const observed = {
 
 function fakeDb({ revoked = false, existing = null, changed = false,
   alreadyLinked = null, uniqueRace = false, grounding = false,
-  shared = 0, sourceChanged = false } = {}) {
+  shared = 0, sourceChanged = false, scoped = false } = {}) {
   const events = [];
   const created = { id: "cmcontactabcdefghijklmno" };
   const db = {
@@ -51,7 +51,18 @@ function fakeDb({ revoked = false, existing = null, changed = false,
               : null,
             groundingProvenance: grounding
               ? "GOOGLE_GROUNDING_LOCATION_HEADER" : null,
-            candidateId: alreadyLinked }];
+            candidateId: alreadyLinked,
+            ...(scoped ? {
+              personSourceUrl: observed.sourceUrl,
+              personSourceProvenance:
+                "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE",
+              personSourceVerifiedAt: new Date("2026-11-19T12:00:00Z"),
+              emailTriageStatus: "REVIEW_REQUIRED",
+              emailTriageCode: "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED",
+              emailTriageEmail: observed.observedEmail,
+              emailTriageDigest: scope.expectedDigest,
+              emailTriageAt: new Date("2026-11-19T12:00:00Z"),
+            } : {}) }];
         }
         if (sql.includes('FROM "Partner"')) {
           events.push("workspace-lock");
@@ -60,7 +71,12 @@ function fakeDb({ revoked = false, existing = null, changed = false,
         throw new Error("Unexpected SQL: " + sql);
       },
       candidate: {
-        findFirst: async () => existing,
+        findFirst: async ({ where }) => {
+          if (!existing) return null;
+          return where.emailNormalized
+            ? (existing.emailNormalized === where.emailNormalized ? existing : null)
+            : existing;
+        },
         create: async ({ data }) => {
           events.push("contact-create");
           assert.equal(data.name, observed.name);
@@ -214,4 +230,42 @@ test("database unique collision fails closed without pretending success", async 
   assert.equal(result.status, 409);
   assert.equal(result.code, "CONTACT_IDENTITY_COLLISION");
   assert.equal(result.contactCreated, false);
+});
+
+test("independently re-inspected scoped person on a shared page can be saved", async () => {
+  const { db, events } = fakeDb({ shared: 2, scoped: true });
+  const result = await acceptReviewedCampaignContact(db, scope, {
+    inspect: async () => observed,
+  });
+  assert.equal(result.code, "CONTACT_CREATED_REVIEW_PENDING");
+  assert.equal(result.sendingEnabled, false);
+  assert.equal(events.includes("contact-create"), true);
+});
+
+test("another expert with the same source URL is not an identity collision for scoped proof", async () => {
+  const existing = {
+    id: "cmotherabcdefghijklmno", name: "Grace Hopper",
+    category: observed.category, emailNormalized: "grace@experts.example.org",
+    expertProfileUrl: observed.sourceUrl, removedAt: null,
+  };
+  const { db, events } = fakeDb({ shared: 1, scoped: true, existing });
+  const result = await acceptReviewedCampaignContact(db, scope, {
+    inspect: async () => observed,
+  });
+  assert.equal(result.code, "CONTACT_CREATED_REVIEW_PENDING");
+  assert.equal(events.includes("contact-create"), true);
+});
+
+test("forged or outdated scoped evidence never permits shared source contact creation", async () => {
+  for (const setup of [
+    { shared: 1, scoped: false },
+    { shared: 1, scoped: true },
+  ]) {
+    const { db, events } = fakeDb(setup);
+    const result = await acceptReviewedCampaignContact(db, {
+      ...scope, expectedDigest: setup.scoped ? "b".repeat(64) : scope.expectedDigest,
+    }, { inspect: async () => observed });
+    assert.equal(result.status, 409);
+    assert.equal(events.includes("contact-create"), false);
+  }
 });
