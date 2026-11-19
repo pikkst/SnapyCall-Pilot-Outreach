@@ -40,6 +40,8 @@ test("only one directly linked same-host contact document is admissible", () => 
   assert.equal(linkedPublicContactUrl(root,
     '<a href="/contact" hidden>Contact</a>'), null);
   assert.equal(linkedPublicContactUrl(root,
+    '<a data-href="/contact">Contact</a>'), null);
+  assert.equal(linkedPublicContactUrl(root,
     '<a href="/contact">Other text</a>'), null);
 });
 
