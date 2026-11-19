@@ -499,10 +499,18 @@ export function buildBoundedTavilySearchRequest({
 // Only pass a trusted Tavily HTTP response here; never a browser-submitted
 // object. Return zero-evidence explicitly instead of invoking Gemini on an
 // empty or entirely rejected result set.
-export function normalizeBoundedTavilySearch({ response, maxResults, observedAt }) {
+export function normalizeBoundedTavilySearch({
+  response, maxResults, observedAt, excludeDomains = [],
+}) {
+  // Revalidate the bounded domains before trusting a provider response. Tavily
+  // filtering is an upstream optimization, not an attribution guarantee.
   if (!Number.isSafeInteger(maxResults) || maxResults < 1 || maxResults > 20 ||
       !response || !Array.isArray(response.results) ||
-      response.results.length > maxResults) {
+      response.results.length > maxResults ||
+      !Array.isArray(excludeDomains) || excludeDomains.length > 20 ||
+      new Set(excludeDomains).size !== excludeDomains.length ||
+      excludeDomains.some(host => typeof host !== "string" ||
+        host.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host))) {
     throw new TypeError("Invalid Tavily search result envelope");
   }
   // Usage is diagnostic only. Missing or ambiguous metadata cannot justify a
@@ -514,6 +522,12 @@ export function normalizeBoundedTavilySearch({ response, maxResults, observedAt 
   const seen = new Set();
   for (const result of response.results) {
     const url = publicCitationUrl(result?.url);
+    // A provider may still return a filtered hostname (including subdomains).
+    // Enforce the same exclusions locally before evidence enters the manifest.
+    if (url && excludeDomains.some(host => {
+      const returned = new URL(url).hostname.toLowerCase();
+      return returned === host || returned.endsWith("." + host);
+    })) continue;
     if (!url || (new URL(url).hostname === "vertexaisearch.cloud.google.com" &&
         new URL(url).pathname.startsWith("/grounding-api-redirect/")) ||
         typeof result?.title !== "string" ||
@@ -571,7 +585,9 @@ export async function searchWithBoundedTavily({
   // A second call after a transport error could charge again: no retry here.
   const response = await post("https://api.tavily.com/search",
     { authorization: "Bearer " + apiKey }, request, signal);
-  return normalizeBoundedTavilySearch({ response, maxResults, observedAt });
+  return normalizeBoundedTavilySearch({
+    response, maxResults, observedAt, excludeDomains,
+  });
 }
 
 
