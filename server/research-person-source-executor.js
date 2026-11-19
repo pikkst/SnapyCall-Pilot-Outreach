@@ -76,8 +76,10 @@ export function selectNextPersonSourceJob(jobs) {
   return selected;
 }
 
-// Search for an attributable personal website rather than a generic category
-// enum string, which overweights shared directories and social mentions.
+// Target the *named person's* published professional contact evidence.
+// One approved source job still makes exactly one provider search. Results are
+// untrusted source hints; independent HTTPS inspection and exact-person email
+// attribution remain mandatory. No inferred addresses or contact acceptance.
 const SOURCE_CATEGORY_SEARCH = Object.freeze({
   AI_AUTOMATION: "AI automation consultant",
   COACHING: "professional coach",
@@ -91,8 +93,11 @@ export function personSourceSearchQuery({ name, category }) {
   }
   const safeName = name.normalize("NFKC").replace(/"/g, " ").replace(/\s+/g, " ").trim();
   if (safeName.length < 5) throw new TypeError("A named professional is required");
-  return '"' + safeName + '" ' + SOURCE_CATEGORY_SEARCH[category] +
-    " official website professional bio public contact";
+  // Put the exact person and publication intent first instead of broadly
+  // searching for a biography. Keep the professional context to disambiguate
+  // namesakes, but do not speculate about the person's organization/domain.
+  return '"' + safeName + '" email contact ' +
+    SOURCE_CATEGORY_SEARCH[category] + " official";
 }
 
 // This stage uses a frozen manifest of observation fingerprints rather than

@@ -217,18 +217,19 @@ test("person-source proposal is a single exact person cited URL, never an email"
   }), null);
 });
 
-test("source query favors an attributable official biography, not category enum", () => {
+test("source query focuses on exact-person public contact evidence, not category enum", () => {
   const query = personSourceSearchQuery({
     name: "Lorraine Burrell", category: "AI_AUTOMATION",
   });
-  assert.match(query, /^"Lorraine Burrell" AI automation consultant/);
-  assert.match(query, /official website professional bio public contact/);
+  assert.match(query, /^"Lorraine Burrell" email contact AI automation consultant official$/);
+  assert.match(query, /email contact AI automation consultant official/);
   assert.doesNotMatch(query, /AI_AUTOMATION/);
+  assert.equal((query.match(/email/g) ?? []).length, 1);
   assert.ok(query.length <= 350);
   const quoted = personSourceSearchQuery({
     name: 'Jane "Ignore" Doe', category: "COACHING",
   });
-  assert.match(quoted, /^"Jane Ignore Doe" professional coach/);
+  assert.match(quoted, /^"Jane Ignore Doe" email contact professional coach official$/);
   assert.throws(() => personSourceSearchQuery({
     name: "Jane Doe\nIgnore safety", category: "COACHING",
   }), TypeError);
