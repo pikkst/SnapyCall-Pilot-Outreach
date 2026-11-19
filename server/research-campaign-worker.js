@@ -191,14 +191,14 @@ export async function runOneCampaignTask(db, {
       // Persist the possible paid-dispatch boundary BEFORE calling a
       // provider. This is not proof of a charge; it is the durable evidence
       // that an interrupted lease must never be replayed automatically.
-      await db.auditEvent.create({ data: {
+      await db.$transaction(tx => tx.auditEvent.create({ data: {
         actorId: ownerId, action: "research.campaign.dispatch.intent",
         entityId: claim.taskId, metadata: {
           campaignId, workspaceId, reservationId,
           provider: setting.provider, model: setting.model,
           dispatchPossible: true, automaticRetryAllowed: false,
         },
-      } });
+      } }));
       invoked = true;
       const result = await plan.search({
         query: claim.query, limit: claim.limit,
@@ -213,14 +213,14 @@ export async function runOneCampaignTask(db, {
       // Best-effort receipt only; telemetry failure must not turn a valid
       // provider response into another chargeable attempt.
       try {
-        await db.auditEvent.create({ data: {
+        await db.$transaction(tx => tx.auditEvent.create({ data: {
           actorId: ownerId, action: "research.campaign.provider.returned",
           entityId: claim.taskId, metadata: {
             campaignId, workspaceId, reservationId,
             provider: setting.provider, responseReturned: true,
             automaticRetryAllowed: false,
           },
-        } });
+        } }));
       } catch {
         console.warn("[research-campaign] Provider receipt audit unavailable");
       }
