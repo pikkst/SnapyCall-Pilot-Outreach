@@ -317,6 +317,19 @@ const SOURCE_INSPECTION_REASONS = new Set([
 const SOURCE_ACCESS_FAILURE_FIELDS = Object.freeze([
   "robots", "redirect", "dns", "http", "timeout", "content", "linked", "other",
 ]);
+const CONTENT_FAILURE_FIELDS = Object.freeze([
+  "mime", "encoding", "status", "size", "other",
+]);
+function emptyContentFailures() {
+  return Object.fromEntries(CONTENT_FAILURE_FIELDS.map(key => [key, 0]));
+}
+function sourceContentFailureSubtype(error) {
+  const code = classifyPersonSourceInspectionFailure(error);
+  if (code === "PUBLIC_PAGE_TOO_LARGE") return "size";
+  if (code !== "PUBLIC_PAGE_CONTENT_REJECTED") return "other";
+  return CONTENT_FAILURE_FIELDS.includes(error?.contentFailureSubtype)
+    ? error.contentFailureSubtype : "other";
+}
 function emptySourceAccessFailures() {
   return Object.fromEntries(SOURCE_ACCESS_FAILURE_FIELDS.map(key => [key, 0]));
 }
@@ -361,6 +374,7 @@ export async function inspectEvidenceBackedPersonSources(preview, subject, {
     cited: urls.length, attempted: 0, unavailable: 0,
     noNamedEmail: 0, verified: 0, conflicting: false,
     accessFailures: emptySourceAccessFailures(),
+    contentFailures: emptyContentFailures(),
   };
   let verified = null;
   let linkedAttempted = false;
@@ -375,7 +389,11 @@ export async function inspectEvidenceBackedPersonSources(preview, subject, {
       });
     } catch (error) {
       diagnostics.unavailable++;
-      diagnostics.accessFailures[sourceAccessFailureBucket(error)]++;
+      const category = sourceAccessFailureBucket(error);
+      diagnostics.accessFailures[category]++;
+      if (category === "content") {
+        diagnostics.contentFailures[sourceContentFailureSubtype(error)]++;
+      }
       continue;
     }
     if (inspected.linkedAttempted) linkedAttempted = true;
@@ -405,7 +423,8 @@ export async function inspectEvidenceBackedPersonSources(preview, subject, {
   return {
     proposedUrl: verified && !diagnostics.conflicting ? verified.url : null,
     diagnostics: Object.freeze({ ...diagnostics,
-      accessFailures: Object.freeze({ ...diagnostics.accessFailures }), reason }),
+      accessFailures: Object.freeze({ ...diagnostics.accessFailures }),
+      contentFailures: Object.freeze({ ...diagnostics.contentFailures }), reason }),
   };
 }
 
@@ -434,7 +453,19 @@ export async function finishPersonSourceJob(db, claim, {
       !inspection || typeof inspection !== "object" ||
       Array.isArray(inspection) ||
       Object.keys(inspection).sort().join(",") !==
-        "accessFailures,attempted,cited,conflicting,noNamedEmail,reason,unavailable,verified" ||
+        "accessFailures,attempted,cited,conflicting,contentFailures,noNamedEmail,reason,unavailable,verified" ||
+      !inspection.contentFailures ||
+      typeof inspection.contentFailures !== "object" ||
+      Array.isArray(inspection.contentFailures) ||
+      Object.keys(inspection.contentFailures).sort().join(",") !==
+        CONTENT_FAILURE_FIELDS.slice().sort().join(",") ||
+      CONTENT_FAILURE_FIELDS.some(key =>
+        !Number.isInteger(inspection.contentFailures[key]) ||
+        inspection.contentFailures[key] < 0 ||
+        inspection.contentFailures[key] > 3) ||
+      CONTENT_FAILURE_FIELDS.reduce((sum, key) =>
+        sum + inspection.contentFailures[key], 0) !==
+        inspection.accessFailures?.content ||
       !inspection.accessFailures ||
       typeof inspection.accessFailures !== "object" ||
       Array.isArray(inspection.accessFailures) ||
