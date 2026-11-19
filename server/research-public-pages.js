@@ -103,10 +103,28 @@ function pinnedHttps(url, address, timeoutMs = TIMEOUT_MS) {
   });
 }
 
-// Robots exclusion is deliberately conservative: missing robots.txt (404)
-// allows public content, while network/parse errors and unavailable policy block.
+// Follow RFC 9309's longest-match rule (including '*' and terminal '$').
+// Rules for other agents never block this crawler. Unknown directives are
+// ignored. Robots retrieval/authorization remains in the HTTPS reader.
+function robotsPatternMatch(value, path) {
+  if (!value || !value.startsWith("/") || value.length > 2048 ||
+      /[\r\n\x00-\x1f]/.test(value) ||
+      (value.includes("$") && !value.endsWith("$"))) return null;
+  const anchored = value.endsWith("$");
+  const pattern = anchored ? value.slice(0, -1) : value;
+  // Escaped literals; only the RFC wildcard can match arbitrary characters.
+  const escaped = part => part.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&");
+  const expression = "^" + pattern.split("*").map(escaped).join(".*") +
+    (anchored ? "$" : "");
+  return {
+    matches: new RegExp(expression, "u").test(path),
+    specificity: [...pattern].filter(char => char !== "*").length,
+  };
+}
+
 export function robotsAllows(text, pathname) {
-  if (typeof text !== "string" || text.length > MAX_BYTES ||
+  if (typeof text !== "string" ||
+      Buffer.byteLength(text, "utf8") > MAX_BYTES ||
       typeof pathname !== "string" || !pathname.startsWith("/")) return false;
   const groups = [];
   let agents = [], rules = [], hadRule = false;
@@ -121,26 +139,33 @@ export function robotsAllows(text, pathname) {
     if (!match) continue;
     const directive = match[1].toLowerCase();
     const value = match[2].trim();
-    // Unsupported robots pattern operators cannot be interpreted safely.
-    if ((directive === "disallow" || directive === "allow") && /[*$]/.test(value)) {
-      return false;
-    }
     if (directive === "user-agent") {
       if (hadRule) flush();
       agents.push(value.toLowerCase());
-    } else if ((directive === "disallow" || directive === "allow") && agents.length) {
+    } else if ((directive === "disallow" || directive === "allow") &&
+        agents.length) {
       hadRule = true;
-      rules.push({ directive, value });
+      if (value) rules.push({ directive, value });
     }
   }
   flush();
-  const matches = groups.filter(g => g.agents.includes("snapycallresearchpreview"));
-  const selected = matches.length ? matches : groups.filter(g => g.agents.includes("*"));
-  const applicable = selected.flatMap(g => g.rules)
-    .filter(r => r.value && pathname.startsWith(r.value));
-  applicable.sort((a, b) => b.value.length - a.value.length ||
-    (a.directive === "allow" ? -1 : 1));
-  return !applicable.length || applicable[0].directive === "allow";
+  const matches = groups.filter(group =>
+    group.agents.includes("snapycallresearchpreview"));
+  const selected = matches.length ? matches : groups.filter(group =>
+    group.agents.includes("*"));
+  let best = null;
+  for (const rule of selected.flatMap(group => group.rules)) {
+    const result = robotsPatternMatch(rule.value, pathname);
+    // Malformed applicable rules must not silently become an allow.
+    if (!result) return false;
+    if (!result.matches) continue;
+    if (!best || result.specificity > best.specificity ||
+        (result.specificity === best.specificity &&
+          rule.directive === "allow")) {
+      best = { directive: rule.directive, specificity: result.specificity };
+    }
+  }
+  return !best || best.directive === "allow";
 }
 
 function htmlText(input) {
@@ -236,7 +261,7 @@ export async function retrieveCitedPublicPage(url, {
     const policy = await request(robots, robotsAddress);
     if (policy.status !== 404 && (policy.status !== 200 ||
         !/^text\/plain(?:;|$)/i.test(policy.contentType) ||
-        policy.contentEncoding || !robotsAllows(policy.body, parsed.pathname))) {
+        policy.contentEncoding || !robotsAllows(policy.body, parsed.pathname + parsed.search))) {
       throw new Error("PUBLIC_PAGE_ROBOTS_REJECTED");
     }
     // Independently resolve before each document request to defend DNS
