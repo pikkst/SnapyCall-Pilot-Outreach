@@ -296,7 +296,19 @@ export function proposedPersonSource(preview, { name, category }) {
 // already authorized source job. Local HTTPS reads are not additional AI
 // searches, and their results never create a contact or grant sending consent.
 // Multiple independently verified, conflicting mailboxes fail closed.
-export async function selectEvidenceBackedPersonSource(preview, subject, {
+const SOURCE_INSPECTION_REASONS = new Set([
+  "SOURCE_NO_MATCHING_CITED_PROFILE",
+  "SOURCE_ALL_PAGES_UNAVAILABLE",
+  "SOURCE_NO_NAMED_EMAIL_EVIDENCE",
+  "SOURCE_CONFLICTING_PERSON_EMAILS",
+  "SOURCE_MIXED_UNQUALIFIED",
+  "SOURCE_NAMED_EMAIL_SOURCE_SELECTED",
+]);
+
+// Returns only coarse, bounded operational diagnostics. URLs, names, page
+// text and email addresses must never enter job status or audit metadata.
+// The independent downstream verifier remains the only proof persistence path.
+export async function inspectEvidenceBackedPersonSources(preview, subject, {
   retrieve = retrieveCitedPublicPage,
 } = {}) {
   if (typeof retrieve !== "function" ||
@@ -315,23 +327,51 @@ export async function selectEvidenceBackedPersonSource(preview, subject, {
     cited.has(isDirectPublicProfileUrl(entry.citationUrl)))
     .map(entry => isDirectPublicProfileUrl(entry.citationUrl))
     .filter(Boolean))].slice(0, 3);
+  const diagnostics = {
+    cited: urls.length, attempted: 0, unavailable: 0,
+    noNamedEmail: 0, verified: 0, conflicting: false,
+  };
   let verified = null;
   for (const url of urls) {
+    diagnostics.attempted++;
     let page;
     try { page = await retrieve(url); }
-    catch { continue; } // A robots/DNS/transport failure cannot be evidence.
+    catch {
+      diagnostics.unavailable++;
+      continue;
+    }
     const proof = classifyExplicitPersonEmailPage({
       name: subject.name, expertProfileUrl: url, email: null,
     }, page);
-    if (proof.status !== "REVIEW_REQUIRED") continue;
+    if (proof.status !== "REVIEW_REQUIRED") {
+      diagnostics.noNamedEmail++;
+      continue;
+    }
+    diagnostics.verified++;
     if (verified && verified.email !== proof.emailNormalized) {
-      return null; // Contradictory published person addresses require review.
+      diagnostics.conflicting = true;
     }
     if (!verified) verified = { url, email: proof.emailNormalized };
   }
-  // The downstream source worker MUST inspect the chosen page again before
-  // promoting it to a persisted named-email observation.
-  return verified?.url ?? null;
+  const reason = diagnostics.conflicting
+    ? "SOURCE_CONFLICTING_PERSON_EMAILS"
+    : verified ? "SOURCE_NAMED_EMAIL_SOURCE_SELECTED"
+    : diagnostics.cited === 0 ? "SOURCE_NO_MATCHING_CITED_PROFILE"
+    : diagnostics.unavailable === diagnostics.attempted
+      ? "SOURCE_ALL_PAGES_UNAVAILABLE"
+    : diagnostics.noNamedEmail === diagnostics.attempted
+      ? "SOURCE_NO_NAMED_EMAIL_EVIDENCE"
+    : "SOURCE_MIXED_UNQUALIFIED";
+  return {
+    proposedUrl: verified && !diagnostics.conflicting ? verified.url : null,
+    diagnostics: Object.freeze({ ...diagnostics, reason }),
+  };
+}
+
+// Preserve the original public source-selection API for existing consumers.
+export async function selectEvidenceBackedPersonSource(preview, subject, options) {
+  const result = await inspectEvidenceBackedPersonSources(preview, subject, options);
+  return result.proposedUrl;
 }
 
 // Finish is a single fenced DB transaction, including conservative ledger
@@ -339,6 +379,7 @@ export async function selectEvidenceBackedPersonSource(preview, subject, {
 // reconciliation may decide next steps; never replay the paid provider.
 export async function finishPersonSourceJob(db, claim, {
   proposedUrl = null, providerInvoked = true, code = null,
+  inspection = null,
 }, { now = new Date() } = {}) {
   validateScope(claim, now);
   if (!isWorkspaceId(claim.jobId) ||
@@ -348,6 +389,21 @@ export async function finishPersonSourceJob(db, claim, {
       (proposedUrl !== null && !isDirectPublicProfileUrl(proposedUrl))) {
     throw new TypeError("Valid fenced source-job completion required");
   }
+  if (inspection !== null && (
+      !inspection || typeof inspection !== "object" ||
+      Array.isArray(inspection) ||
+      Object.keys(inspection).sort().join(",") !==
+        "attempted,cited,conflicting,noNamedEmail,reason,unavailable,verified" ||
+      !SOURCE_INSPECTION_REASONS.has(inspection.reason) ||
+      typeof inspection.conflicting !== "boolean" ||
+      ["attempted", "cited", "unavailable", "noNamedEmail", "verified"]
+        .some(key => !Number.isInteger(inspection[key]) ||
+          inspection[key] < 0 || inspection[key] > 3) ||
+      inspection.attempted !== inspection.cited ||
+      inspection.unavailable + inspection.noNamedEmail +
+        inspection.verified !== inspection.attempted ||
+      (inspection.conflicting && inspection.verified < 2)
+    )) throw new TypeError("Bounded source inspection outcome required");
   const result = await db.$transaction(async tx => {
     const authorized = await lockActiveWorkspaceMembership(tx, {
       workspaceId: claim.workspaceId, userId: claim.ownerId,
@@ -373,6 +429,7 @@ export async function finishPersonSourceJob(db, claim, {
     // Source attribution is not assumed from a provider-cited hit. Check
     // collisions with every already-observed profile before staging a hint.
     let source = proposedUrl;
+    let sourceCollision = false;
     if (source) {
       const collisions = await tx.researchCampaignObservation.count({
         where: { campaignId: claim.campaignId,
@@ -383,14 +440,20 @@ export async function finishPersonSourceJob(db, claim, {
         where: { campaignId: claim.campaignId, id: { not: claim.jobId },
           proposedSourceUrl: source },
       });
-      if (collisions || otherProposals) source = null;
+      if (collisions || otherProposals) {
+        source = null;
+        sourceCollision = true;
+      }
     }
     const state = authorized && providerInvoked && code !== "BILLING_UNCERTAIN"
       ? "COMPLETED" : "PAUSED";
     const reason = !authorized ? "WORKSPACE_ACCESS_REVOKED" :
       !providerInvoked ? "PROVIDER_NOT_DISPATCHED" :
       code === "BILLING_UNCERTAIN" ? "BILLING_UNCERTAIN" :
-      source ? "SOURCE_CITATION_NEEDS_INSPECTION" : "NO_UNIQUE_DIRECT_SOURCE";
+      source ? "SOURCE_CITATION_NEEDS_INSPECTION" :
+      sourceCollision ? "SOURCE_SELECTED_COLLISION" :
+      inspection?.reason && inspection.reason !== "SOURCE_NAMED_EMAIL_SOURCE_SELECTED"
+        ? inspection.reason : "NO_UNIQUE_DIRECT_SOURCE";
     await settleOwnerSpend(tx, {
       ownerId: claim.ownerId, workspaceId: claim.workspaceId,
       reservationId: claim.reservationId,
@@ -414,6 +477,7 @@ export async function finishPersonSourceJob(db, claim, {
       action: "research.person-source.attempt.settled",
       metadata: { workspaceId: claim.workspaceId, campaignId: claim.campaignId,
         status: state, code: reason, providerInvoked,
+        ...(inspection ? { sourceInspection: inspection } : {}),
         conservativeCharge: providerInvoked, automaticBillableReplay: false,
         contactCreated: false, sendingEnabled: false },
     } });
@@ -519,9 +583,11 @@ export async function runOnePersonSourceJob(db, {
         excludeDomains,
       } : {}),
     });
-    const source = await selectEvidenceBackedPersonSource(result, claim, { retrieve });
+    const inspected = await inspectEvidenceBackedPersonSources(result, claim,
+      { retrieve });
     return await finishPersonSourceJob(db, claim,
-      { proposedUrl: source, providerInvoked: true }, { now: now() });
+      { proposedUrl: inspected.proposedUrl, inspection: inspected.diagnostics,
+        providerInvoked: true }, { now: now() });
   } catch {
     // Post-dispatch errors are potentially billable. Conserve the full
     // budget and block future calls until explicit operator reconciliation.
