@@ -12,6 +12,8 @@ import { personSourceFingerprint }
 
 const REVIEW = "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED";
 const PROOF = "AI98_EXPLICIT_NAMED_EMAIL_ON_PUBLIC_PROFILE";
+export const SCOPED_SHARED_PROOF =
+  "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE";
 const PUBLIC_PAGE_FAILURE_CODES = new Set([
   "PUBLIC_PAGE_URL_REJECTED", "PUBLIC_PAGE_DNS_REJECTED",
   "PUBLIC_PAGE_NO_VALID_IPV4", "PUBLIC_PAGE_REDIRECT_REJECTED",
@@ -133,9 +135,7 @@ export async function verifyPersonSourceProposal(db, scope, {
       OR: [{ citationUrl: url }, { groundingResolvedUrl: url },
         { personSourceUrl: url }] },
   });
-  if (shared || observedShared) {
-    return { status: 409, code: "SHARED_SOURCE_REQUIRES_REVIEW" };
-  }
+  const hasCollision = shared > 0 || observedShared > 0;
   let inspected;
   try {
     inspected = await inspectNamedPublicContactEvidence({
@@ -146,6 +146,12 @@ export async function verifyPersonSourceProposal(db, scope, {
       clock, url, evidence: null, errorCode: "PUBLIC_PAGE_INSPECTION_UNAVAILABLE",
       inspectionFailureReason: classifyPersonSourceInspectionFailure(error),
     });
+  }
+  // A shared URL needs document-scoped structural proof, not a generic
+  // one-person match produced by flattening a team page.
+  if (hasCollision && inspected.evidence?.sourceScoped !== true) {
+    return { status: 409, code: "SHARED_SOURCE_REQUIRES_REVIEW",
+      qualifiedEvidence: false, contactCreated: false, sendingEnabled: false };
   }
   return persistPersonSourceInspection(db, scope, job, observation, {
     clock, url, evidence: inspected.evidence,
@@ -204,7 +210,7 @@ async function persistPersonSourceInspection(db, scope, job, observation, {
         OR: [{ citationUrl: url }, { groundingResolvedUrl: url },
           { personSourceUrl: url }] },
     });
-    if (shared || observedShared) {
+    if ((shared || observedShared) && evidence?.sourceScoped !== true) {
       return { status: 409, code: "SHARED_SOURCE_REQUIRES_REVIEW" };
     }
     if (evidence && (
@@ -223,7 +229,9 @@ async function persistPersonSourceInspection(db, scope, job, observation, {
           personSourceUrl: null, candidateId: null, emailTriageLeaseToken: null },
         data: {
           personSourceUrl: url,
-          personSourceProvenance: linkedContact ? LINKED_CONTACT_PROVENANCE : PROOF,
+          personSourceProvenance: evidence.sourceScoped === true
+            ? SCOPED_SHARED_PROOF : linkedContact
+              ? LINKED_CONTACT_PROVENANCE : PROOF,
           personSourceVerifiedAt: clock,
           emailTriageStatus: "REVIEW_REQUIRED", emailTriageCode: REVIEW,
           emailTriageEmail: evidence.emailNormalized,

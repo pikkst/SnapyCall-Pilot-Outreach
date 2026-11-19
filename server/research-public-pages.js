@@ -5,7 +5,8 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { publicCitationUrl } from "./research-evidence.js";
-import { explicitJsonLdPersonEmail } from "./research-structured-person-evidence.js";
+import { explicitJsonLdPersonEmail, explicitJsonLdMultiPersonContacts }
+  from "./research-structured-person-evidence.js";
 
 // Bound complete document reads independently from robots policy reads.
 // Never promote partial responses to person/email evidence.
@@ -359,6 +360,8 @@ export async function retrieveCitedPublicPage(url, {
     ? linkedPublicContactUrl(canonical, page.body) : null;
   const structuredPerson = mediaType === "text/html"
     ? explicitJsonLdPersonEmail(page.body) : null;
+  const structuredContacts = mediaType === "text/html"
+    ? explicitJsonLdMultiPersonContacts(page.body) : null;
   const text = htmlText(page.body);
   // A fully downloaded large document may contain bounded useful evidence,
   // but never allow an oversized resulting evidence envelope downstream.
@@ -369,5 +372,6 @@ export async function retrieveCitedPublicPage(url, {
     url: canonical, text,
     ...(linkedContact ? { linkedContactUrl: linkedContact } : {}),
     ...(structuredPerson ? { structuredPerson } : {}),
+    ...(structuredContacts ? { structuredContacts } : {}),
   };
 }

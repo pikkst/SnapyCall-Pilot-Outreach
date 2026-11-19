@@ -10,6 +10,8 @@ import { isGoogleGroundingCitation } from "./research-grounding-location.js";
 
 const ID = /^c[a-z0-9]{10,40}$/;
 const redirectHost = "vertexaisearch.cloud.google.com";
+const SCOPED_SHARED_PROOF =
+  "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE";
 export function isDirectPublicProfileUrl(value) {
   const canonical = publicCitationUrl(value);
   if (!canonical) return null;
@@ -28,7 +30,8 @@ export function observationInspectionSource(observation) {
   // email label may override the original (possibly shared/opaque) citation.
   // An unverified AI URL proposal cannot satisfy this condition.
   if (["AI98_EXPLICIT_NAMED_EMAIL_ON_PUBLIC_PROFILE",
-        LINKED_CONTACT_PROVENANCE].includes(observation.personSourceProvenance) &&
+        LINKED_CONTACT_PROVENANCE, SCOPED_SHARED_PROOF].includes(
+          observation.personSourceProvenance) &&
       observation.emailTriageStatus === "REVIEW_REQUIRED" &&
       typeof observation.emailTriageDigest === "string" &&
       /^[a-f0-9]{64}$/.test(observation.emailTriageDigest) &&
@@ -84,7 +87,7 @@ export async function inspectCampaignObservationEmail(db, {
       OR: [{ citationUrl: url }, { groundingResolvedUrl: url },
         { personSourceUrl: url }] },
   });
-  if (others) {
+  if (others && observation.personSourceProvenance !== SCOPED_SHARED_PROOF) {
     return { status: 200, code: "SHARED_SOURCE_REQUIRES_REVIEW",
       contactCreated: false, emailChecked: false, sendingEnabled: false };
   }
@@ -123,6 +126,14 @@ export async function inspectCampaignObservationEmail(db, {
     return { status: 200, code: evidence.reason,
       contactCreated: false, emailChecked: true, sendingEnabled: false };
   }
+  // A shared source must be re-attributed to one uniquely named person in
+  // the newly fetched complete document; a stored provenance is insufficient.
+  if (observation.personSourceProvenance === SCOPED_SHARED_PROOF &&
+      (evidence.sourceScoped !== true ||
+       evidence.evidenceDigest !== observation.emailTriageDigest)) {
+    return { status: 200, code: "SHARED_SOURCE_EVIDENCE_CHANGED",
+      contactCreated: false, emailChecked: false, sendingEnabled: false };
+  }
   // External fetch can outlast a membership revocation. Check active auth
   // again before returning any person-associated address.
   const membership = await requireWorkspaceMembership(db, {
@@ -147,6 +158,10 @@ export async function inspectCampaignObservationEmail(db, {
   if (!current || current.name !== observation.name ||
       current.category !== observation.category ||
       current.citationUrl !== observation.citationUrl ||
+      (observation.personSourceProvenance === SCOPED_SHARED_PROOF &&
+        (current.personSourceProvenance !== SCOPED_SHARED_PROOF ||
+         current.emailTriageDigest !== observation.emailTriageDigest ||
+         evidence.evidenceDigest !== current.emailTriageDigest)) ||
       observationInspectionSource(current) !== url) {
     return { status: 409, code: "PROFILE_SOURCE_CHANGED",
       contactCreated: false, emailChecked: false, sendingEnabled: false };
@@ -156,8 +171,12 @@ export async function inspectCampaignObservationEmail(db, {
       OR: [{ citationUrl: url }, { groundingResolvedUrl: url },
         { personSourceUrl: url }] },
   });
-  if (conflicts) return { status: 200, code: "SHARED_SOURCE_REQUIRES_REVIEW",
-    contactCreated: false, emailChecked: false, sendingEnabled: false };
+  if (conflicts && !(current.personSourceProvenance === SCOPED_SHARED_PROOF &&
+      evidence.sourceScoped === true &&
+      evidence.evidenceDigest === current.emailTriageDigest)) {
+    return { status: 200, code: "SHARED_SOURCE_REQUIRES_REVIEW",
+      contactCreated: false, emailChecked: false, sendingEnabled: false };
+  }
   return { status: 200, code: "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED",
     name: observation.name, category: observation.category,
     observedEmail: evidence.emailNormalized, sourceUrl: evidence.profileUrl,

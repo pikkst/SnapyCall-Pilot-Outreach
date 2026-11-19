@@ -44,7 +44,9 @@ function personNodes(value) {
         node["@type"].some(t => typeof t === "string" && PERSON_TYPE.test(t))));
 }
 
-export function explicitJsonLdPersonEmail(html) {
+// Read the entire bounded JSON-LD document before selecting any person.
+// Never discard another identity or silently accept a truncated array/graph.
+function explicitPersonNodes(html) {
   if (typeof html !== "string" || Buffer.byteLength(html, "utf8") > 512 * 1024)
     return null;
   const people = [];
@@ -55,20 +57,49 @@ export function explicitJsonLdPersonEmail(html) {
     let data;
     try { data = JSON.parse(match[2]); }
     catch { return null; }
-    const roots = Array.isArray(data) ? data.slice(0, 20) : [data];
     if (Array.isArray(data) && data.length > 20) return null;
-    for (const root of roots) {
+    for (const root of Array.isArray(data) ? data : [data]) {
       const nodes = personNodes(root);
       if (nodes === null) return null;
       people.push(...nodes);
+      if (people.length > 20) return null;
     }
-    if (people.length > 1) return null;
   }
-  if (people.length !== 1) return null;
-  const person = people[0];
-  const name = normalizeName(person.name);
-  const email = normalizeEmail(person.email);
-  if (!name || !email || Array.isArray(person.name) ||
-      Array.isArray(person.email)) return null;
+  return people;
+}
+
+export function explicitJsonLdPersonEmail(html) {
+  const people = explicitPersonNodes(html);
+  if (!people || people.length !== 1) return null;
+  const name = normalizeName(people[0].name);
+  const email = normalizeEmail(people[0].email);
+  if (!name || !email || Array.isArray(people[0].name) ||
+      Array.isArray(people[0].email)) return null;
   return { name, email };
+}
+
+// Only complete, individually named Person records sharing one explicit
+// schema.org context qualify. No Organization-level address inheritance,
+// missing fields, duplicate names, duplicate mailboxes or inferred patterns.
+export function explicitJsonLdMultiPersonContacts(html) {
+  const people = explicitPersonNodes(html);
+  if (!people || people.length < 2 || people.length > 20) return null;
+  const names = new Set(), emails = new Set(), contacts = [];
+  for (const person of people) {
+    // A multi-typed Organization/Person node is not sufficiently specific
+    // to prove the mailbox belongs to an individual.
+    if (Array.isArray(person["@type"]) &&
+        (person["@type"].length !== 1 ||
+         !PERSON_TYPE.test(person["@type"][0]))) return null;
+    if (Array.isArray(person.name) || Array.isArray(person.email)) return null;
+    const name = normalizeName(person.name);
+    const email = normalizeEmail(person.email);
+    if (!name || !email) return null;
+    const nameKey = name.toLocaleLowerCase("en-US");
+    if (names.has(nameKey) || emails.has(email)) return null;
+    names.add(nameKey);
+    emails.add(email);
+    contacts.push({ name, email });
+  }
+  return contacts.sort((a, b) => a.name.localeCompare(b.name, "en-US"));
 }

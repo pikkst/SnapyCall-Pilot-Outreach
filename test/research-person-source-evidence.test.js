@@ -162,7 +162,9 @@ test("source collision is rejected before any page request", async () => {
     retrieve: f.retrieve, now: () => clock,
   });
   assert.equal(result.code, "SHARED_SOURCE_REQUIRES_REVIEW");
-  assert.equal(f.state.fetched, 0);
+  // Shared sources must now be fetched for structural classification, but a
+  // generic single-person text match still cannot bypass the collision guard.
+  assert.equal(f.state.fetched, 1);
   assert.deepEqual(f.events, []);
 });
 
@@ -348,4 +350,94 @@ test("conflicting schema.org Person name never persists a qualified observation"
   assert.equal(result.qualifiedEvidence, false);
   assert.equal(f.state.row.emailTriageEmail, null);
   assert.equal(f.state.job.status, "SOURCE_NOT_ATTRIBUTABLE");
+});
+
+test("shared source with separately named JSON-LD contacts persists only target proof", async () => {
+  const f = fixture({ shared: true });
+  const retrieve = async input => {
+    assert.equal(input, url);
+    f.state.fetched++;
+    return { url, text: "Professional team",
+      structuredContacts: [
+        { name: "Ada Lovelace", email: "ada@example.org" },
+        { name: "Grace Hopper", email: "grace@example.org" },
+      ] };
+  };
+  const result = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve, now: () => clock,
+  });
+  assert.equal(result.code, "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED");
+  assert.equal(result.qualifiedEvidence, true);
+  assert.equal(f.state.row.emailTriageEmail, "ada@example.org");
+  assert.equal(f.state.row.personSourceProvenance,
+    "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE");
+  assert.equal(f.state.job.status, "VERIFIED");
+  const readback = await inspectCampaignObservationEmail(f.db, {
+    campaignId: scope.campaignId, observationId: observation.id,
+    workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+  }, { retrieve });
+  assert.equal(readback.code, "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED");
+  assert.equal(readback.observedEmail, "ada@example.org");
+  assert.equal(readback.evidenceDigest, f.state.row.emailTriageDigest);
+  assert.equal(readback.contactCreated, false);
+  assert.equal(readback.sendingEnabled, false);
+});
+
+test("shared source proof is invalidated if another person's entry changes", async () => {
+  const f = fixture({ shared: true });
+  const first = async () => ({ url, text: "Professional team",
+    structuredContacts: [
+      { name: "Ada Lovelace", email: "ada@example.org" },
+      { name: "Grace Hopper", email: "grace@example.org" },
+    ] });
+  const verified = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve: first, now: () => clock,
+  });
+  assert.equal(verified.qualifiedEvidence, true);
+  const readback = await inspectCampaignObservationEmail(f.db, {
+    campaignId: scope.campaignId, observationId: observation.id,
+    workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+  }, { retrieve: async () => ({ url, text: "Professional team",
+    structuredContacts: [
+      { name: "Ada Lovelace", email: "ada@example.org" },
+      { name: "Grace Hopper", email: "new@example.org" },
+    ] }) });
+  assert.equal(readback.code, "SHARED_SOURCE_EVIDENCE_CHANGED");
+  assert.equal(readback.observedEmail, undefined);
+});
+
+test("revocation after reading a shared source prevents persistence", async () => {
+  const f = fixture({ shared: true, memberAfterFetch: false });
+  const result = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve: async () => ({ url, text: "Professional team",
+      structuredContacts: [
+        { name: "Ada Lovelace", email: "ada@example.org" },
+        { name: "Grace Hopper", email: "grace@example.org" },
+      ] }), now: () => clock,
+  });
+  assert.equal(result.code, "WORKSPACE_ACCESS_REVOKED");
+  assert.deepEqual(f.events, []);
+  assert.equal(f.state.row.emailTriageEmail, null);
+});
+
+test("shared source readback refuses a concurrent evidence digest change", async () => {
+  const f = fixture({ shared: true });
+  const contacts = [
+    { name: "Ada Lovelace", email: "ada@example.org" },
+    { name: "Grace Hopper", email: "grace@example.org" },
+  ];
+  const original = await verifyPersonSourceProposal(f.db, scope, {
+    retrieve: async () => ({ url, text: "Professional team",
+      structuredContacts: contacts }), now: () => clock,
+  });
+  assert.equal(original.qualifiedEvidence, true);
+  const readback = await inspectCampaignObservationEmail(f.db, {
+    campaignId: scope.campaignId, observationId: observation.id,
+    workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+  }, { retrieve: async () => {
+    f.state.row.emailTriageDigest = "f".repeat(64);
+    return { url, text: "Professional team", structuredContacts: contacts };
+  } });
+  assert.equal(readback.code, "SHARED_SOURCE_EVIDENCE_CHANGED");
+  assert.equal(readback.observedEmail, undefined);
 });

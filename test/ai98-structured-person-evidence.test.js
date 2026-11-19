@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { explicitJsonLdPersonEmail }
+import { explicitJsonLdPersonEmail, explicitJsonLdMultiPersonContacts }
   from "../server/research-structured-person-evidence.js";
 import { retrieveCitedPublicPage }
   from "../server/research-public-pages.js";
@@ -128,4 +128,86 @@ test("unchanged strict text classifier rejects unsupported metadata and guessing
     });
     assert.equal(proof.status, "UNVERIFIED");
   }
+});
+
+test("bounded multi-Person graph yields individually scoped review evidence", async () => {
+  const html = "<h2>Our team</h2>" + script({
+    "@context": "https://schema.org",
+    "@graph": [
+      { "@type": "Organization", name: "Example", email: "info@example.org" },
+      { "@type": "Person", name: "Ada Lovelace", email: "ada@example.org" },
+      { "@type": "Person", name: "Grace Hopper", email: "grace@example.org" },
+    ],
+  });
+  const page = await retrieveCitedPublicPage(url, {
+    resolve: async () => [{ address: "8.8.8.8", family: 4 }],
+    request: async input => String(input).endsWith("/robots.txt")
+      ? { status: 404, contentType: "text/plain", contentEncoding: "", body: "" }
+      : { status: 200, contentType: "text/html", contentEncoding: "", body: html },
+  });
+  assert.equal(page.structuredPerson, undefined);
+  assert.deepEqual(page.structuredContacts, [
+    { name: "Ada Lovelace", email: "ada@example.org" },
+    { name: "Grace Hopper", email: "grace@example.org" },
+  ]);
+  const proof = classifyExplicitPersonEmailPage(target, page);
+  assert.equal(proof.status, "REVIEW_REQUIRED");
+  assert.equal(proof.reason, "EXPLICIT_SCOPED_JSONLD_PERSON_EMAIL");
+  assert.equal(proof.sourceScoped, true);
+  assert.equal(proof.emailNormalized, "ada@example.org");
+  assert.equal(proof.usableAsContact, false);
+  assert.equal(proof.onboardingEligible, false);
+  const other = classifyExplicitPersonEmailPage({
+    ...target, name: "Grace Hopper",
+  }, page);
+  assert.equal(other.status, "REVIEW_REQUIRED");
+  assert.equal(other.emailNormalized, "grace@example.org");
+  assert.notEqual(other.evidenceDigest, proof.evidenceDigest);
+});
+
+test("multi-Person schema never promotes ambiguous, generic or duplicate contacts", () => {
+  const bad = [
+    [person("Ada Lovelace", "ada@example.org"),
+      person("Grace Hopper", "ada@example.org")],
+    [person("Ada Lovelace", "ada@example.org"),
+      person("Ada Lovelace", "other@example.org")],
+    [person("Ada Lovelace", "ada@example.org"),
+      person("Grace Hopper", "info@example.org")],
+    [person("Ada Lovelace", "ada@example.org"),
+      { ...person("Grace Hopper", "grace@example.org"),
+        "@type": ["Organization", "Person"] }],
+    [person("Ada Lovelace", "ada@example.org"),
+      { "@context": "https://schema.org", "@type": "Person", name: "Grace Hopper" }],
+  ];
+  for (const records of bad) {
+    const html = records.map(script).join("");
+    const contacts = explicitJsonLdMultiPersonContacts(html);
+    const proof = classifyExplicitPersonEmailPage(target, {
+      url, text: "Team biography", structuredContacts: contacts,
+    });
+    assert.equal(proof.status, "UNVERIFIED");
+  }
+});
+
+test("another named person's email cannot be attributed to the requested person", () => {
+  const contacts = explicitJsonLdMultiPersonContacts(
+    script(person("Grace Hopper", "grace@example.org")) +
+    script(person("John Smith", "john@example.org")));
+  const proof = classifyExplicitPersonEmailPage(target, {
+    url, text: "Team biography", structuredContacts: contacts,
+  });
+  assert.equal(proof.status, "UNVERIFIED");
+  assert.equal(proof.reason, "SHARED_PERSON_IDENTITY_MISSING");
+});
+
+test("explicit visible contradiction overrides multi-Person structured data", () => {
+  const contacts = explicitJsonLdMultiPersonContacts(
+    script(person("Ada Lovelace", "ada@example.org")) +
+    script(person("Grace Hopper", "grace@example.org")));
+  const proof = classifyExplicitPersonEmailPage(target, {
+    url, text: "Name: Ada Lovelace Email: other@example.org",
+    structuredContacts: contacts,
+  });
+  assert.equal(proof.status, "UNVERIFIED");
+  assert.equal(proof.reason, "SHARED_PERSON_BLOCKS_AMBIGUOUS");
 });

@@ -40,6 +40,61 @@ export function classifyExplicitPersonEmailPage(candidate, page) {
   // A second address makes the page ambiguous even when it is not a usable
   // personal mailbox itself.
   const emails = [...new Set([...text.matchAll(EMAIL)].map(m => m[0].toLowerCase()))];
+  // A shared source is attributable only if every schema.org Person on the
+  // complete document has a unique, explicitly published name and mailbox.
+  // The whole set is bound into the digest to invalidate changed team pages.
+  if (page.structuredContacts != null) {
+    const contacts = page.structuredContacts;
+    if (!Array.isArray(contacts) || contacts.length < 2 ||
+        contacts.length > 20 || page.structuredPerson != null) {
+      return { status: "UNVERIFIED", reason: "SHARED_PERSON_BLOCKS_AMBIGUOUS" };
+    }
+    const seenNames = new Set(), seenEmails = new Set();
+    let matched = null;
+    for (const person of contacts) {
+      const personName = typeof person?.name === "string"
+        ? person.name.normalize("NFKC").replace(/\s+/g, " ").trim() : "";
+      const personEmail = normalizedEmail(person?.email);
+      const key = personName.toLocaleLowerCase("en-US");
+      if (!personName || !personEmail || seenNames.has(key) ||
+          seenEmails.has(personEmail)) {
+        return { status: "UNVERIFIED", reason: "SHARED_PERSON_BLOCKS_AMBIGUOUS" };
+      }
+      seenNames.add(key);
+      seenEmails.add(personEmail);
+      if (key === name.toLocaleLowerCase("en-US")) matched = personEmail;
+    }
+    if (!matched || (priorEmail && priorEmail !== matched)) {
+      return { status: "UNVERIFIED", reason: "SHARED_PERSON_IDENTITY_MISSING" };
+    }
+    // Explicit text contradiction for the selected person prevents attributing
+    // a structured record, even if it has a syntactically valid email.
+    const targetLabel = new RegExp(
+      "(?:^|\\s)(?:Name|Full name|Expert):\\s*" + escaped(name) +
+      "(?=\\s|$)", "gi");
+    for (const label of text.matchAll(targetLabel)) {
+      const segment = text.slice(label.index + label[0].length, label.index +
+        label[0].length + 160);
+      const explicit = /(?:^|\s)(?:Email|E-mail):\s*([^\s]+)/i.exec(segment);
+      if (explicit && normalizedEmail(explicit[1]) !== matched) {
+        return { status: "UNVERIFIED", reason: "SHARED_PERSON_BLOCKS_AMBIGUOUS" };
+      }
+    }
+    const canonical = contacts.map(person => [
+      person.name.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase("en-US"),
+      person.email.toLowerCase(),
+    ]).sort((a, b) => a[0].localeCompare(b[0], "en-US"));
+    const digest = createHash("sha256").update(JSON.stringify([
+      "ai98-multi-person-jsonld-v1", url, name.toLocaleLowerCase("en-US"),
+      matched, canonical,
+    ])).digest("hex");
+    return {
+      status: "REVIEW_REQUIRED", reason: "EXPLICIT_SCOPED_JSONLD_PERSON_EMAIL",
+      emailNormalized: matched, profileUrl: url, evidenceDigest: digest,
+      sourceScoped: true, personEmailLinked: false, usableAsContact: false,
+      onboardingEligible: false,
+    };
+  }
   // A JSON-LD Person object is a published explicit name/email declaration,
   // not a guess derived from a domain. Accept it only when independently
   // parsed by the bounded HTTPS HTML reader and no visible mailbox conflicts.
