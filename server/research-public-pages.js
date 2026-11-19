@@ -112,13 +112,34 @@ function robotsPatternMatch(value, path) {
       (value.includes("$") && !value.endsWith("$"))) return null;
   const anchored = value.endsWith("$");
   const pattern = anchored ? value.slice(0, -1) : value;
-  // Escaped literals; only the RFC wildcard can match arbitrary characters.
-  const escaped = part => part.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&");
-  const expression = "^" + pattern.split("*").map(escaped).join(".*") +
-    (anchored ? "$" : "");
+  const parts = pattern.split("*");
+  // Deterministic substring matching avoids regex backtracking for untrusted
+  // policy patterns. Wildcards may match zero or more URI characters.
+  let at = parts[0].length;
+  if (!path.startsWith(parts[0])) {
+    return { matches: false, specificity: pattern.length - parts.length + 1 };
+  }
+  for (let i = 1; i < parts.length; i++) {
+    const fragment = parts[i];
+    if (i === parts.length - 1 && anchored) {
+      if (!path.endsWith(fragment) ||
+          path.length - fragment.length < at) {
+        return { matches: false,
+          specificity: pattern.length - parts.length + 1 };
+      }
+      at = path.length;
+    } else {
+      const next = path.indexOf(fragment, at);
+      if (next < 0) {
+        return { matches: false,
+          specificity: pattern.length - parts.length + 1 };
+      }
+      at = next + fragment.length;
+    }
+  }
   return {
-    matches: new RegExp(expression, "u").test(path),
-    specificity: [...pattern].filter(char => char !== "*").length,
+    matches: !anchored || at === path.length,
+    specificity: pattern.length - parts.length + 1,
   };
 }
 
