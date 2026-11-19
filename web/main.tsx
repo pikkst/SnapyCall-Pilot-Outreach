@@ -93,8 +93,16 @@ type ResearchDailyCapacity = {
   workspaceLimit: number; workspaceUsed: number;
   personalLimit: number; personalUsed: number; remaining: number;
 };
+type FullRunTiming = {
+  startedAt: string; finishedAt: string | null; currentStage: string | null;
+  stages: Array<{
+    key: string; label: string; startedAt: string | null;
+    finishedAt: string | null;
+  }>;
+};
 type CampaignRunApprovalState = {
   run: ApprovedCampaignRun | null; autonomousRunEnabled: boolean;
+  timing?: FullRunTiming | null; serverNow?: string; receivedAt?: number;
   fullRun: FullRunStatus | null; fullRunEnabled: boolean;
   fullRunMissingStages: string[];
   dailyQuota: ResearchDailyCapacity | null;
@@ -266,6 +274,20 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return result as T;
 }
 
+function elapsedRunClock(start: string, end: string | null, nowMs: number) {
+  const started = Date.parse(start);
+  const stopped = end ? Date.parse(end) : nowMs;
+  if (!Number.isFinite(started) || !Number.isFinite(stopped) ||
+      stopped < started) return "—";
+  const seconds = Math.floor((stopped - started) / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  return hours ? hours + "h " + String(minutes).padStart(2, "0") +
+    "m " + String(rest).padStart(2, "0") + "s"
+    : minutes + "m " + String(rest).padStart(2, "0") + "s";
+}
+
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [sessionConflict, setSessionConflict] = useState(false);
@@ -353,11 +375,22 @@ function App() {
   const [campaignRunApproval, setCampaignRunApproval] =
     useState<CampaignRunApprovalState | null>(null);
   const [campaignRunApprovalBusy, setCampaignRunApprovalBusy] = useState(false);
+  const [runTimerClock, setRunTimerClock] = useState(() => Date.now());
   const [campaignRunApprovalNotice, setCampaignRunApprovalNotice] = useState("");
   const [campaignMaxTasks, setCampaignMaxTasks] = useState(10);
   const [campaignSourceCalls, setCampaignSourceCalls] = useState(40);
   const [campaignNoReplayConfirmed, setCampaignNoReplayConfirmed] = useState(false);
   const [focusResearchDailyLimits, setFocusResearchDailyLimits] = useState(false);
+
+  // The browser only animates an already persisted server-side clock.
+  // A refresh or status poll must never reset a stage's start timestamp.
+  useEffect(() => {
+    if (!campaignRunApproval?.timing?.currentStage) return;
+    setRunTimerClock(Date.now());
+    const id = window.setInterval(() => setRunTimerClock(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [campaignRunApproval?.timing?.startedAt,
+    campaignRunApproval?.timing?.currentStage]);
 
   const [campaignProgressLastSeen, setCampaignProgressLastSeen] = useState<number | null>(null);
   const [campaignProgressLiveWarning, setCampaignProgressLiveWarning] = useState(false);
@@ -924,7 +957,7 @@ function App() {
         encodeURIComponent(workspaceId));
       if (generation === workspaceRequest.current &&
           request === campaignProgressRequest.current) {
-        setCampaignRunApproval(result);
+        setCampaignRunApproval({ ...result, receivedAt: Date.now() });
       }
     } catch {
       if (generation === workspaceRequest.current &&
@@ -2627,6 +2660,46 @@ function App() {
                               <span className="research-running-indicator"
                                 aria-hidden="true"/>}
                           </div>
+                          {campaignRunApproval?.timing && (() => {
+                            const timeline = campaignRunApproval.timing;
+                            const offset = campaignRunApproval.serverNow &&
+                              campaignRunApproval.receivedAt
+                              ? Date.parse(campaignRunApproval.serverNow) -
+                                campaignRunApproval.receivedAt : 0;
+                            const nowMs = runTimerClock + (Number.isFinite(offset) ? offset : 0);
+                            return <section className="research-run-timers"
+                              aria-label="Research pipeline timers">
+                              <div className="research-timer-total">
+                                <span>Total run duration</span>
+                                <strong aria-label="Total run elapsed time">
+                                  {elapsedRunClock(timeline.startedAt, timeline.finishedAt, nowMs)}
+                                </strong>
+                              </div>
+                              <div className="research-timer-stages">
+                                {timeline.stages.map(stage => {
+                                  const active = timeline.currentStage === stage.key;
+                                  const complete = !!stage.finishedAt;
+                                  return <div key={stage.key}
+                                    className={"research-timer-stage" +
+                                      (active ? " active" : complete ? " complete" : "")}>
+                                    <span>{stage.label}</span>
+                                    <span className="research-timer-value">
+                                      {stage.startedAt
+                                        ? elapsedRunClock(stage.startedAt,
+                                          stage.finishedAt, nowMs)
+                                        : "Not started"}
+                                      {active && <span className="research-timer-running">
+                                        {" "}· Running</span>}
+                                    </span>
+                                  </div>;
+                                })}
+                              </div>
+                              <p className="muted research-timer-note">
+                                Measured from saved server timestamps. Running times
+                                update live; no completion estimate is implied.
+                              </p>
+                            </section>;
+                          })()}
                           {campaignRunApproval?.run &&
                             ["APPROVED", "RUNNING"].includes(campaignRunApproval.run.status) &&
                             <div className="research-run-activity" role="status"

@@ -231,3 +231,16 @@ td button+button{margin-left:6px}
 .qualified-contact-list li:last-child{border-bottom:0}
 .qualified-contact-list a{overflow-wrap:anywhere}
 @media(max-width:640px){.qualified-contact-list li{display:grid;gap:4px}.qualified-contact-review button{width:100%}}
+
+/* One compact timer panel inside the existing full-run window. */
+.research-run-timers{margin:12px 0;padding:12px 14px;border:1px solid #d7e1f1;border-radius:12px;background:#f8fbff}
+.research-timer-total{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:14px}
+.research-timer-total strong{font-size:20px;letter-spacing:.01em;font-variant-numeric:tabular-nums;white-space:nowrap}
+.research-timer-stages{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:11px}
+.research-timer-stage{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 9px;border-radius:8px;background:#fff;border:1px solid #e6eaf0;font-size:12px}
+.research-timer-stage.active{border-color:#5c7add;background:#eef3ff}
+.research-timer-stage.complete{border-color:#b4d8c2}
+.research-timer-value{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600}
+.research-timer-running{color:#2446db;font-weight:500}
+.research-timer-note{font-size:11px;margin:8px 0 0}
+@media(max-width:680px){.research-timer-stages{grid-template-columns:1fr}.research-timer-total strong{font-size:18px}}
