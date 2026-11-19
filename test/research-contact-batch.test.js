@@ -203,3 +203,34 @@ test("mismatched full-run ownership blocks approval without modifying contacts",
   assert.equal(result.code, "FULL_RUN_SCOPE_MISMATCH");
   assert.deepEqual(f.calls, []);
 });
+
+test("manifest retains distinct independently scoped emails on one public team page", () => {
+  const url = "https://example.org/team";
+  const shared = rows.map((row, i) => ({ ...row,
+    citationUrl: url, personSourceUrl: url,
+    personSourceProvenance: "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE",
+    personSourceVerifiedAt: new Date("2026-11-19T12:00:00Z"),
+    emailTriageDigest: (i ? "b" : "a").repeat(64),
+  }));
+  const a = buildQualifiedContactManifest(shared);
+  const b = buildQualifiedContactManifest([...shared].reverse());
+  assert.equal(a.totalQualified, 2);
+  assert.equal(a.selectedCount, 2);
+  assert.equal(a.manifestHash, b.manifestHash);
+  assert.equal(a.sendingEnabled, false);
+  assert.equal(buildQualifiedContactManifest([
+    shared[0], { ...shared[1], emailTriageEmail: shared[0].emailTriageEmail },
+  ]).selectedCount, 0);
+});
+
+test("a shared URL cannot enter the batch without intact scoped provenance", () => {
+  const url = "https://example.org/team";
+  const a = { ...rows[0], citationUrl: url, personSourceUrl: url,
+    personSourceProvenance: "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE",
+    personSourceVerifiedAt: new Date("2026-11-19T12:00:00Z") };
+  const b = { ...rows[1], citationUrl: url };
+  const result = buildQualifiedContactManifest([a, b]);
+  assert.equal(result.totalQualified, 1);
+  assert.equal(result.selectedCount, 1);
+  assert.equal(result.entries[0].observationId, a.id);
+});
