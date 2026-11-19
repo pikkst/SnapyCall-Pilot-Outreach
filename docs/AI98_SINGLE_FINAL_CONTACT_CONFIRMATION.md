@@ -50,6 +50,12 @@ one-click UX goal.
   model still cannot manufacture an address or certify identity: the
   independent page reader and exact person/email classifier remain the sole
   evidence acceptance path.
+- The public-page reader now preserves literal `mailto:` anchors even
+  when the visible link text is the **exact same email address**, not just
+  `Email` or `E-mail`. Mismatched label/href addresses, generic links,
+  scripts and `data-href` are not promoted. This broadens legitimate
+  public person-email evidence without changing the independent exact-name
+  check or the human review gate.
 - The strict public HTML reader's byte cap is raised from 64 KiB to 128 KiB
   because real source inspections hit `PUBLIC_PAGE_TOO_LARGE`. Responses are
   still bounded by declared content-length and streamed byte count. All DNS
@@ -66,3 +72,25 @@ validation contract is introduced. The already-stopped campaigns are untouched.
 The next quality iteration is bounded discovery of independently attributable
 official contact pages, plus measured verified-email yield. It requires
 separate evidence/approval contracts rather than unchecked crawling.
+
+## Bounded live-test execution boundary
+
+The existing app already exposes authorized, owner-scoped billable
+research actions guarded by BYOK, quotas, price envelope, a monetary
+reservation ledger and immutable campaign/run approvals. Do not add a
+test-only API or invoke provider APIs outside that backend.
+
+The account owner's permission to make a few paid test calls does not
+convey an authenticated session to GitHub, Render or Neon connectors.
+Those connectors permit code and database read-only diagnostics but
+do not expose an authenticated POST execution channel for the app.
+Therefore **no real provider call was dispatched during this change**.
+
+When a trusted authenticated backend execution channel is available,
+perform a fresh, bounded 1–2-request probe against the approved
+pipeline, verifying: returned exact person citations, independent
+inspectable source, publicly labeled named email, duplicate exclusions,
+app ledger settled balance and provider billing evidence. Record
+reservation ceiling *before* paid dispatch, never retry an uncertain
+provider call, and preserve STOPPED campaigns and sendingDisabled.
+Do not equate monetary reservations with actual upstream invoices.
