@@ -100,7 +100,12 @@ type FullRunTiming = {
     finishedAt: string | null;
   }>;
 };
+type StageWorkMetric = {
+  completed: number; total: number; unit: string;
+  currentCycle?: number | null; cyclesCreated?: number;
+};
 type CampaignRunApprovalState = {
+  stageProgress?: Record<string, StageWorkMetric> | null;
   run: ApprovedCampaignRun | null; autonomousRunEnabled: boolean;
   timing?: FullRunTiming | null; serverNow?: string; receivedAt?: number;
   fullRun: FullRunStatus | null; fullRunEnabled: boolean;
@@ -2701,24 +2706,57 @@ function App() {
                                 {timeline.stages.map(stage => {
                                   const active = timeline.currentStage === stage.key;
                                   const complete = !!stage.finishedAt;
+                                  const metric = campaignRunApproval?.stageProgress?.[stage.key];
+                                  // Work counters express actual processed items or
+                                  // consumed call allowance, never estimated time left.
+                                  const workPercent = metric && metric.total > 0
+                                    ? Math.round(100 * Math.min(metric.completed,
+                                        metric.total) / metric.total) : 0;
                                   return <div key={stage.key}
                                     className={"research-timer-stage" +
                                       (active ? " active" : complete ? " complete" : "")}>
-                                    <span>{stage.label}</span>
-                                    <span className="research-timer-value">
-                                      {stage.startedAt
-                                        ? elapsedRunClock(stage.startedAt,
-                                          stage.finishedAt, nowMs)
-                                        : "Not started"}
-                                      {active && <span className="research-timer-running">
-                                        {" "}· Running</span>}
-                                    </span>
+                                    <div className="research-timer-stage-header">
+                                      <span>{stage.label}</span>
+                                      <span className="research-timer-value">
+                                        {stage.startedAt
+                                          ? elapsedRunClock(stage.startedAt,
+                                            stage.finishedAt, nowMs)
+                                          : "Not started"}
+                                        {active && <span className="research-timer-running">
+                                          {" "}· Running</span>}
+                                      </span>
+                                    </div>
+                                    {metric && <div className="research-stage-work">
+                                      <div className="research-stage-work-label">
+                                        <span>{metric.completed} / {metric.total} {metric.unit}</span>
+                                        <span>{complete ? "Stage complete" :
+                                          stage.startedAt && metric.total > 0
+                                            ? workPercent + "% of planned work" :
+                                            "Not started"}</span>
+                                      </div>
+                                      <div className="research-stage-work-track"
+                                        role="progressbar"
+                                        aria-label={stage.label + " work progress"}
+                                        aria-valuemin={0} aria-valuemax={metric.total || 1}
+                                        aria-valuenow={metric.completed}
+                                        aria-valuetext={metric.completed + " of " +
+                                          metric.total + " " + metric.unit}>
+                                        <div className="research-stage-work-fill"
+                                          style={{ width: (complete ? 100 : workPercent) + "%" }}/>
+                                      </div>
+                                      {stage.key === "SOURCE_RUNNING" &&
+                                        (metric.cyclesCreated ?? 0) > 0 &&
+                                        <span className="research-stage-work-cycle">
+                                          Source continuation cycles: {metric.cyclesCreated}
+                                        </span>}
+                                    </div>}
                                   </div>;
                                 })}
                               </div>
                               <p className="muted research-timer-note">
-                                Measured from saved server timestamps. Running times
-                                update live; no completion estimate is implied.
+                                Timers use saved timestamps and work bars use
+                                persisted server counters; no completion estimate is implied.
+                                Search bars show approved call usage, not remaining time.
                               </p>
                             </section>;
                           })()}
@@ -3185,15 +3223,16 @@ function App() {
                           data-state={campaignGrounding.status}
                           aria-label="Google source resolution agent">
                           <div className="campaign-stage-header">
-                            <strong>Source resolution agent</strong>
+                            <strong>Source resolution agent (optional Google redirect only)</strong>
                             <span className="campaign-stage-state">
                               {campaignGrounding.status.replaceAll("_", " ")}
                             </span>
                           </div>
-                          <p className="muted">Checks only the Google grounding
-                            redirect header, not the destination website.
-                            A resolved link is an unverified source hint, not
-                            a confirmed profile or email contact.</p>
+                          <p className="muted">Separate optional Google
+                            redirect-header check. This is not the paid
+                            Source enrichment stage shown above.
+                            A resolved link is an unverified source hint,
+                            not person-email evidence.</p>
                           <p role="status">
                             <strong>{campaignGrounding.sourceHints}</strong> source hints ·
                             {" "}{campaignGrounding.unresolved} unresolved ·
@@ -3323,8 +3362,9 @@ function App() {
                               attempted source will not be retried automatically.</p>}
                           {campaignTriageNotice && <p role="status">{campaignTriageNotice}</p>}
                         </section>}
-                        <section className="campaign-stage-timeline"
-                          aria-label="Live campaign stages">
+                        {!campaignRunApproval?.fullRun &&
+                          <section className="campaign-stage-timeline"
+                            aria-label="Legacy discovery campaign stages">
                           <div className="campaign-stage-header">
                             <strong>Agent pipeline</strong>
                             <small>{campaignProgressLastSeen
@@ -3352,8 +3392,7 @@ function App() {
                                 </div>
                               </li>)}
                           </ol>
-                        </section>
-                        
+                          </section>}
 
                         {campaignRunApproval?.run && <section
                           className="campaign-approved-run" aria-label="Approved campaign automation">
@@ -3419,8 +3458,9 @@ function App() {
                             No people or emails were accepted from them.
                             Application spend remains conservative, not the provider invoice.
                           </p>}
-                        <p className="muted">Next step: {campaignProgress.action}.
-                          No email checks or messages were sent by this view.</p>
+                        {!campaignRunApproval?.fullRun &&
+                          <p className="muted">Discovery next step: {campaignProgress.action}.
+                            No email checks or messages were sent by this view.</p>}
                         {campaignProgress.pausedTaskReview?.length === 1 &&
                           campaignProgress.tasks.running === 0 && <>
                             <p role="alert">Task #{campaignProgress.pausedTaskReview[0].taskIndex + 1}
