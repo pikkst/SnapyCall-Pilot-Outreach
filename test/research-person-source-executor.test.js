@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { claimPersonSourceJob, proposedPersonSource, personSourceSearchQuery,
-  PersonSourceExecutionBlocked } from "../server/research-person-source-executor.js";
+  selectNextPersonSourceJob, PersonSourceExecutionBlocked }
+  from "../server/research-person-source-executor.js";
 import { personSourceFingerprint } from "../server/research-person-source-queue.js";
 import { personSourceJobSnapshot } from "../server/research-person-source-approval.js";
 import { requireResearchPriceEnvelope } from "../server/research-price-policy.js";
@@ -263,4 +264,43 @@ test("stopped full-run prevents any new continuation charge", async () => {
   const result = await claimPersonSourceJob(f.db, scope, { now: clock });
   assert.equal(result.code, "SOURCE_CONTINUATION_NOT_ACTIVE");
   assert.deepEqual(f.events, []);
+});
+
+test("source queue prioritizes previously inspectable person sources over shared directory citations", () => {
+  const make = (observationId, reason, status = "QUEUED", attempts = 0) =>
+    ({ observationId, reason, status, attempts });
+  const jobs = [
+    make("c000000000000000000000010", "SHARED_SOURCE"),
+    make("c000000000000000000000020", "PERSON_SOURCE_REQUIRED"),
+    make("c000000000000000000000030", "ALTERNATE_EMAIL_SOURCE"),
+    make("c000000000000000000000040", "SHARED_SOURCE"),
+    make("c000000000000000000000005", "ALTERNATE_EMAIL_SOURCE",
+      "SOURCE_UNAVAILABLE", 1),
+  ];
+  assert.equal(selectNextPersonSourceJob(jobs).observationId,
+    "c000000000000000000000030");
+  jobs[2].attempts = 1;
+  assert.equal(selectNextPersonSourceJob(jobs).observationId,
+    "c000000000000000000000020");
+  jobs[1].status = "SOURCE_UNAVAILABLE";
+  assert.equal(selectNextPersonSourceJob(jobs).observationId,
+    "c000000000000000000000010");
+  assert.deepEqual(jobs.map(x => x.reason), [
+    "SHARED_SOURCE", "PERSON_SOURCE_REQUIRED", "ALTERNATE_EMAIL_SOURCE",
+    "SHARED_SOURCE", "ALTERNATE_EMAIL_SOURCE",
+  ], "selection must not mutate the immutable snapshot order");
+});
+
+test("source queue excludes billed attempts, preserves stable ordering, and fails closed on invalid size", () => {
+  const a = { observationId: "ca", status: "QUEUED",
+    reason: "SHARED_SOURCE", attempts: 0 };
+  const b = { observationId: "cb", status: "QUEUED",
+    reason: "SHARED_SOURCE", attempts: 1 };
+  const c = { observationId: "cc", status: "QUEUED",
+    reason: "SHARED_SOURCE", attempts: 0 };
+  assert.equal(selectNextPersonSourceJob([c, a, b]), a);
+  assert.equal(selectNextPersonSourceJob([b]), null);
+  assert.equal(selectNextPersonSourceJob([]), null);
+  assert.throws(() => selectNextPersonSourceJob(Array(251).fill(a)),
+    TypeError);
 });
