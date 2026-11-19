@@ -16,13 +16,23 @@ function normalizeName(value) {
 }
 function normalizeEmail(value) {
   if (typeof value !== "string" || value.length > 254) return null;
-  const email = value.startsWith("mailto:") ? value.slice(7) : value;
+  const email = /^mailto:/i.test(value) ? value.slice(7) : value;
   return EMAIL.test(email) ? email.toLowerCase() : null;
+}
+function schemaContext(value) {
+  const context = value?.["@context"];
+  if (typeof context === "string")
+    return /^https?:\/\/schema\.org\/?$/i.test(context);
+  if (Array.isArray(context))
+    return context.some(item => typeof item === "string" &&
+      /^https?:\/\/schema\.org\/?$/i.test(item));
+  return false;
 }
 function personNodes(value) {
   // Parse root or a bounded graph only; never recursively traverse arbitrary
   // embedded objects or promote an Organization's email into Person evidence.
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  if (!schemaContext(value)) return [];
   const graph = Array.isArray(value["@graph"]) ? value["@graph"] : [];
   return [value, ...graph.slice(0, 20)].filter(node => node &&
     typeof node === "object" && !Array.isArray(node) &&
