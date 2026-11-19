@@ -2890,7 +2890,8 @@ function App() {
                                   "Confirm contact list"}
                               </button>
                             </>}
-                            {!qualifiedManifest.batchEnabled &&
+                            {qualifiedManifest.selectedCount > 0 &&
+                              !qualifiedManifest.batchEnabled &&
                               <p className="muted">Batch contact saving is not
                                 enabled in this environment.</p>}
                           </>}
@@ -2928,7 +2929,10 @@ function App() {
                           </p>}
                         
                         
+                        {/* Discovery-only status text must not override the
+                            terminal full-run result and verified-email list. */}
                         {campaignRunApproval?.run &&
+                          !campaignRunApproval.fullRun &&
                           (campaignRunApproval.run.status === "PAUSED" ||
                             campaignRunApproval.run.status === "COMPLETED") &&
                           (campaignRunApproval.run.status === "PAUSED" ||
