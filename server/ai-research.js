@@ -151,6 +151,7 @@ export async function researchCandidates({ query, limit = 10, provider = "anthro
 // This function does not grant price entitlement and is not an API endpoint.
 export async function researchTavilyGeminiCandidates({
   query, limit, model, apiKey, tavilyApiKey, maxInputTokens, maxResults,
+  sourceSubject = null,
 }, { tavilyPost = trustedResearchPost, geminiPost = trustedResearchPost,
   observedAt = () => new Date().toISOString() } = {}) {
   const input = researchInput.parse({ query, limit });
@@ -165,7 +166,7 @@ export async function researchTavilyGeminiCandidates({
     return await runBoundedTavilyGemini3Stages({
       query: input.query, limit: input.limit, maxResults, model,
       observedAt: observedAt(), tavilyApiKey, geminiApiKey: apiKey,
-      maxInputTokens,
+      maxInputTokens, sourceSubject,
     }, { tavilyPost, geminiPost, signal: controller.signal });
   } finally {
     clearTimeout(timeout);

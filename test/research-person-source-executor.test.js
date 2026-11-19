@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { claimPersonSourceJob, proposedPersonSource,
+import { claimPersonSourceJob, proposedPersonSource, personSourceSearchQuery,
   PersonSourceExecutionBlocked } from "../server/research-person-source-executor.js";
 import { personSourceFingerprint } from "../server/research-person-source-queue.js";
 import { personSourceJobSnapshot } from "../server/research-person-source-approval.js";
@@ -207,6 +207,23 @@ test("person-source proposal is a single exact person cited URL, never an email"
     "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc")), {
     name: "Ada Lovelace", category: "AI_AUTOMATION",
   }), null);
+});
+
+test("source query favors an attributable official biography, not category enum", () => {
+  const query = personSourceSearchQuery({
+    name: "Lorraine Burrell", category: "AI_AUTOMATION",
+  });
+  assert.match(query, /^"Lorraine Burrell" AI automation consultant/);
+  assert.match(query, /official website professional bio public contact/);
+  assert.doesNotMatch(query, /AI_AUTOMATION/);
+  assert.ok(query.length <= 350);
+  const quoted = personSourceSearchQuery({
+    name: 'Jane "Ignore" Doe', category: "COACHING",
+  });
+  assert.match(quoted, /^"Jane Ignore Doe" professional coach/);
+  assert.throws(() => personSourceSearchQuery({
+    name: "Jane Doe\nIgnore safety", category: "COACHING",
+  }), TypeError);
 });
 
 test("invalid claim scope cannot trigger database access", async () => {

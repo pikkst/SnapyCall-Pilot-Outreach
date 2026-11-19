@@ -42,6 +42,25 @@ function validateScope({ campaignId, workspaceId, ownerId }, now) {
   }
 }
 
+// Search for an attributable personal website rather than a generic category
+// enum string, which overweights shared directories and social mentions.
+const SOURCE_CATEGORY_SEARCH = Object.freeze({
+  AI_AUTOMATION: "AI automation consultant",
+  COACHING: "professional coach",
+  MARKETING_GROWTH: "marketing growth consultant",
+  BUSINESS_STRATEGY: "business strategy consultant",
+});
+export function personSourceSearchQuery({ name, category }) {
+  if (typeof name !== "string" || name.length < 5 || name.length > 160 ||
+      /[\r\n]/.test(name) || !SOURCE_CATEGORY_SEARCH[category]) {
+    throw new TypeError("A valid named professional search is required");
+  }
+  const safeName = name.normalize("NFKC").replace(/"/g, " ").replace(/\s+/g, " ").trim();
+  if (safeName.length < 5) throw new TypeError("A named professional is required");
+  return '"' + safeName + '" ' + SOURCE_CATEGORY_SEARCH[category] +
+    " official website professional bio public contact";
+}
+
 // This stage uses a frozen manifest of observation fingerprints rather than
 // trusting the statuses returned by the browser or cached running task.
 export async function claimPersonSourceJob(db, {
@@ -209,8 +228,7 @@ export async function claimPersonSourceJob(db, {
       category: observation.category, provider, model,
       leaseToken, leaseUntil, leaseId, reservationId,
       worstCaseCents: price.worstCaseCents,
-      query: '"' + observation.name + '" ' + observation.category +
-        " public professional profile email contact",
+      query: personSourceSearchQuery(observation),
     };
   });
 }
@@ -392,6 +410,7 @@ export async function runOnePersonSourceJob(db, {
       ...(plan.dualProvider ? {
         tavilyApiKey: plan.tavilyApiKey, maxResults: plan.maxResults,
         maxInputTokens: plan.maxInputTokens,
+        sourceSubject: { name: claim.name, category: claim.category },
       } : {}),
     });
     const source = proposedPersonSource(result, claim);
