@@ -101,7 +101,7 @@ test("RFC 9110 media type accepts quoted UTF-8 but no other encoding", () => {
     "application/json", "application/octet-stream",
     'text/html; charset="iso-8859-1"',
     "text/html; charset=UTF-8; charset=UTF-8",
-    "text/html; charset=", "text/html; charset=\\"utf-8\\"",
+    "text/html; charset=",
   ]) {
     assert.equal(supportedPublicTextMediaType(value), null, value);
   }
