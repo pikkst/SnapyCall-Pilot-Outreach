@@ -19,7 +19,8 @@ import { researchCandidates, researchInput, ResearchProviderHttpError, ResearchP
 import { GEMINI3_TEST_MODEL, GEMINI3_TEST_RESERVE_CENTS, GEMINI3_TEST_ACTION,
   GEMINI3_TEST_CONFIRMATION, summarizeGemini3TestResponse } from "./gemini3-one-shot.js";
 import { planResearchCampaign } from "./research-campaign-planner.js";
-import { summarizeCampaignProgress } from "./research-campaign-observations.js";
+import { summarizeCampaignProgress, campaignFindingsQuerySchema }
+  from "./research-campaign-observations.js";
 import { runOneCampaignTask, ResearchWorkerPreflightError } from "./research-campaign-worker.js";
 import { approvePersonSourceResearch } from "./research-person-source-approval.js";
 import { enqueuePersonSourceJobs } from "./research-person-source-queue.js";
@@ -1746,9 +1747,11 @@ app.get("/api/research-campaigns/:id/observations", candidateReadScope,
     }
     const identity = await partnerIdentity(req);
     if (!identity) return res.status(401).json({ error: "Unauthorized" });
-    const cursor = z.object({
-      after: z.string().regex(/^c[a-z0-9]{10,40}$/).optional(),
-    }).strict().parse(req.query).after;
+    const query = campaignFindingsQuerySchema.parse(req.query);
+    if (query.workspaceId !== req.candidateScope) {
+      return res.status(403).json({ code: "WORKSPACE_SCOPE_MISMATCH" });
+    }
+    const cursor = query.after;
     const campaign = await prisma.researchCampaign.findFirst({
       where: { id: req.params.id, workspaceId: req.candidateScope,
         ownerId: identity.id },
