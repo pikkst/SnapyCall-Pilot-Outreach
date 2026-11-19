@@ -221,7 +221,7 @@ test("source query focuses on exact-person public contact evidence, not category
   const query = personSourceSearchQuery({
     name: "Lorraine Burrell", category: "AI_AUTOMATION",
   });
-  assert.match(query, /^"Lorraine Burrell" AI automation consultant/);
+  assert.match(query, /^"Lorraine Burrell" email contact AI automation consultant official$/);
   assert.match(query, /email contact AI automation consultant official/);
   assert.doesNotMatch(query, /AI_AUTOMATION/);
   assert.equal((query.match(/email/g) ?? []).length, 1);
