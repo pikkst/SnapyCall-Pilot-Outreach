@@ -179,10 +179,10 @@ export function linkedPublicContactUrl(sourceUrl, html) {
   if (!source || typeof html !== "string" ||
       Buffer.byteLength(html, "utf8") > MAX_BYTES) return null;
   const withoutScripts = html.replace(
-    /<(?:script|style|noscript)\\b[^>]*>[\\s\\S]*?<\\/\\s*(?:script|style|noscript)\\s*>/gi, " ");
+    /<(?:script|style|noscript)\b[^>]*>[\s\S]*?<\/\s*(?:script|style|noscript)\s*>/gi, " ");
   const found = new Set();
   const anchors = withoutScripts.matchAll(
-    /<a\\b[^>]{0,1024}\\bhref\\s*=\\s*(["'])([^"'<>]{1,2048})\\1[^>]*>([^<>]{1,80})<\\/a\\s*>/gi);
+    /<a\b[^>]{0,1024}\bhref\s*=\s*(["'])([^"'<>]{1,2048})\1[^>]*>([^<>]{1,80})<\/a\s*>/gi);
   for (const match of anchors) {
     if (!/^(?:contact|contact me|contact us|get in touch)$/i.test(match[3].trim())) continue;
     let resolved;
@@ -191,7 +191,7 @@ export function linkedPublicContactUrl(sourceUrl, html) {
     const allowed = publicCitationUrl(resolved.href);
     if (!allowed || resolved.hostname !== new URL(source).hostname ||
         resolved.search || resolved.username || resolved.password ||
-        !/\\/(?:contact|contact-me|get-in-touch)\\/?$/i.test(resolved.pathname) ||
+        !/\/(?:contact|contact-me|get-in-touch)\/?$/i.test(resolved.pathname) ||
         allowed === source) continue;
     found.add(allowed);
     if (found.size > 1) return null;
