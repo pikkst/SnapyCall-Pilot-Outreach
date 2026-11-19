@@ -78,25 +78,29 @@ export function startApprovedCampaignWorker(db, {
 } = {}) {
   if (!Number.isInteger(intervalMs) || intervalMs < 5000 ||
       intervalMs > 60000) throw new TypeError("Invalid worker interval");
-  let busy = false;
   let stopped = false;
+  let activeTick = null;
+  // A timer callback may already be inside a paid provider call when Render
+  // sends SIGTERM. Stop admitting new work, but allow the current promise to
+  // settle its existing reservation and fenced task before disconnecting DB.
   async function tick() {
-    if (stopped || busy) return;
-    busy = true;
+    if (stopped || activeTick) return;
+    const work = tickApprovedCampaignRun(db, { encryptionKey });
+    activeTick = work;
     try {
-      await tickApprovedCampaignRun(db, { encryptionKey });
+      await work;
     } catch {
-      // Fail closed. One process log line is intentionally sanitized.
+      // Provider uncertainty remains in the existing no-replay path.
       console.warn("[research-run] Worker tick failed; no automatic provider retry");
     } finally {
-      busy = false;
+      if (activeTick === work) activeTick = null;
     }
   }
   const interval = setInterval(() => { void tick(); }, intervalMs);
-  // Intentionally no immediate paid call during startup. The next timer tick
-  // rehydrates persisted approval and runs after the server is fully online.
+  // Intentionally no immediate paid call during startup.
   return () => {
     stopped = true;
     clearInterval(interval);
+    return activeTick ?? Promise.resolve();
   };
 }
