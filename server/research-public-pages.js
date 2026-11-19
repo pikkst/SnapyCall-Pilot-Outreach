@@ -103,10 +103,49 @@ function pinnedHttps(url, address, timeoutMs = TIMEOUT_MS) {
   });
 }
 
-// Robots exclusion is deliberately conservative: missing robots.txt (404)
-// allows public content, while network/parse errors and unavailable policy block.
+// Follow RFC 9309's longest-match rule (including '*' and terminal '$').
+// Rules for other agents never block this crawler. Unknown directives are
+// ignored. Robots retrieval/authorization remains in the HTTPS reader.
+function robotsPatternMatch(value, path) {
+  if (!value || !value.startsWith("/") || value.length > 2048 ||
+      /[\r\n\x00-\x1f]/.test(value) ||
+      (value.includes("$") && !value.endsWith("$"))) return null;
+  const anchored = value.endsWith("$");
+  const pattern = anchored ? value.slice(0, -1) : value;
+  const parts = pattern.split("*");
+  // Deterministic substring matching avoids regex backtracking for untrusted
+  // policy patterns. Wildcards may match zero or more URI characters.
+  let at = parts[0].length;
+  if (!path.startsWith(parts[0])) {
+    return { matches: false, specificity: pattern.length - parts.length + 1 };
+  }
+  for (let i = 1; i < parts.length; i++) {
+    const fragment = parts[i];
+    if (i === parts.length - 1 && anchored) {
+      if (!path.endsWith(fragment) ||
+          path.length - fragment.length < at) {
+        return { matches: false,
+          specificity: pattern.length - parts.length + 1 };
+      }
+      at = path.length;
+    } else {
+      const next = path.indexOf(fragment, at);
+      if (next < 0) {
+        return { matches: false,
+          specificity: pattern.length - parts.length + 1 };
+      }
+      at = next + fragment.length;
+    }
+  }
+  return {
+    matches: !anchored || at === path.length,
+    specificity: pattern.length - parts.length + 1,
+  };
+}
+
 export function robotsAllows(text, pathname) {
-  if (typeof text !== "string" || text.length > MAX_BYTES ||
+  if (typeof text !== "string" ||
+      Buffer.byteLength(text, "utf8") > MAX_BYTES ||
       typeof pathname !== "string" || !pathname.startsWith("/")) return false;
   const groups = [];
   let agents = [], rules = [], hadRule = false;
@@ -121,26 +160,33 @@ export function robotsAllows(text, pathname) {
     if (!match) continue;
     const directive = match[1].toLowerCase();
     const value = match[2].trim();
-    // Unsupported robots pattern operators cannot be interpreted safely.
-    if ((directive === "disallow" || directive === "allow") && /[*$]/.test(value)) {
-      return false;
-    }
     if (directive === "user-agent") {
       if (hadRule) flush();
       agents.push(value.toLowerCase());
-    } else if ((directive === "disallow" || directive === "allow") && agents.length) {
+    } else if ((directive === "disallow" || directive === "allow") &&
+        agents.length) {
       hadRule = true;
-      rules.push({ directive, value });
+      if (value) rules.push({ directive, value });
     }
   }
   flush();
-  const matches = groups.filter(g => g.agents.includes("snapycallresearchpreview"));
-  const selected = matches.length ? matches : groups.filter(g => g.agents.includes("*"));
-  const applicable = selected.flatMap(g => g.rules)
-    .filter(r => r.value && pathname.startsWith(r.value));
-  applicable.sort((a, b) => b.value.length - a.value.length ||
-    (a.directive === "allow" ? -1 : 1));
-  return !applicable.length || applicable[0].directive === "allow";
+  const matches = groups.filter(group =>
+    group.agents.includes("snapycallresearchpreview"));
+  const selected = matches.length ? matches : groups.filter(group =>
+    group.agents.includes("*"));
+  let best = null;
+  for (const rule of selected.flatMap(group => group.rules)) {
+    const result = robotsPatternMatch(rule.value, pathname);
+    // Malformed applicable rules must not silently become an allow.
+    if (!result) return false;
+    if (!result.matches) continue;
+    if (!best || result.specificity > best.specificity ||
+        (result.specificity === best.specificity &&
+          rule.directive === "allow")) {
+      best = { directive: rule.directive, specificity: result.specificity };
+    }
+  }
+  return !best || best.directive === "allow";
 }
 
 function htmlText(input) {
@@ -202,6 +248,28 @@ export function linkedPublicContactUrl(sourceUrl, html) {
   return found.size === 1 ? [...found][0] : null;
 }
 
+// HTTP media-type parameters may legally quote UTF-8 (RFC 9110).
+// Accept only the already-supported text content types and UTF-8 charset.
+// Never sniff application/octet-stream, HTML disguised as JSON, or encoded
+// responses. Reject duplicated/malformed charset rather than guessing.
+export function supportedPublicTextMediaType(value) {
+  if (typeof value !== "string" || value.length > 256) return null;
+  const parts = value.split(";");
+  const type = parts.shift().trim().toLowerCase();
+  if (type !== "text/html" && type !== "text/plain") return null;
+  let charsetSeen = false;
+  for (const param of parts) {
+    const trimmed = param.trim();
+    if (/^charset\b/i.test(trimmed)) {
+      const found = /^charset\s*=\s*(?:"([^"]+)"|([a-z0-9._-]+))$/i.exec(trimmed);
+      if (!found || charsetSeen ||
+          (found[1] ?? found[2]).toLowerCase() !== "utf-8") return null;
+      charsetSeen = true;
+    }
+  }
+  return type;
+}
+
 // Redirects are source hints, not fetch permission. Only a single canonical
 // HTTPS redirect between the exact host and its www/apex variant is permitted.
 // Both source and destination independently require safe DNS and robots
@@ -235,8 +303,8 @@ export async function retrieveCitedPublicPage(url, {
     const robotsAddress = await resolvePublicAddress(parsed.hostname, resolve);
     const policy = await request(robots, robotsAddress);
     if (policy.status !== 404 && (policy.status !== 200 ||
-        !/^text\/plain(?:;|$)/i.test(policy.contentType) ||
-        policy.contentEncoding || !robotsAllows(policy.body, parsed.pathname))) {
+        supportedPublicTextMediaType(policy.contentType) !== "text/plain" ||
+        policy.contentEncoding || !robotsAllows(policy.body, parsed.pathname + parsed.search))) {
       throw new Error("PUBLIC_PAGE_ROBOTS_REJECTED");
     }
     // Independently resolve before each document request to defend DNS
@@ -261,16 +329,15 @@ export async function retrieveCitedPublicPage(url, {
   if (page.status >= 300 && page.status < 400) {
     throw new Error("PUBLIC_PAGE_REDIRECT_REJECTED");
   }
-  if (page.status !== 200 || page.contentEncoding ||
-      !/^(text\/html|text\/plain)(?:;|$)/i.test(page.contentType) ||
-      /charset\s*=\s*(?!utf-8)([^;]+)/i.test(page.contentType)) {
+  const mediaType = supportedPublicTextMediaType(page.contentType);
+  if (page.status !== 200 || page.contentEncoding || !mediaType) {
     throw new Error("PUBLIC_PAGE_CONTENT_REJECTED");
   }
   if (typeof page.body !== "string" ||
       Buffer.byteLength(page.body, "utf8") > MAX_BYTES) {
     throw new Error("PUBLIC_PAGE_TOO_LARGE");
   }
-  const linkedContact = /^text\/html(?:;|$)/i.test(page.contentType)
+  const linkedContact = mediaType === "text/html"
     ? linkedPublicContactUrl(canonical, page.body) : null;
   return {
     url: canonical, text: htmlText(page.body),
