@@ -1,9 +1,10 @@
 // Trusted, read-only RD-01 snapshot loader. Authorization and snapshot
 // consistency are established here before the pure funnel reducer runs.
-import { lockActiveWorkspaceMembership } from "./workspace-access.js";
+import { requireWorkspaceMembership } from "./workspace-access.js";
 
 const ID = /^c[a-z0-9]{10,40}$/;
 const MAX_OBSERVATIONS = 250;
+const MAX_AUDITS = 5000;
 const AUDIT_ACTIONS = [
   "research.person-source.attempt.settled",
   "research.full-run.stage.changed",
@@ -49,7 +50,10 @@ export async function loadResearchFunnelSnapshot(db, {
     // snapshot. No database write is permitted in this transaction.
     await tx.$executeRaw`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`;
     await tx.$executeRaw`SET TRANSACTION READ ONLY`;
-    if (!await lockActiveWorkspaceMembership(tx, { workspaceId, userId: ownerId })) {
+    // The read-only path deliberately uses the existing non-locking
+    // membership contract. Write workflows retain FOR UPDATE fencing; a
+    // repeatable-read diagnostic observes one consistent point-in-time view.
+    if (!await requireWorkspaceMembership(tx, { workspaceId, userId: ownerId })) {
       return Object.freeze({ complete: false, code: "WORKSPACE_ACCESS_REVOKED" });
     }
 
@@ -97,6 +101,13 @@ export async function loadResearchFunnelSnapshot(db, {
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: { id: true, chargedCents: true, status: true, reservedCents: true },
     }) : [];
+    const reservationIdSet = new Set(spendReservations.map(row => row.id));
+    const missingReservationCount = reservationIds.filter(id => !reservationIdSet.has(id)).length;
+    const auditWhere = { action: { in: AUDIT_ACTIONS }, AND: [
+      { metadata: { path: ["campaignId"], equals: campaignId } },
+      { metadata: { path: ["workspaceId"], equals: workspaceId } },
+    ] };
+    const auditTotal = await tx.auditEvent.count({ where: auditWhere });
     const [discoveryRun, fullRun, batch, auditRows] = await Promise.all([
       tx.researchCampaignRun.findUnique({ where: { campaignId }, select: {
         startedTasks: true, status: true, maxTasks: true,
@@ -110,11 +121,8 @@ export async function loadResearchFunnelSnapshot(db, {
         items: { orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           select: { id: true, status: true, resultCode: true, candidateId: true } },
       } }),
-      tx.auditEvent.findMany({ where: { action: { in: AUDIT_ACTIONS }, AND: [
-        { metadata: { path: ["campaignId"], equals: campaignId } },
-        { metadata: { path: ["workspaceId"], equals: workspaceId } },
-      ] },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: 5000,
+      tx.auditEvent.findMany({ where: auditWhere,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: MAX_AUDITS,
         select: { id: true, action: true, entityId: true, metadata: true, createdAt: true } }),
     ]);
     const audits = relevantAudits(auditRows, { campaignId, workspaceId });
@@ -124,6 +132,12 @@ export async function loadResearchFunnelSnapshot(db, {
       tasks, observations, sourceJobs, audits,
       acceptedContacts: batch?.items ?? [],
       spendReservations,
+      reservationCompleteness: { complete: missingReservationCount === 0,
+        requested: reservationIds.length, returned: spendReservations.length,
+        missing: missingReservationCount },
+      auditCompleteness: { complete: auditTotal <= MAX_AUDITS &&
+        auditRows.length === auditTotal, total: auditTotal,
+        returned: auditRows.length },
       completeness: { complete, totalObservations: observationsTotal,
         returnedObservations: observations.length },
       readOnly: true,

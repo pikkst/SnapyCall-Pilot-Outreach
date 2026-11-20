@@ -38,6 +38,11 @@ the persisted campaign/workspace metadata and duplicate references are removed
 before aggregation. Reservations are restricted to source-job reservation IDs
 and the same owner/workspace.
 
+The loader uses the existing non-locking `requireWorkspaceMembership()` path
+because PostgreSQL forbids `SELECT FOR UPDATE` in a read-only transaction.
+Write workflows continue using their existing locking helper. Repeatable-read
+provides one point-in-time view while membership is checked before scoped reads.
+
 The diagnostic is not a public endpoint. With an explicitly authorized local
 or isolated read-only database, run:
 
@@ -52,6 +57,13 @@ The command prints aggregate JSON only. A staging audit requires separate
 authorization, a least-privilege read-only connection, and an explicitly
 documented environment label; it must not be run against shared staging from
 this task.
+
+Audit coverage is reported separately from observation coverage; if the
+bounded audit read is truncated, URL-attempt and access-category metrics are
+unknown. Reservation coverage compares every source-job `spendReservationId`
+with returned owner/workspace-scoped rows. Missing reservations increase the
+unknown count and force `totalChargedCents` to null. These are source-job costs
+only, not unrelated campaign spend.
 
 ## Root-cause table
 

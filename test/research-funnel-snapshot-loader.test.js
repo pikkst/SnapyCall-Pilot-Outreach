@@ -15,6 +15,8 @@ function mockDb({ revoked = false, total = 1, rows = [observation], audits = [] 
   const tx = {
     $executeRaw: async () => 0,
     $queryRaw: async () => revoked ? [{ revokedAt: new Date() }] : [{ revokedAt: null }],
+    partnerMembership: { findUnique: async ({ where }) => where.partnerId_userId.userId === scope.ownerId
+      ? (revoked ? { revokedAt: new Date(), user: { id: scope.ownerId, googleSub: "synthetic" } } : { id: "membership", revokedAt: null, role: "PARTNER", user: { id: scope.ownerId, googleSub: "synthetic" } }) : null },
     researchCampaign: { findFirst: async ({ where }) => where.workspaceId === scope.workspaceId && where.ownerId === scope.ownerId ? {
       id: scope.campaignId, workspaceId: scope.workspaceId, ownerId: scope.ownerId,
       status: "PARTIAL", targetCount: 1, createdAt: new Date(), updatedAt: new Date(),
@@ -29,7 +31,7 @@ function mockDb({ revoked = false, total = 1, rows = [observation], audits = [] 
     researchCampaignRun: { findUnique: async () => null },
     researchFullRun: { findUnique: async () => null },
     researchContactBatch: { findUnique: async () => null },
-    auditEvent: { findMany: async () => audits },
+    auditEvent: { count: async () => audits.length, findMany: async () => audits },
   };
   return { $transaction: async callback => callback(tx) };
 }
@@ -46,7 +48,7 @@ test("revoked membership and wrong owner/campaign fail closed", async () => {
     "WORKSPACE_ACCESS_REVOKED");
   assert.equal((await loadResearchFunnelSnapshot(mockDb(), {
     ...scope, ownerId: "cmabcdefghijklmnopqrs99",
-  })).code, "CAMPAIGN_NOT_FOUND");
+  })).code, "WORKSPACE_ACCESS_REVOKED");
   await assert.rejects(() => loadResearchFunnelSnapshot(mockDb(), {
     ...scope, campaignId: "invalid",
   }), TypeError);
@@ -73,4 +75,15 @@ test("empty campaign remains complete and read-only", async () => {
   const snapshot = await loadResearchFunnelSnapshot(mockDb({ total: 0, rows: [] }), scope);
   assert.deepEqual(snapshot.completeness, { complete: true, totalObservations: 0, returnedObservations: 0 });
   assert.equal(snapshot.observations.length, 0);
+});
+
+test("loader reports incomplete audit coverage instead of claiming full source metrics", async () => {
+  const audits = Array.from({ length: 5001 }, (_, index) => ({
+    id: `audit-${index}`, action: "research.person-source.attempt.settled",
+    entityId: `job-${index}`, metadata: { campaignId: scope.campaignId,
+      workspaceId: scope.workspaceId, sourceInspection: { attempted: 1 } },
+  }));
+  const snapshot = await loadResearchFunnelSnapshot(mockDb({ audits }), scope);
+  assert.equal(snapshot.auditCompleteness.complete, false);
+  assert.equal(snapshot.auditCompleteness.total, 5001);
 });
