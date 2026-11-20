@@ -183,6 +183,123 @@ export async function stopFullRunSourceAtGoal(db, scope) {
   });
 }
 
+// Conservative zero-yield stop: end only future paid claims, never a
+// previously leased or uncertain call. The campaign row lock serializes
+// this decision with the owner-budget-fenced source claim transaction.
+const ZERO_YIELD_MIN_SETTLED = 12;
+const ZERO_YIELD_FINAL_CODES = new Set([
+  "SOURCE_ALL_PAGES_UNAVAILABLE",
+  "SOURCE_NO_NAMED_EMAIL_EVIDENCE",
+  "SOURCE_NO_MATCHING_CITED_PROFILE",
+  "SOURCE_MIXED_UNQUALIFIED",
+  "NO_UNIQUE_DIRECT_SOURCE",
+  "SOURCE_SELECTED_COLLISION",
+]);
+export async function stopFullRunSourceOnZeroYield(db, scope, {
+  now = new Date(),
+} = {}) {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
+    throw new TypeError("Valid source quality-stop clock required");
+  }
+  return db.$transaction(async tx => {
+    if (!await lockActiveWorkspaceMembership(tx, {
+      workspaceId: scope.workspaceId, userId: scope.ownerId,
+    })) return { status: "BLOCKED", code: "WORKSPACE_ACCESS_REVOKED" };
+    const campaigns = await tx.$queryRaw`
+      SELECT "id" FROM "ResearchCampaign" WHERE "id" = ${scope.campaignId}
+        AND "workspaceId" = ${scope.workspaceId}
+        AND "ownerId" = ${scope.ownerId} FOR UPDATE`;
+    if (campaigns.length !== 1) {
+      return { status: "BLOCKED", code: "CAMPAIGN_NOT_FOUND" };
+    }
+    const full = await tx.researchFullRun.findUnique({
+      where: { campaignId: scope.campaignId },
+    });
+    if (!full || full.status !== "SOURCE_RUNNING" ||
+        full.workspaceId !== scope.workspaceId ||
+        full.ownerId !== scope.ownerId) {
+      return { status: "UNCHANGED", code: "FULL_RUN_STAGE_ALREADY_CHANGED" };
+    }
+    const source = await tx.researchPersonSourceApproval.findUnique({
+      where: { campaignId: scope.campaignId },
+    });
+    if (!source || source.workspaceId !== scope.workspaceId ||
+        source.ownerId !== scope.ownerId ||
+        source.model !== full.model || source.provider !== full.provider ||
+        source.priceVersion !== full.priceVersion ||
+        !["APPROVED", "RUNNING", "COMPLETED", "PARTIAL_BUDGET"].includes(source.status)) {
+      return { status: "WAITING", code: "SOURCE_APPROVAL_NOT_READY" };
+    }
+    const jobs = await tx.researchPersonSourceJob.findMany({
+      where: { campaignId: scope.campaignId },
+      select: { status: true, attempts: true, proposedSourceUrl: true,
+        lastErrorCode: true },
+      take: MAX_OBSERVATIONS + 1,
+    });
+    if (jobs.length > MAX_OBSERVATIONS) {
+      return { status: "BLOCKED", code: "SOURCE_JOB_SNAPSHOT_LIMIT" };
+    }
+    if (jobs.some(job => ["RUNNING", "PAUSED"].includes(job.status) ||
+        (job.status === "COMPLETED" && job.proposedSourceUrl))) {
+      return { status: "WAITING", code: "SOURCE_JOB_SETTLEMENT_PENDING" };
+    }
+    const settled = jobs.filter(job =>
+      job.status === "COMPLETED" && job.attempts === 1 &&
+      job.proposedSourceUrl == null &&
+      ZERO_YIELD_FINAL_CODES.has(job.lastErrorCode)).length;
+    if (settled < ZERO_YIELD_MIN_SETTLED) {
+      return { status: "WAITING", code: "SOURCE_ZERO_YIELD_SAMPLE_INSUFFICIENT" };
+    }
+    const progress = await qualifiedFullRunProgress(tx, scope);
+    if (!progress.reliable) return { status: "BLOCKED", code: progress.code };
+    if (progress.qualifiedEvidence !== 0) {
+      return { status: "WAITING", code: "SOURCE_HAS_QUALIFIED_EVIDENCE" };
+    }
+    // Existing pending/manual-review proof must not be silently discarded.
+    if (jobs.some(job => !["QUEUED", "COMPLETED"].includes(job.status))) {
+      return { status: "WAITING", code: "SOURCE_REVIEW_OR_RECONCILIATION_PENDING" };
+    }
+    const activeCycle = await tx.researchPersonSourceCycle.count({
+      where: { campaignId: scope.campaignId,
+        status: { in: ["APPROVED", "RUNNING"] } },
+    });
+    // The same transaction fences every future cycle claim. No new work
+    // can start after source approval, cycle and full-run status change.
+    if (activeCycle > 1) {
+      return { status: "BLOCKED", code: "SOURCE_CYCLE_CONCURRENCY_INVALID" };
+    }
+    await tx.researchPersonSourceApproval.updateMany({
+      where: { id: source.id, campaignId: scope.campaignId,
+        workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+        status: { in: ["APPROVED", "RUNNING"] } },
+      data: { status: "QUALITY_STOP" },
+    });
+    await tx.researchPersonSourceCycle.updateMany({
+      where: { campaignId: scope.campaignId,
+        workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+        status: { in: ["APPROVED", "RUNNING"] } },
+      data: { status: "QUALITY_STOP" },
+    });
+    const updated = await tx.researchFullRun.updateMany({
+      where: { id: full.id, campaignId: scope.campaignId,
+        workspaceId: scope.workspaceId, ownerId: scope.ownerId,
+        status: "SOURCE_RUNNING" },
+      data: { status: "PARTIAL", lastCode: "SOURCE_ZERO_YIELD_EARLY_STOP" },
+    });
+    if (updated.count !== 1) throw new Error("SOURCE_ZERO_YIELD_STOP_CAS_CONFLICT");
+    await tx.auditEvent.create({ data: {
+      actorId: scope.ownerId, entityId: scope.campaignId,
+      action: "research.full-run.zero-yield.stopped",
+      metadata: { workspaceId: scope.workspaceId, settledZeroYieldJobs: settled,
+        remainingQueuedJobs: jobs.filter(job => job.status === "QUEUED").length,
+        futurePaidClaimsStopped: true, automaticBillableReplay: false,
+        contactCreated: false, sendingEnabled: false },
+    } });
+    return { status: "PARTIAL", code: "SOURCE_ZERO_YIELD_EARLY_STOP",
+      settledZeroYieldJobs: settled };
+  });
+}
+
 export async function tickFullRunStages(db, {
   approveTriage = approveEmailTriage,
   enqueue = enqueuePersonSourceJobs,
@@ -190,13 +307,14 @@ export async function tickFullRunStages(db, {
   transition = transitionFullRunStage,
   progress = qualifiedFullRunProgress,
   stopAtGoal = stopFullRunSourceAtGoal,
+  stopZeroYield = stopFullRunSourceOnZeroYield,
   createSourceCycle = createNextSourceCycle,
   now = () => new Date(),
 } = {}) {
   const clock = now();
   if (!(clock instanceof Date) || !Number.isFinite(clock.getTime()) ||
       [approveTriage, enqueue, approveSource, transition,
-        progress, stopAtGoal, createSourceCycle].some(fn =>
+        progress, stopAtGoal, stopZeroYield, createSourceCycle].some(fn =>
           typeof fn !== "function")) {
     throw new TypeError("Trusted full-run stage controller required");
   }
@@ -360,6 +478,11 @@ export async function tickFullRunStages(db, {
     return move("SOURCE_RUNNING", "SOURCE_STAGE_APPROVED_FROM_FULL_RUN");
   }
   if (full.status === "SOURCE_RUNNING") {
+    const qualityStop = await stopZeroYield(db, scope, { now: clock });
+    if (qualityStop.status === "PARTIAL") return qualityStop;
+    if (qualityStop.status === "BLOCKED" ||
+        (qualityStop.status === "UNCHANGED" &&
+          qualityStop.code === "FULL_RUN_STAGE_ALREADY_CHANGED")) return qualityStop;
     const approval = await db.researchPersonSourceApproval.findUnique({
       where: { campaignId: scope.campaignId },
       select: { status: true, ownerId: true, workspaceId: true },
