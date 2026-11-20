@@ -24,8 +24,11 @@ Use the existing `personSourceSearchQuery` and existing **frozen**
 
 The full name remains an exact quoted term and professional category is
 always preserved to disambiguate namesakes. All variants are deterministic,
-bounded to the existing 350-character provider input contract. Missing or
-unknown reason is rejected before dispatch.
+bounded by the existing source-query input contract. The executor always
+passes the persisted, approved `queued.reason` explicitly. For direct helper
+calls, omitting `reason` intentionally defaults to `ALTERNATE_EMAIL_SOURCE`
+for backward compatibility; an explicit unknown, empty or null reason is
+rejected before dispatch. No missing reason can arise in the approved claim path.
 
 ## Important identity limitation
 The current immutable observation snapshot has a person name, category and
