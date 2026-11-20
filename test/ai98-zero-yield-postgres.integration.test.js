@@ -211,3 +211,42 @@ test("real PostgreSQL: concurrent claim waits for committed QUALITY_STOP", {
     await db.$disconnect();
   }
 });
+
+test("real PostgreSQL: concurrent stop wins membership lock before a paid source claim", {
+  skip: !integration,
+}, async () => {
+  const db = new PrismaClient();
+  try {
+    const scope = await fixture(db);
+    let releaseStart;
+    const locked = new Promise(resolve => { releaseStart = resolve; });
+    // Hold the same membership row lock used by the real claim. Launch
+    // the competing claim after the stop transaction acquired that lock,
+    // but before its commit. This is a deterministic stop-wins race.
+    const stopDb = {
+      $transaction: fn => db.$transaction(async tx => {
+        await tx.$queryRaw`
+          SELECT "id" FROM "PartnerMembership"
+          WHERE "partnerId" = ${scope.workspaceId}
+            AND "userId" = ${scope.ownerId} FOR UPDATE`;
+        releaseStart();
+        return fn(tx);
+      }),
+    };
+    const stopping = stopFullRunSourceOnZeroYield(stopDb, scope);
+    await locked;
+    const claiming = claimPersonSourceJob(db, {
+      ...scope, provider: "gemini", model: "gemini-3-flash-preview",
+    });
+    const [stop, claim] = await Promise.all([stopping, claiming]);
+    assert.equal(stop.status, "PARTIAL");
+    assert.equal(claim.code, "PERSON_SOURCE_APPROVAL_REQUIRED");
+    assert.equal(await db.auditEvent.count({ where: {
+      entityId: scope.campaignId,
+      action: "research.person-source.spend.reserved",
+    } }), 0, "no second paid claim may pass a committed quality stop");
+    assert.equal(await db.researchPersonSourceJob.count({ where: {
+      campaignId: scope.campaignId, status: "RUNNING",
+    } }), 0);
+  } finally { await db.$disconnect(); }
+});
