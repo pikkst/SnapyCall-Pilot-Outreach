@@ -345,13 +345,15 @@ test("zero-yield threshold transitions SOURCE_RUNNING to partial without another
 });
 
 function zeroYieldTransaction({ completed = 12, uncertain = false,
-  qualified = false, member = true, pendingProof = false } = {}) {
+  qualified = false, member = true, pendingProof = false,
+  noQueued = false } = {}) {
   const updates = [];
   const rows = Array.from({ length: completed }, () => ({
     status: "COMPLETED", attempts: 1, proposedSourceUrl: null,
     lastErrorCode: "SOURCE_ALL_PAGES_UNAVAILABLE",
   }));
-  rows.push({ status: "QUEUED", attempts: 0, proposedSourceUrl: null });
+  if (!noQueued) rows.push({ status: "QUEUED", attempts: 0,
+    proposedSourceUrl: null });
   if (uncertain) rows.push({ status: "PAUSED", attempts: 1 });
   if (pendingProof) rows[0].proposedSourceUrl = "https://example.org/ada";
   const db = { $transaction: async fn => fn({
@@ -421,7 +423,7 @@ test("bounded zero-yield stop is atomic and retains untouched queued work", asyn
 test("zero-yield stop cannot mask incomplete billing, pending proof or revoked rights", async () => {
   for (const options of [
     { completed: 11 }, { uncertain: true }, { pendingProof: true },
-    { member: false }, { qualified: true },
+    { member: false }, { qualified: true }, { noQueued: true },
   ]) {
     const { db, updates } = zeroYieldTransaction(options);
     const result = await stopFullRunSourceOnZeroYield(db, scope, { now });
