@@ -5,6 +5,15 @@ import { personSourceJobSnapshot } from "./research-person-source-approval.js";
 import { personSourceFingerprint } from "./research-person-source-queue.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
 
+// Shared continuation-eligibility contract for an unattempted job.
+export function eligibleUnattemptedContinuationSource(job, row) {
+  return job?.cycleIndex === 0 && job.status === "QUEUED" &&
+    job.attempts === 0 && job.spendReservationId == null &&
+    row != null && row.candidateId == null && row.personSourceUrl == null &&
+    ["UNCHECKED", "BLOCKED", "NO_EMAIL"].includes(row.emailTriageStatus) &&
+    personSourceFingerprint(row) === job.evidenceFingerprint;
+}
+
 export const SOURCE_CYCLE_SIZE = 25;
 export const MAX_SOURCE_CYCLES = 10;
 const TERMINAL = new Set(["COMPLETED", "PARTIAL_BUDGET", "TARGET_REACHED"]);
@@ -107,12 +116,8 @@ export async function createNextSourceCycle(db, {
       take: 251,
     });
     const byId = new Map(liveRows.map(row => [row.id, row]));
-    const eligible = available.filter(job => {
-      const row = byId.get(job.observationId);
-      return row && row.candidateId == null && row.personSourceUrl == null &&
-        ["UNCHECKED", "BLOCKED", "NO_EMAIL"].includes(row.emailTriageStatus) &&
-        personSourceFingerprint(row) === job.evidenceFingerprint;
-    });
+    const eligible = available.filter(job =>
+      eligibleUnattemptedContinuationSource(job, byId.get(job.observationId)));
     if (!eligible.length) return { status: "EXHAUSTED",
       code: "NO_CURRENTLY_ELIGIBLE_SOURCE_JOBS" };
     const selected = eligible.slice(0, Math.min(
