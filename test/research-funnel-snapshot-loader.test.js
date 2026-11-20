@@ -42,7 +42,7 @@ test("loads one authorized campaign with a real completeness proof", async () =>
   const snapshot = await loadResearchFunnelSnapshot(mockDb(), scope);
   assert.equal(snapshot.readOnly, true);
   assert.deepEqual(snapshot.completeness, { complete: true, totalObservations: 1, returnedObservations: 1 });
-  assert.deepEqual(snapshot.scope, scope);
+  assert.deepEqual(snapshot.scope, { campaignId: scope.campaignId, workspaceId: scope.workspaceId, ownerId: scope.ownerId });
 });
 
 test("revoked membership and wrong owner/campaign fail closed", async () => {
