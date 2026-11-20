@@ -9,6 +9,7 @@ on:
       - "test/ai98-zero-yield-postgres.integration.test.js"
       - "server/research-funnel-snapshot-loader.js"
       - "test/research-funnel-snapshot-loader.postgres.integration.test.js"
+      - "test/research-funnel-audit.e2e.integration.test.js"
       - "prisma/**"
       - ".github/workflows/source-quality-stop-db.yml"
   push:
@@ -20,6 +21,7 @@ on:
       - "test/ai98-zero-yield-postgres.integration.test.js"
       - "server/research-funnel-snapshot-loader.js"
       - "test/research-funnel-snapshot-loader.postgres.integration.test.js"
+      - "test/research-funnel-audit.e2e.integration.test.js"
       - "prisma/**"
       - ".github/workflows/source-quality-stop-db.yml"
 
@@ -62,4 +64,4 @@ jobs:
         run: |
           PGPASSWORD=test psql -h localhost -U test -d snapycall_ci -v ON_ERROR_STOP=1 -c "CREATE ROLE audit_reader LOGIN PASSWORD 'audit_reader' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
           PGPASSWORD=test psql -h localhost -U test -d snapycall_ci -v ON_ERROR_STOP=1 -c "GRANT CONNECT ON DATABASE snapycall_ci TO audit_reader; GRANT USAGE ON SCHEMA public TO audit_reader; GRANT SELECT ON ALL TABLES IN SCHEMA public TO audit_reader; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO audit_reader"
-      - run: node --test test/ai98-zero-yield-postgres.integration.test.js test/research-funnel-snapshot-loader.postgres.integration.test.js
+      - run: node --test test/ai98-zero-yield-postgres.integration.test.js test/research-funnel-snapshot-loader.postgres.integration.test.js test/research-funnel-audit.e2e.integration.test.js
