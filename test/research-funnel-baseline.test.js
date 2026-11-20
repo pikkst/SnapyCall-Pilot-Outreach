@@ -82,3 +82,15 @@ test("invalid or missing owner/workspace scope fails closed", () => {
   assert.throws(() => summarizeResearchFunnel({ tasks: [], observations: [], sourceJobs: [], audits: [], acceptedContacts: [] }), TypeError);
   assert.throws(() => summarizeResearchFunnel({ scope: { workspaceId: "other", ownerId: "cmabcdefghijklmnopqrstv" }, tasks: [], observations: [], sourceJobs: [], audits: [], acceptedContacts: [] }), TypeError);
 });
+
+test("truncated audits and missing reservations make dependent metrics unknown", () => {
+  const snapshot = base();
+  snapshot.auditCompleteness = { complete: false, total: 5001, returned: 5000 };
+  snapshot.reservationCompleteness = { complete: false, requested: 2, returned: 1, missing: 1 };
+  snapshot.spendReservations = [{ chargedCents: 100 }];
+  const result = summarizeResearchFunnel(snapshot);
+  assert.equal(result.stages.urlInspectionAttempts.value, null);
+  assert.equal(result.accessibility.counts, null);
+  assert.equal(result.cost.totalChargedCents, null);
+  assert.equal(result.cost.unknownReservationCount, 1);
+});

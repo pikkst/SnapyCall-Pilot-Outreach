@@ -26,6 +26,45 @@ Snapshots require validated CUID-shaped `workspaceId` and `ownerId` values plus 
 
 Stage counts have different units and must not be summed. Source hints, observations, qualified evidence, accepted contacts, and send eligibility remain separate outcomes. No names, emails, URLs, payloads, or exception text are emitted.
 
+## Trusted loader and execution
+
+`loadResearchFunnelSnapshot()` is an internal read-only loader. It validates the
+selected campaign ID, locks and checks active owner membership, binds every
+campaign query to workspace and owner, and reads under PostgreSQL repeatable
+read/read-only transaction semantics. Observation count and bounded rows are
+compared to produce the completeness proof; the reducer never infers
+completeness from the returned array length alone. Audit events are filtered by
+the persisted campaign/workspace metadata and duplicate references are removed
+before aggregation. Reservations are restricted to source-job reservation IDs
+and the same owner/workspace.
+
+The loader uses the existing non-locking `requireWorkspaceMembership()` path
+because PostgreSQL forbids `SELECT FOR UPDATE` in a read-only transaction.
+Write workflows continue using their existing locking helper. Repeatable-read
+provides one point-in-time view while membership is checked before scoped reads.
+
+The diagnostic is not a public endpoint. With an explicitly authorized local
+or isolated read-only database, run:
+
+```powershell
+$env:RESEARCH_WORKSPACE_ID = "<authorized-workspace-id>"
+$env:RESEARCH_OWNER_ID = "<authorized-owner-id>"
+$env:APP_ENVIRONMENT = "local-read-only"
+npm run research:funnel-baseline -- <campaign-id>
+```
+
+The command prints aggregate JSON only. A staging audit requires separate
+authorization, a least-privilege read-only connection, and an explicitly
+documented environment label; it must not be run against shared staging from
+this task.
+
+Audit coverage is reported separately from observation coverage; if the
+bounded audit read is truncated, URL-attempt and access-category metrics are
+unknown. Reservation coverage compares every source-job `spendReservationId`
+with returned owner/workspace-scoped rows. Missing reservations increase the
+unknown count and force `totalChargedCents` to null. These are source-job costs
+only, not unrelated campaign spend.
+
 ## Root-cause table
 
 | Finding | Classification | Limitation |
