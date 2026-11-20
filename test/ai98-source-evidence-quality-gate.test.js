@@ -28,6 +28,13 @@ test("cold-start citations preserve order and identity is never inferred from a 
     ["http://example.org/team/ada-lovelace"], "Ada Lovelace"), TypeError);
   assert.throws(() => rankCitedPersonSourceUrls(
     Array(6).fill("https://example.org/"), "Ada Lovelace"), TypeError);
+  assert.deepEqual(rankCitedPersonSourceUrls([
+    "https://example.org/team/%E0%A4%A",
+    "https://example.org/people/ada-lovelace",
+  ], "Ada Lovelace"), [
+    "https://example.org/people/ada-lovelace",
+    "https://example.org/team/%E0%A4%A",
+  ]);
 });
 
 test("ranked source hints still require independent retrieval and never become qualified email proof", async () => {
