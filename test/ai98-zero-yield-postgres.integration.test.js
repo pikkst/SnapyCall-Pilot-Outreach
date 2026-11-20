@@ -169,3 +169,45 @@ test("real PostgreSQL: no live eligible person source never triggers cost-saving
     assert.equal(full.status, "SOURCE_RUNNING");
   } finally { await db.$disconnect(); }
 });
+
+test("real PostgreSQL: concurrent claim waits for committed QUALITY_STOP", {
+  skip: !integration,
+}, async () => {
+  const db = new PrismaClient();
+  const claimant = new PrismaClient();
+  try {
+    const scope = await fixture(db);
+    let markStopped;
+    let permitCommit;
+    const stoppedInTransaction = new Promise(resolve => { markStopped = resolve; });
+    const commitGate = new Promise(resolve => { permitCommit = resolve; });
+    // Use an actual PostgreSQL transaction, holding its campaign lock and
+    // QUALITY_STOP writes before commit. The claimant uses a distinct pool.
+    const stop = db.$transaction(async tx => {
+      const result = await stopFullRunSourceOnZeroYield({
+        $transaction: async callback => callback(tx),
+      }, scope);
+      assert.equal(result.status, "PARTIAL");
+      markStopped();
+      await commitGate;
+      return result;
+    }, { timeout: 15_000 });
+    await stoppedInTransaction;
+    const claim = claimPersonSourceJob(claimant, {
+      ...scope, provider: "gemini", model: "gemini-3-flash-preview",
+    });
+    // Both operations now overlap while the stop's lock is still held.
+    permitCommit();
+    assert.equal((await stop).code, "SOURCE_ZERO_YIELD_EARLY_STOP");
+    assert.equal((await claim).code, "PERSON_SOURCE_APPROVAL_REQUIRED");
+    assert.equal(await db.researchSpendReservation.count({
+      where: { ownerId: scope.ownerId },
+    }), 0);
+    assert.equal(await db.researchPersonSourceJob.count({
+      where: { campaignId: scope.campaignId, status: "RUNNING" },
+    }), 0);
+  } finally {
+    await claimant.$disconnect();
+    await db.$disconnect();
+  }
+});
