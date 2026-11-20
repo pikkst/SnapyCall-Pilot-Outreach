@@ -29,6 +29,10 @@ test("PostgreSQL read-only snapshot accepts active membership and rejects revoke
     const unsafe = await preflightHistoricalFunnelAudit(auditDb, { ...scope, environment: "local-read-only", expectedDatabase: "snapycall_ci", expectedRole: "audit_reader" });
     assert.equal(unsafe.code, "AUDIT_ROLE_NOT_RESTRICTED");
     await db.$executeRawUnsafe('REVOKE INSERT ON TABLE "ResearchPersonSourceJob" FROM audit_reader');
+    await db.$executeRawUnsafe('GRANT INSERT ON TABLE "ResearchCampaignTask" TO audit_reader');
+    const unsafeTask = await preflightHistoricalFunnelAudit(auditDb, { ...scope, environment: "local-read-only", expectedDatabase: "snapycall_ci", expectedRole: "audit_reader" });
+    assert.equal(unsafeTask.code, "AUDIT_ROLE_NOT_RESTRICTED");
+    await db.$executeRawUnsafe('REVOKE INSERT ON TABLE "ResearchCampaignTask" FROM audit_reader');
     const preflight = await preflightHistoricalFunnelAudit(auditDb, { ...scope, environment: "local-read-only", expectedDatabase: "snapycall_ci", expectedRole: "audit_reader" });
     assert.equal(preflight.ok, true);
     assert.equal(preflight.readOnly, true);
