@@ -250,3 +250,105 @@ test("real PostgreSQL: concurrent stop wins membership lock before a paid source
     } }), 0);
   } finally { await db.$disconnect(); }
 });
+
+test("real PostgreSQL: stopped continuation requires unchanged provider, model and tariff", {
+  skip: !integration,
+}, async () => {
+  const db = new PrismaClient();
+  try {
+    for (const drift of ["provider", "model", "priceVersion", "unitPrice", "valid"]) {
+      const scope = await fixture(db);
+      await db.researchPersonSourceApproval.update({
+        where: { campaignId: scope.campaignId },
+        data: { status: "COMPLETED" },
+      });
+      await db.aiSetting.create({ data: {
+        ownerId: scope.ownerId, provider: drift === "provider" ? "openai" : "gemini",
+        model: drift === "model" ? "gemini-2.5-flash" : "gemini-3-flash-preview",
+        encryptedApiKey: "ci-test-only-not-a-key",
+        keyFingerprint: randomUUID().replaceAll("-", ""),
+      } });
+      if (drift === "priceVersion") {
+        await db.researchPersonSourceApproval.update({
+          where: { campaignId: scope.campaignId },
+          data: { priceVersion: "test-stale-tariff" },
+        });
+        await db.researchFullRun.update({
+          where: { campaignId: scope.campaignId },
+          data: { priceVersion: "test-stale-tariff" },
+        });
+      } else if (drift === "unitPrice") {
+        await db.researchPersonSourceApproval.update({
+          where: { campaignId: scope.campaignId },
+          data: { worstCasePerCallCents: price.worstCaseCents + 1 },
+        });
+      }
+      const stopped = await stopFullRunSourceOnZeroYield(db, scope);
+      const expected = drift === "valid" ? "SOURCE_ZERO_YIELD_EARLY_STOP" :
+        ["provider", "model"].includes(drift) ?
+          "APPROVED_PROVIDER_CHANGED" : "SOURCE_PRICE_CHANGED";
+      assert.equal(stopped.code, expected, drift);
+      const full = await db.researchFullRun.findUnique({
+        where: { campaignId: scope.campaignId },
+      });
+      assert.equal(full.status, drift === "valid" ? "PARTIAL" : "SOURCE_RUNNING");
+      assert.equal(await db.auditEvent.count({ where: {
+        action: "research.full-run.zero-yield.stopped",
+        entityId: scope.campaignId,
+      } }), drift === "valid" ? 1 : 0);
+    }
+  } finally { await db.$disconnect(); }
+});
+
+test("real PostgreSQL: a paid claim committing first prevents premature QUALITY_STOP", {
+  skip: !integration,
+}, async () => {
+  const db = new PrismaClient();
+  const stopper = new PrismaClient();
+  let allowCommit;
+  try {
+    const scope = await fixture(db);
+    await db.researchOwnerBudget.create({ data: {
+      ownerId: scope.ownerId, monthlyLimitCents: 1000,
+    } });
+    let signalClaim;
+    const claimHasLockedRows = new Promise(resolve => { signalClaim = resolve; });
+    const commitGate = new Promise(resolve => { allowCommit = resolve; });
+    const claimDb = {
+      $transaction: callback => db.$transaction(async tx => {
+        const result = await callback(tx);
+        assert.equal(result.status, "CLAIMED");
+        signalClaim();
+        await commitGate;
+        return result;
+      }, { timeout: 15_000 }),
+    };
+    const claiming = claimPersonSourceJob(claimDb, {
+      ...scope, provider: "gemini", model: "gemini-3-flash-preview",
+    });
+    await claimHasLockedRows;
+    const stopping = stopFullRunSourceOnZeroYield(stopper, scope);
+    allowCommit();
+    const claim = await claiming;
+    assert.equal(claim.status, "CLAIMED");
+    const stop = await stopping;
+    assert.equal(stop.code, "SOURCE_JOB_SETTLEMENT_PENDING");
+    assert.notEqual(stop.status, "PARTIAL");
+    const [full, job, reservations] = await Promise.all([
+      db.researchFullRun.findUnique({ where: { campaignId: scope.campaignId } }),
+      db.researchPersonSourceJob.findUnique({ where: { id: claim.jobId } }),
+      db.researchSpendReservation.count({ where: { ownerId: scope.ownerId } }),
+    ]);
+    assert.equal(full.status, "SOURCE_RUNNING");
+    assert.equal(job.status, "RUNNING");
+    assert.equal(job.attempts, 1);
+    assert.equal(reservations, 1, "the initial paid claim is reserved exactly once");
+    assert.equal(await db.auditEvent.count({ where: {
+      entityId: scope.campaignId, action: "research.full-run.zero-yield.stopped",
+    } }), 0);
+  } finally {
+    allowCommit?.();
+    await stopper.$disconnect();
+    await db.$disconnect();
+  }
+});
