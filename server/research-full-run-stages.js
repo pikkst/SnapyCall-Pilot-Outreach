@@ -11,6 +11,7 @@ import { requireResearchPriceEnvelope } from "./research-price-policy.js";
 import { createNextSourceCycle, eligibleUnattemptedContinuationSource,
   MAX_SOURCE_CYCLES } from "./research-person-source-cycles.js";
 import { personSourceFingerprint } from "./research-person-source-queue.js";
+import { personSourceJobSnapshot } from "./research-person-source-approval.js";
 
 const ACTIVE_STAGES = new Set([
   "DISCOVERY", "EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING",
@@ -238,7 +239,7 @@ export async function stopFullRunSourceOnZeroYield(db, scope, {
     }
     const jobs = await tx.researchPersonSourceJob.findMany({
       where: { campaignId: scope.campaignId },
-      select: { observationId: true, evidenceFingerprint: true,
+      select: { observationId: true, evidenceFingerprint: true, reason: true,
         cycleIndex: true, spendReservationId: true,
         status: true, attempts: true, proposedSourceUrl: true,
         lastErrorCode: true },
@@ -289,6 +290,25 @@ export async function stopFullRunSourceOnZeroYield(db, scope, {
       return { status: "BLOCKED", code: "SOURCE_CYCLE_CONCURRENCY_INVALID" };
     }
     const activeCycle = activeCycles[0] ?? null;
+    // A malformed or drifted approved manifest is not executable work.
+    // Use the same immutable hash checked by the paid source claim.
+    const snapshotMatches = (rows, approved) => {
+      if (rows.length !== approved.eligibleJobCount) return false;
+      try {
+        return personSourceJobSnapshot(rows.map(job => ({
+          ...job, status: "QUEUED",
+        }))) === approved.jobSnapshotHash;
+      } catch { return false; }
+    };
+    if (["APPROVED", "RUNNING"].includes(source.status) &&
+        !snapshotMatches(jobs, source)) {
+      return { status: "BLOCKED", code: "SOURCE_JOB_SNAPSHOT_CHANGED" };
+    }
+    if (activeCycle && !snapshotMatches(
+      jobs.filter(job => job.cycleIndex === activeCycle.cycleIndex),
+      activeCycle)) {
+      return { status: "BLOCKED", code: "SOURCE_CYCLE_MANIFEST_CHANGED" };
+    }
     const remainingCalls = full.maxSourceCalls -
       source.startedCalls -
       cycles.reduce((total, cycle) => total + cycle.startedCalls, 0);
