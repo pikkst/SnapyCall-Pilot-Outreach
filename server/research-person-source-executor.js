@@ -388,6 +388,41 @@ function sourceAccessFailureBucket(error) {
   }
 }
 
+// Prefer an exact person's published contact/profile path among already
+// provider-cited, exact-target candidate URLs. URL structure is only a
+// scheduling hint: it never establishes source authority or email evidence.
+// Preserve original order on ties and never add or alter a cited URL.
+export function rankCitedPersonSourceUrls(urls, personName) {
+  if (!Array.isArray(urls) || urls.length > 5 ||
+      typeof personName !== "string" || personName.length > 160) {
+    throw new TypeError("Bounded exact-person URL hints required");
+  }
+  const slug = personName.normalize("NFKC").toLocaleLowerCase("en-US")
+    .replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "");
+  const scored = urls.map((value, index) => {
+    const url = new URL(value);
+    if (url.protocol !== "https:") throw new TypeError("HTTPS source required");
+    // Invalid percent escapes are only weak hints, never a reason to turn
+    // an already billed provider call into an uncertain execution state.
+    let decodedPath;
+    try { decodedPath = decodeURIComponent(url.pathname); }
+    catch { decodedPath = url.pathname; }
+    const path = decodedPath.toLocaleLowerCase("en-US")
+      .replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "");
+    const exactPerson = slug.length >= 5 &&
+      (path === slug || path.endsWith("-" + slug) ||
+        path.startsWith(slug + "-") || path.includes("-" + slug + "-"));
+    const contactPath = /(?:^|[-/])(contact|team|staff|people|experts|speakers)(?:[-/]|$)/i
+      .test(url.pathname);
+    const genericPath = /(?:^|[-/])(blog|articles|news|events)(?:[-/]|$)/i
+      .test(url.pathname);
+    return { value, index, score: (exactPerson ? 4 : 0) +
+      (contactPath ? 2 : 0) - (genericPath ? 2 : 0) };
+  });
+  return scored.sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(item => item.value);
+}
+
 // Returns only coarse, bounded operational diagnostics. URLs, names, page
 // text and email addresses must never enter job status or audit metadata.
 // The independent downstream verifier remains the only proof persistence path.
@@ -410,16 +445,17 @@ export async function inspectEvidenceBackedPersonSources(preview, subject, {
     entry.category === subject.category &&
     cited.has(isDirectPublicProfileUrl(entry.citationUrl)))
     .map(entry => isDirectPublicProfileUrl(entry.citationUrl))
-    .filter(Boolean))].slice(0, 3);
+    .filter(Boolean))];
+  const prioritizedUrls = rankCitedPersonSourceUrls(urls, subject.name).slice(0, 3);
   const diagnostics = {
-    cited: urls.length, attempted: 0, unavailable: 0,
+    cited: prioritizedUrls.length, attempted: 0, unavailable: 0,
     noNamedEmail: 0, verified: 0, conflicting: false,
     accessFailures: emptySourceAccessFailures(),
     contentFailures: emptyContentFailures(),
   };
   let verified = null;
   let linkedAttempted = false;
-  for (const url of urls) {
+  for (const url of prioritizedUrls) {
     diagnostics.attempted++;
     let inspected;
     try {
