@@ -17,7 +17,7 @@ The output is suitable for aggregate review only. It distinguishes persisted rea
 With an isolated test database and synthetic rows only:
 
 ```text
-APP_ENVIRONMENT=local-read-only RESEARCH_WORKSPACE_ID=<workspace> RESEARCH_OWNER_ID=<owner> npm run research:funnel-baseline -- <completed-campaign>
+APP_ENVIRONMENT=local-read-only RD01_AUDIT_DATABASE=<database> RD01_AUDIT_ROLE=<role> RESEARCH_WORKSPACE_ID=<workspace> RESEARCH_OWNER_ID=<owner> npm run research:funnel-baseline -- <completed-campaign>
 ```
 
 The result is deterministic for the selected repeatable-read snapshot. An unsafe role, revoked membership, invalid scope, missing campaign, or non-read-only transaction returns an unavailable reason code and no funnel report.

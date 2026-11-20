@@ -16,7 +16,7 @@ function mockDb({ revoked = false, total = 1, rows = [observation], audits = [] 
     $executeRaw: async () => 0,
     $queryRaw: async query => String(query).includes("information_schema") ? [
       ...[["PartnerMembership", ["partnerId", "userId", "revokedAt"]], ["ResearchCampaign", ["id", "workspaceId", "ownerId", "status"]], ["ResearchCampaignObservation", ["campaignId"]], ["ResearchPersonSourceJob", ["campaignId"]], ["ResearchSpendReservation", ["id", "workspaceId", "ownerId"]], ["AuditEvent", ["action", "metadata"]]].flatMap(([table, columns]) => columns.map(column_name => ({ table_name: table, column_name }))),
-    ] : [{ database: "audit", role: "audit_reader", transaction_read_only: "on", rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolreplication: false, rolbypassrls: false, campaign_write: false, audit_write: false }],
+    ] : String(query).includes("quote_ident") ? [] : [{ database: "audit", role: "audit_reader", transaction_read_only: "on", rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolreplication: false, rolbypassrls: false, schema_create: false, database_create: false }],
     partnerMembership: { findUnique: async ({ where }) => where.partnerId_userId.userId === scope.ownerId
       ? (revoked ? { revokedAt: new Date(), user: { id: scope.ownerId, googleSub: "synthetic" } } : { id: "membership", revokedAt: null, role: "PARTNER", user: { id: scope.ownerId, googleSub: "synthetic" } }) : null },
     researchCampaign: { findFirst: async ({ where }) => where.workspaceId === scope.workspaceId && where.ownerId === scope.ownerId ? {

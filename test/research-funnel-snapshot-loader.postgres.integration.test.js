@@ -25,6 +25,10 @@ test("PostgreSQL read-only snapshot accepts active membership and rejects revoke
       planVersion: "rd01b-test", status: "PARTIAL",
     } });
     const scope = { campaignId: campaign.id, workspaceId: workspace.id, ownerId: user.id };
+    await db.$executeRawUnsafe('GRANT INSERT ON TABLE "ResearchPersonSourceJob" TO audit_reader');
+    const unsafe = await preflightHistoricalFunnelAudit(auditDb, { ...scope, environment: "local-read-only", expectedDatabase: "snapycall_ci", expectedRole: "audit_reader" });
+    assert.equal(unsafe.code, "AUDIT_ROLE_NOT_RESTRICTED");
+    await db.$executeRawUnsafe('REVOKE INSERT ON TABLE "ResearchPersonSourceJob" FROM audit_reader');
     const preflight = await preflightHistoricalFunnelAudit(auditDb, { ...scope, environment: "local-read-only", expectedDatabase: "snapycall_ci", expectedRole: "audit_reader" });
     assert.equal(preflight.ok, true);
     assert.equal(preflight.readOnly, true);
