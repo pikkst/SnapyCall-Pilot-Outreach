@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { loadResearchFunnelSnapshot } from "../server/research-funnel-snapshot-loader.js";
+import { preflightHistoricalFunnelAudit } from "../server/research-funnel-audit-preflight.js";
 
 const integration = process.env.AI98_TEST_POSTGRES === "isolated-ci";
 
@@ -23,6 +24,9 @@ test("PostgreSQL read-only snapshot accepts active membership and rejects revoke
       planVersion: "rd01b-test", status: "PARTIAL",
     } });
     const scope = { campaignId: campaign.id, workspaceId: workspace.id, ownerId: user.id };
+    const preflight = await preflightHistoricalFunnelAudit(db, { ...scope, environment: "local-read-only" });
+    assert.equal(preflight.ok, true);
+    assert.equal(preflight.readOnly, true);
     const loaded = await loadResearchFunnelSnapshot(db, scope);
     assert.equal(loaded.readOnly, true);
     assert.equal(loaded.completeness.complete, true);
