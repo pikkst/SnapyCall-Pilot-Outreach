@@ -54,6 +54,15 @@ function validScope(scope) {
     /^c[a-z0-9]{10,40}$/.test(scope.ownerId ?? "");
 }
 
+function completeSnapshot(snapshot, rowCount) {
+  const proof = snapshot.completeness;
+  return proof && proof.complete === true &&
+    Number.isSafeInteger(proof.totalObservations) &&
+    proof.totalObservations === rowCount &&
+    Number.isSafeInteger(proof.returnedObservations) &&
+    proof.returnedObservations === rowCount;
+}
+
 export function summarizeResearchFunnel(snapshot) {
   if (!snapshot || typeof snapshot !== "object" || !validScope(snapshot.scope) ||
       !Array.isArray(snapshot.tasks) ||
@@ -70,9 +79,15 @@ export function summarizeResearchFunnel(snapshot) {
   const people = new Set(observations.map(row => `${row?.name ?? ""}\u0000${row?.category ?? ""}`)).size;
   const inspected = observations.filter(row => TERMINAL_INSPECTION.has(row?.emailTriageStatus)).length;
   const readable = observations.filter(row => row?.emailTriageStatus === "REVIEW_REQUIRED" || row?.emailTriageStatus === "NO_EMAIL").length;
-  const qualified = observations.length <= 250
+  const complete = completeSnapshot(snapshot, observations.length);
+  const qualified = complete && observations.length <= 250
     ? summarizeQualifiedEmailEvidence(observations)
     : null;
+  const namedEmailEvidence = observations.filter(row =>
+    row?.emailTriageStatus === "REVIEW_REQUIRED" &&
+    row?.emailTriageCode === "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED").length;
+  const reviewRequired = observations.filter(row =>
+    row?.emailTriageStatus === "REVIEW_REQUIRED").length;
   const attemptedUrls = inspectionAttempts(audits);
   const failures = failureCounts(audits);
   const sourceCompleted = jobs.filter(row => row?.status === "COMPLETED").length;
@@ -89,7 +104,8 @@ export function summarizeResearchFunnel(snapshot) {
     providerCitedUrls: metric(new Set(jobs.map(row => row?.proposedSourceUrl).filter(url => typeof url === "string" && url.length > 0)).size, "distinct persisted proposed source URLs", sourceAttempted, "ResearchPersonSourceJob.proposedSourceUrl", true),
     urlInspectionAttempts: metric(attemptedUrls, "URL inspection attempts", null, "AuditEvent.metadata.sourceInspection.attempted", attemptedUrls !== null),
     readablePages: metric(readable, "readable inspection outcomes", inspected, "ResearchCampaignObservation.emailTriageStatus", true),
-    namedPersonEmailEvidence: metric(qualified?.reviewRequired ?? null, "named-email evidence rows requiring review", inspected, "ResearchCampaignObservation.emailTriageCode", qualified !== null),
+    reviewRequired: metric(complete ? reviewRequired : null, "review-required observation rows", inspected, "ResearchCampaignObservation.emailTriageStatus", complete),
+    namedPersonEmailEvidence: metric(complete ? namedEmailEvidence : null, "named-email evidence rows requiring review", inspected, "ResearchCampaignObservation.emailTriageStatus + emailTriageCode", complete),
     qualifiedEvidence: metric(qualified?.qualifiedEvidence ?? null, "independently qualified person-email evidence", qualified?.reviewRequired ?? null, "summarizeQualifiedEmailEvidence; persisted observation fields", qualified?.countReliable === true),
     humanAcceptedContacts: metric(null, "CONTACT_ACCEPTED records", null, "No persisted CONTACT_ACCEPTED state exists in ResearchContactBatchItem; supplied items are review-pending or unresolved", false),
   });

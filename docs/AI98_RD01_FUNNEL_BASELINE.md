@@ -13,14 +13,16 @@ Read-only deterministic diagnostic over an already authorized workspace/owner-sc
 | Provider-cited URLs | `ResearchPersonSourceJob.proposedSourceUrl` | Distinct non-empty URLs; not proof. |
 | URL inspection attempts | `AuditEvent.metadata.sourceInspection.attempted` | Actual bounded URL attempts; terminal observations are not substituted. |
 | Readable pages | `emailTriageStatus` | Current `REVIEW_REQUIRED` and `NO_EMAIL` outcomes only. |
-| Qualified evidence | `summarizeQualifiedEmailEvidence()` | `null`/unknown above the existing 250-row contract or with incomplete data. |
+| Qualified evidence | `summarizeQualifiedEmailEvidence()` | `null`/unknown without completeness proof, above the existing 250-row contract, or with incomplete data. |
+| Review required | `emailTriageStatus` | All `REVIEW_REQUIRED` rows; separate from named-email evidence. |
+| Named email evidence | exact status + `NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED` code | Only rows with both persisted fields. |
 | Human-accepted contacts | none in `ResearchContactBatchItem` | Current states are review-pending/unresolved; report unknown unless a separate accepted-state contract is supplied. |
 
 Access-failure categories come only from `AuditEvent.metadata.sourceInspection.accessFailures`; absent historical metadata is unknown, not zero. Legacy and current reason codes remain separate.
 
 Unknown spend is never treated as zero. The report separates `knownChargedCents`, `unknownReservationCount`, and `totalChargedCents`; the last is null when any reservation is unknown.
 
-Snapshots require validated CUID-shaped `workspaceId` and `ownerId` values. The caller must obtain the snapshot after existing membership and campaign authorization checks.
+Snapshots require validated CUID-shaped `workspaceId` and `ownerId` values plus a completeness proof whose returned and total observation counts match. ID shape alone does not prove tenant or campaign row ownership; an authorized loader must establish that boundary before calling this pure reducer.
 
 Stage counts have different units and must not be summed. Source hints, observations, qualified evidence, accepted contacts, and send eligibility remain separate outcomes. No names, emails, URLs, payloads, or exception text are emitted.
 
