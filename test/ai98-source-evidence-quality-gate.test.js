@@ -11,7 +11,7 @@ test("exact-person contact hints are inspected before generic news on same appro
     "https://example.org/blog/ada-lovelace",
   ];
   assert.deepEqual(rankCitedPersonSourceUrls(urls, "Ada Lovelace"), [
-    urls[2], urls[1], urls[0], urls[3],
+    urls[1], urls[2], urls[0], urls[3],
   ]);
   assert.deepEqual(urls, [
     "https://example.org/news/ada-lovelace",
@@ -32,7 +32,7 @@ test("cold-start citations preserve order and identity is never inferred from a 
 
 test("ranked source hints still require independent retrieval and never become qualified email proof", async () => {
   const candidate = (url) => ({
-    name: "Ada Lovelace", category: "AI_AUTOMATION", citationUrl: url,
+    name: "Ada Lovelace", category: "AI_AUTOMATION", sourceUrl: url,
     rationale: "Exact professional cited profile",
   });
   const urls = [
@@ -41,7 +41,7 @@ test("ranked source hints still require independent retrieval and never become q
   ];
   const checked = [];
   const result = await inspectEvidenceBackedPersonSources({
-    observations: urls.map(candidate),
+    candidates: urls.map(candidate),
     sources: urls.map(url => ({ url })),
   }, { name: "Ada Lovelace", category: "AI_AUTOMATION" }, {
     retrieve: async url => {
