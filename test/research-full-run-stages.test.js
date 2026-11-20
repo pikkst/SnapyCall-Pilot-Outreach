@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { tickFullRunStages, transitionFullRunStage,
-  stopFullRunSourceAtGoal }
+  stopFullRunSourceAtGoal, stopFullRunSourceOnZeroYield }
   from "../server/research-full-run-stages.js";
 import { requireResearchPriceEnvelope }
   from "../server/research-price-policy.js";
@@ -58,6 +58,10 @@ function fixture({ stage = "DISCOVERY", status = "PARTIAL",
       assert.equal(owner.campaignId, scope.campaignId);
       actions.push("cycle-exhausted");
       return { status: "EXHAUSTED", code: "NO_UNATTEMPTED_SOURCE_JOBS" };
+    },
+    stopZeroYield: async (_, owner) => {
+      assert.equal(owner.campaignId, scope.campaignId);
+      return { status: "WAITING", code: "ZERO_YIELD_NOT_REACHED" };
     },
     stopAtGoal: async (_, owner) => {
       assert.equal(owner.campaignId, scope.campaignId);
@@ -328,4 +332,100 @@ test("already-running continuation does not generate another approval", async ()
   const result = await tickFullRunStages(f.db, f.input);
   assert.equal(result.status, "WAITING");
   assert.equal(result.code, "SOURCE_CYCLE_IN_PROGRESS");
+});
+
+test("zero-yield threshold transitions SOURCE_RUNNING to partial without another source cycle", async () => {
+  const f = fixture({ stage: "SOURCE_RUNNING", sourceStatus: "PARTIAL_BUDGET" });
+  f.input.stopZeroYield = async () => ({ status: "PARTIAL",
+    code: "SOURCE_ZERO_YIELD_EARLY_STOP" });
+  const result = await tickFullRunStages(f.db, f.input);
+  assert.equal(result.status, "PARTIAL");
+  assert.equal(result.code, "SOURCE_ZERO_YIELD_EARLY_STOP");
+  assert.deepEqual(f.actions, [], "no source cycle or extra paid approval");
+});
+
+function zeroYieldTransaction({ completed = 12, uncertain = false,
+  qualified = false, member = true, pendingProof = false } = {}) {
+  const updates = [];
+  const rows = Array.from({ length: completed }, () => ({
+    status: "COMPLETED", attempts: 1, proposedSourceUrl: null,
+    lastErrorCode: "SOURCE_ALL_PAGES_UNAVAILABLE",
+  }));
+  rows.push({ status: "QUEUED", attempts: 0, proposedSourceUrl: null });
+  if (uncertain) rows.push({ status: "PAUSED", attempts: 1 });
+  if (pendingProof) rows[0].proposedSourceUrl = "https://example.org/ada";
+  const db = { $transaction: async fn => fn({
+    $queryRaw: async parts => {
+      if (parts.join("?").includes('FROM "PartnerMembership"')) {
+        return member ? [{ revokedAt: null }] : [];
+      }
+      return [{ id: scope.campaignId }];
+    },
+    researchFullRun: {
+      findUnique: async () => ({ ...scope, id: "full-run",
+        status: "SOURCE_RUNNING", provider: "gemini",
+        model: "gemini-3-flash-preview", priceVersion: price.priceVersion }),
+      updateMany: async ({ data }) => {
+        updates.push("full:" + data.status + ":" + data.lastCode);
+        return { count: 1 };
+      },
+    },
+    researchPersonSourceApproval: {
+      findUnique: async () => ({ ...scope, id: "source-id",
+        status: "RUNNING", provider: "gemini",
+        model: "gemini-3-flash-preview", priceVersion: price.priceVersion }),
+      updateMany: async ({ data }) => {
+        updates.push("approval:" + data.status); return { count: 1 };
+      },
+    },
+    researchPersonSourceCycle: {
+      count: async () => 1,
+      updateMany: async ({ data }) => {
+        updates.push("cycle:" + data.status); return { count: 1 };
+      },
+    },
+    researchPersonSourceJob: { findMany: async () => rows },
+    researchCampaignObservation: {
+      count: async () => qualified ? 1 : 0,
+      findMany: async () => qualified ? [{
+        name: "Ada Lovelace", category: "AI_AUTOMATION",
+        citationUrl: "https://example.org/ada", groundingStatus: "UNCHECKED",
+        groundingResolvedUrl: null, groundingProvenance: null,
+        emailTriageStatus: "REVIEW_REQUIRED",
+        emailTriageCode: "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED",
+        emailTriageEmail: "ada@example.org",
+        emailTriageDigest: "a".repeat(64),
+        emailTriageAt: new Date("2026-11-18T15:30:00Z"),
+      }] : [],
+    },
+    auditEvent: { create: async ({ data }) => {
+      assert.equal(data.metadata.futurePaidClaimsStopped, true);
+      assert.equal(data.metadata.remainingQueuedJobs, 1);
+      updates.push("audit");
+    } },
+  }) };
+  return { db, updates };
+}
+
+test("bounded zero-yield stop is atomic and retains untouched queued work", async () => {
+  const { db, updates } = zeroYieldTransaction();
+  const result = await stopFullRunSourceOnZeroYield(db, scope, { now });
+  assert.equal(result.code, "SOURCE_ZERO_YIELD_EARLY_STOP");
+  assert.equal(result.settledZeroYieldJobs, 12);
+  assert.deepEqual(updates, [
+    "approval:QUALITY_STOP", "cycle:QUALITY_STOP",
+    "full:PARTIAL:SOURCE_ZERO_YIELD_EARLY_STOP", "audit",
+  ]);
+});
+
+test("zero-yield stop cannot mask incomplete billing, pending proof or revoked rights", async () => {
+  for (const options of [
+    { completed: 11 }, { uncertain: true }, { pendingProof: true },
+    { member: false }, { qualified: true },
+  ]) {
+    const { db, updates } = zeroYieldTransaction(options);
+    const result = await stopFullRunSourceOnZeroYield(db, scope, { now });
+    assert.notEqual(result.status, "PARTIAL");
+    assert.deepEqual(updates, [], JSON.stringify(options));
+  }
 });
