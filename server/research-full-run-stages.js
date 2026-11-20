@@ -238,7 +238,9 @@ export async function stopFullRunSourceOnZeroYield(db, scope, {
     }
     const jobs = await tx.researchPersonSourceJob.findMany({
       where: { campaignId: scope.campaignId },
-      select: { status: true, attempts: true, proposedSourceUrl: true,
+      select: { observationId: true, evidenceFingerprint: true,
+        cycleIndex: true, spendReservationId: true,
+        status: true, attempts: true, proposedSourceUrl: true,
         lastErrorCode: true },
       take: MAX_OBSERVATIONS + 1,
     });
