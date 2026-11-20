@@ -7,6 +7,8 @@ import { requireResearchPriceEnvelope }
   from "../server/research-price-policy.js";
 import { personSourceFingerprint }
   from "../server/research-person-source-queue.js";
+import { personSourceJobSnapshot }
+  from "../server/research-person-source-approval.js";
 
 const price = requireResearchPriceEnvelope({
   provider: "gemini", model: "gemini-3-flash-preview",
@@ -351,8 +353,12 @@ function zeroYieldTransaction({ completed = 12, uncertain = false,
   noQueued = false, stale = false, noBudget = false,
   alreadyLinked = false } = {}) {
   const updates = [];
-  const rows = Array.from({ length: completed }, () => ({
-    status: "COMPLETED", attempts: 1, proposedSourceUrl: null,
+  const rows = Array.from({ length: completed }, (_, i) => ({
+    observationId: "cmabcdefghijklmnopqrs" + String(i + 100),
+    evidenceFingerprint: "a".repeat(64),
+    reason: "PERSON_SOURCE_REQUIRED", cycleIndex: 0,
+    spendReservationId: null, status: "COMPLETED", attempts: 1,
+    proposedSourceUrl: null,
     lastErrorCode: "SOURCE_ALL_PAGES_UNAVAILABLE",
   }));
   const pendingObservation = {
@@ -369,6 +375,7 @@ function zeroYieldTransaction({ completed = 12, uncertain = false,
     evidenceFingerprint: stale ? "f".repeat(64) :
       personSourceFingerprint(pendingObservation),
     cycleIndex: 0, spendReservationId: null,
+    reason: "PERSON_SOURCE_REQUIRED",
     status: "QUEUED", attempts: 0, proposedSourceUrl: null,
   });
   if (uncertain) rows.push({ status: "PAUSED", attempts: 1 });
@@ -399,7 +406,15 @@ function zeroYieldTransaction({ completed = 12, uncertain = false,
         worstCasePerCallCents: price.worstCaseCents,
         startedCalls: noBudget ? 30 : 12,
         committedWorstCaseCents: (noBudget ? 30 : 12) * price.worstCaseCents,
-        maxCalls: 30, maxWorstCaseCents: 30 * price.worstCaseCents }),
+        maxCalls: 30, maxWorstCaseCents: 30 * price.worstCaseCents,
+        eligibleJobCount: rows.length,
+        jobSnapshotHash: personSourceJobSnapshot(rows.map((job, i) => ({
+          observationId: job.observationId ??
+            "cmabcdefghijklmnopqrsextra" + i,
+          evidenceFingerprint: job.evidenceFingerprint ?? "a".repeat(64),
+          reason: job.reason ?? "PERSON_SOURCE_REQUIRED",
+          status: "QUEUED",
+        }))) }),
       updateMany: async ({ data }) => {
         updates.push("approval:" + data.status); return { count: 1 };
       },
