@@ -2,19 +2,17 @@
 
 No real third-party personal data. Results measure current verifier contract, not production false-negative rates.
 
-| Case | Description | Expected | Actual | Classification |
-| --- | --- | --- | --- | --- |
-| M1 | Labeled single named email | REVIEW_REQUIRED | REVIEW_REQUIRED | PASS |
-| M2 | Generic mailbox | UNVERIFIED | UNVERIFIED | PASS |
-| M3 | Visible mailto anchor text | REVIEW_REQUIRED | REVIEW_REQUIRED | PASS |
-| M4 | Conflicting addresses | UNVERIFIED | UNVERIFIED | PASS |
-| M5 | Single Person JSON-LD | object | object | PASS |
-| M6 | Multi Person JSON-LD | 2 | 2 | PASS |
-| M7 | Malformed JSON-LD | null | null | PASS |
-| M8 | Oversized JSON-LD | null | null | PASS (boundary) |
-| M9 | Cross-domain link | UNVERIFIED | UNVERIFIED | PASS |
-| M10 | Linked contact offline positive | evidence | evidence | PASS |
-| M11 | Linked contact unavailable | linkedUnavailable=true | true | PASS |
-| M12 | Digest/readback boundary | NOT_MEASURABLE | NOT_MEASURABLE | NOT_MEASURABLE |
+Measured (PASS, FP=0, FN=0):
+- F1 labeled single named email
+- F2 generic mailbox
+- F5 single Person JSON-LD
+- F6 multi Person JSON-LD
+- F7 malformed JSON-LD
+- F9 linked contact offline positive
+- F10 linked contact unavailable
 
-FP=0, FN=0 on synthetic corpus. M8/M12 boundaries documented, not counted as tested coverage.
+Unmeasured boundaries (NOT_MEASURABLE):
+- F3 mailto: HTML normalization (no production normalization path exported)
+- F4 conflicting address (requires real HTML normalization)
+- F8 cross-domain link (requires real HTML normalization)
+- F11 digest/readback mismatch (requires persisted evidence/readback)
