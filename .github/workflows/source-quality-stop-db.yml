@@ -7,6 +7,8 @@ on:
       - "server/research-person-source-cycles.js"
       - "server/research-person-source-executor.js"
       - "test/ai98-zero-yield-postgres.integration.test.js"
+      - "server/research-funnel-snapshot-loader.js"
+      - "test/research-funnel-snapshot-loader.postgres.integration.test.js"
       - "prisma/**"
       - ".github/workflows/source-quality-stop-db.yml"
   push:
@@ -16,6 +18,8 @@ on:
       - "server/research-person-source-cycles.js"
       - "server/research-person-source-executor.js"
       - "test/ai98-zero-yield-postgres.integration.test.js"
+      - "server/research-funnel-snapshot-loader.js"
+      - "test/research-funnel-snapshot-loader.postgres.integration.test.js"
       - "prisma/**"
       - ".github/workflows/source-quality-stop-db.yml"
 
@@ -53,4 +57,4 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
       - run: npx prisma migrate deploy
-      - run: node --test test/ai98-zero-yield-postgres.integration.test.js
+      - run: node --test test/ai98-zero-yield-postgres.integration.test.js test/research-funnel-snapshot-loader.postgres.integration.test.js
