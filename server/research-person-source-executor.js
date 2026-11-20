@@ -123,8 +123,8 @@ const SOURCE_CATEGORY_SEARCH = Object.freeze({
 // not additional provider calls or a guessed company/website affiliation.
 const SOURCE_SEARCH_INTENT = Object.freeze({
   ALTERNATE_EMAIL_SOURCE: "email contact",
-  PERSON_SOURCE_REQUIRED: "official profile contact email",
-  SHARED_SOURCE: "official team staff contact email",
+  PERSON_SOURCE_REQUIRED: "profile contact email",
+  SHARED_SOURCE: "team staff contact email",
 });
 export function personSourceSearchQuery({ name, category, reason = "ALTERNATE_EMAIL_SOURCE" }) {
   if (typeof name !== "string" || name.length < 5 || name.length > 160 ||
