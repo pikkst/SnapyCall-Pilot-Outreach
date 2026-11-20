@@ -43,14 +43,14 @@ async function fixture(db, { futureCycle = false, invalidQueued = false } = {}) 
       campaignId: campaign.id, taskId: task.id,
       evidenceKey: "test-evidence-" + i, name: "Expert Person " + i,
       category: "AI_AUTOMATION", citationUrl: "https://example.org/team",
-      rationale: "Explicit test citation", emailTriageStatus:
-        i === 12 && invalidQueued ? "REVIEW_REQUIRED" : "BLOCKED",
+      rationale: "Explicit test citation", emailTriageStatus: "BLOCKED",
     } });
     observations.push(row);
   }
   const jobs = observations.map((row, i) => ({
     campaignId: campaign.id, observationId: row.id,
-    evidenceFingerprint: personSourceFingerprint(row),
+    evidenceFingerprint: invalidQueued && i === 12
+      ? "f".repeat(64) : personSourceFingerprint(row),
     reason: "PERSON_SOURCE_REQUIRED",
     status: i === 12 ? "QUEUED" : "COMPLETED",
     attempts: i === 12 ? 0 : 1,
