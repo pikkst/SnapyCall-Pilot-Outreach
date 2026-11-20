@@ -15,6 +15,7 @@
     "research:reconciliation-check": "node scripts/research-reconciliation-check.mjs",
     "research:reconciliation-enqueue": "node scripts/research-reconciliation-enqueue.mjs",
     "research:reconciliation-deliver": "node scripts/research-reconciliation-deliver.mjs",
+    "research:funnel-baseline": "node scripts/research-funnel-baseline.mjs",
     "db:validate": "prisma validate",
     "db:deploy": "prisma migrate deploy",
     "typecheck": "tsc --noEmit"
