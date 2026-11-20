@@ -14,7 +14,7 @@ function evidenceSnapshot(kind) {
   if (kind === "discovery-only") snapshot.discoveryRun.startedTasks = 2;
   if (kind === "source-failures") snapshot.sourceJobs = [{ status: "COMPLETED", attempts: 1, lastErrorCode: "SOURCE_ALL_PAGES_UNAVAILABLE" }];
   if (kind === "inaccessible") snapshot.audits = [{ metadata: { sourceInspection: { attempted: 1, accessFailures: { robots: 1, redirect: 0, dns: 0, http: 0, timeout: 0, content: 0, linked: 0, other: 0 } } } }];
-  if (kind === "named-review" || kind === "qualified") snapshot.observations = [{ name: "Synthetic Person", category: "COACHING", emailTriageStatus: "REVIEW_REQUIRED", emailTriageCode: "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED", emailTriageEmail: "synthetic@example.org", emailTriageDigest: digest, emailTriageAt: new Date(), citationUrl: "https://example.invalid/person" }];
+  if (kind === "named-review" || kind === "qualified") snapshot.observations = [{ name: "Synthetic Person", category: "COACHING", emailTriageStatus: "REVIEW_REQUIRED", emailTriageCode: "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED", emailTriageEmail: "synthetic@example.org", emailTriageDigest: digest, emailTriageAt: new Date(), citationUrl: "https://example.invalid/person", ...(kind === "qualified" ? { personSourceUrl: "https://example.invalid/person", personSourceProvenance: "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE", personSourceVerifiedAt: new Date() } : {}) }];
   if (snapshot.observations.length) snapshot.completeness = { complete: true, totalObservations: snapshot.observations.length, returnedObservations: snapshot.observations.length };
   if (kind === "incomplete") { snapshot.observations = [{ name: "Synthetic Person", category: "COACHING" }]; snapshot.completeness = { complete: false, totalObservations: 2, returnedObservations: 1 }; }
   if (kind === "missing-audit") snapshot.auditCompleteness = { complete: false, total: 1, returned: 0 };
@@ -33,7 +33,8 @@ test("synthetic audit cohort produces sanitized, denominator-aware loader/reduce
     await writer.partnerMembership.create({ data: { partnerId: workspace.id, userId: user.id, inviteStatus: "ACCEPTED" } });
     const saved = await writer.researchCampaign.create({ data: { workspaceId: workspace.id, ownerId: user.id, idempotencyKey: `rd01d-${nonce}`, query: "synthetic", targetCount: 1, planVersion: "rd01d-test", status: "PARTIAL" } });
     const task = await writer.researchCampaignTask.create({ data: { campaignId: saved.id, taskIndex: 0, taskKey: `rd01d-${nonce}`, query: "synthetic", region: "global", facet: "synthetic", resultLimit: 1, status: "COMPLETED", attempts: 1, observedCount: 1 } });
-    const observation = await writer.researchCampaignObservation.create({ data: { campaignId: saved.id, taskId: task.id, evidenceKey: `rd01d-${nonce}`, name: "Synthetic Person", category: "COACHING", citationUrl: "https://example.invalid/person", rationale: "synthetic fixture", emailTriageStatus: "REVIEW_REQUIRED", emailTriageCode: "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED", emailTriageEmail: "synthetic@example.org", emailTriageDigest: digest, emailTriageAt: new Date() } });
+    const observedAt = new Date();
+    const observation = await writer.researchCampaignObservation.create({ data: { campaignId: saved.id, taskId: task.id, evidenceKey: `rd01d-${nonce}`, name: "Synthetic Person", category: "COACHING", citationUrl: "https://example.invalid/person", personSourceUrl: "https://example.invalid/person", personSourceProvenance: "AI98_EXPLICIT_SCOPED_PERSON_EMAIL_ON_SHARED_SOURCE", personSourceVerifiedAt: observedAt, rationale: "synthetic fixture", emailTriageStatus: "REVIEW_REQUIRED", emailTriageCode: "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED", emailTriageEmail: "synthetic@example.org", emailTriageDigest: digest, emailTriageAt: observedAt } });
     await writer.researchPersonSourceJob.create({ data: { campaignId: saved.id, observationId: observation.id, evidenceFingerprint: digest, reason: "PERSON_SOURCE", status: "COMPLETED", attempts: 1, proposedSourceUrl: "https://example.invalid/person", lastErrorCode: "SOURCE_ALL_PAGES_UNAVAILABLE" } });
     await writer.auditEvent.create({ data: { actorId: user.id, action: "research.person-source.attempt.settled", entityId: observation.id, metadata: { campaignId: saved.id, workspaceId: workspace.id, sourceInspection: { attempted: 1, accessFailures: { robots: 1, redirect: 0, dns: 0, http: 0, timeout: 0, content: 0, linked: 0, other: 0 } } } } });
     const campaign = { campaignId: saved.id, workspaceId: workspace.id, ownerId: user.id };
@@ -44,12 +45,20 @@ test("synthetic audit cohort produces sanitized, denominator-aware loader/reduce
     assert.equal(persistedReport.stages.sourceJobsCompleted.value, 1);
     assert.equal(persistedReport.accessibility.counts.robots, 1);
     assert.equal(persistedReport.stages.namedPersonEmailEvidence.value, 1);
-    const cases = ["discovery-only", "source-failures", "inaccessible", "named-review", "qualified", "incomplete", "missing-audit", "missing-reservation", "large"].map(kind => [kind, summarizeResearchFunnel(evidenceSnapshot(kind))]);
+    assert.equal(snapshot.completeness.complete, true);
+    assert.equal(snapshot.completeness.totalObservations, snapshot.observations.length);
+    assert.equal(snapshot.completeness.returnedObservations, snapshot.observations.length);
+    assert.equal(persistedReport.stages.qualifiedEvidence.value, 1);
+    // The persisted fixture above exercises source failure, access metadata,
+    // named-email evidence, qualification, and completeness through the real
+    // loader. Keep the remaining bounded reducer edge cases synthetic.
+    const cases = ["discovery-only", "named-review", "qualified", "incomplete", "missing-audit", "missing-reservation", "large"].map(kind => [kind, summarizeResearchFunnel(evidenceSnapshot(kind))]);
     const report = Object.fromEntries(cases.map(([kind, result]) => [kind, { stages: result.stages, accessibility: result.accessibility, cost: result.cost }]));
+    report.persisted = { stages: persistedReport.stages, accessibility: persistedReport.accessibility, cost: persistedReport.cost };
     assert.equal(report["discovery-only"].stages.qualifiedEvidence.value, 0);
-    assert.equal(report["source-failures"].stages.sourceJobsCompleted.value, 1);
-    assert.equal(report.inaccessible.accessibility.counts.robots, 1);
+    assert.equal(report.persisted.accessibility.counts.robots, 1);
     assert.equal(report["named-review"].stages.namedPersonEmailEvidence.value, 1);
+    assert.equal(report["named-review"].stages.qualifiedEvidence.value, 0);
     assert.equal(report.qualified.stages.qualifiedEvidence.value, 1);
     assert.equal(report.incomplete.stages.qualifiedEvidence.value, null);
     assert.equal(report["missing-audit"].accessibility.counts, null);
