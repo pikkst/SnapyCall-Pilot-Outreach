@@ -9,7 +9,8 @@ import { approvePersonSourceResearch } from "./research-person-source-approval.j
 import { summarizeQualifiedEmailEvidence } from "./research-qualified-evidence.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
 import { createNextSourceCycle, eligibleUnattemptedContinuationSource,
-  MAX_SOURCE_CYCLES } from "./research-person-source-cycles.js";
+  validateContinuationProviderPrice, MAX_SOURCE_CYCLES }
+  from "./research-person-source-cycles.js";
 import { personSourceFingerprint } from "./research-person-source-queue.js";
 import { personSourceJobSnapshot } from "./research-person-source-approval.js";
 
@@ -290,6 +291,24 @@ export async function stopFullRunSourceOnZeroYield(db, scope, {
       return { status: "BLOCKED", code: "SOURCE_CYCLE_CONCURRENCY_INVALID" };
     }
     const activeCycle = activeCycles[0] ?? null;
+    // New continuation cycles must pass the very same saved model and tariff
+    // validation as createNextSourceCycle before an early stop is justified.
+    if (!activeCycle && ["COMPLETED", "PARTIAL_BUDGET"].includes(source.status)) {
+      const setting = await tx.aiSetting.findUnique({
+        where: { ownerId: scope.ownerId },
+        select: { provider: true, model: true },
+      });
+      const validated = validateContinuationProviderPrice(setting, full, source);
+      if (validated.code) {
+        return { status: "WAITING", code: validated.code };
+      }
+      if (cycles.some(cycle =>
+        cycle.provider !== full.provider || cycle.model !== full.model ||
+        cycle.priceVersion !== full.priceVersion ||
+        cycle.worstCasePerCallCents !== validated.price.worstCaseCents)) {
+        return { status: "BLOCKED", code: "SOURCE_CYCLE_HISTORY_INVALID" };
+      }
+    }
     // A malformed or drifted approved manifest is not executable work.
     // Use the same immutable hash checked by the paid source claim.
     const snapshotMatches = (rows, approved) => {
