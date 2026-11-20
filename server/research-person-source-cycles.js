@@ -14,6 +14,23 @@ export function eligibleUnattemptedContinuationSource(job, row) {
     personSourceFingerprint(row) === job.evidenceFingerprint;
 }
 
+// Immutable continuation provider/price contract shared with the zero-yield
+// stop. A stopped search must have been executable with the saved approval.
+export function validateContinuationProviderPrice(setting, full, first) {
+  if (!setting || setting.provider !== full.provider ||
+      setting.model !== full.model || setting.provider !== first.provider ||
+      setting.model !== first.model) {
+    return { code: "APPROVED_PROVIDER_CHANGED" };
+  }
+  const price = requireResearchPriceEnvelope(setting);
+  if (price.priceVersion !== full.priceVersion ||
+      price.priceVersion !== first.priceVersion ||
+      price.worstCaseCents !== first.worstCasePerCallCents) {
+    return { code: "SOURCE_PRICE_CHANGED" };
+  }
+  return { code: null, price };
+}
+
 export const SOURCE_CYCLE_SIZE = 25;
 export const MAX_SOURCE_CYCLES = 10;
 const TERMINAL = new Set(["COMPLETED", "PARTIAL_BUDGET", "TARGET_REACHED"]);
@@ -46,17 +63,11 @@ export async function createNextSourceCycle(db, {
     const setting = await tx.aiSetting.findUnique({
       where: { ownerId }, select: { provider: true, model: true },
     });
-    if (!setting || setting.provider !== full.provider ||
-        setting.model !== full.model || setting.provider !== first.provider ||
-        setting.model !== first.model) {
-      return { status: "BLOCKED", code: "APPROVED_PROVIDER_CHANGED" };
+    const validation = validateContinuationProviderPrice(setting, full, first);
+    if (validation.code) {
+      return { status: "BLOCKED", code: validation.code };
     }
-    const price = requireResearchPriceEnvelope(setting);
-    if (price.priceVersion !== full.priceVersion ||
-        price.priceVersion !== first.priceVersion ||
-        price.worstCaseCents !== first.worstCasePerCallCents) {
-      return { status: "BLOCKED", code: "SOURCE_PRICE_CHANGED" };
-    }
+    const { price } = validation;
     const cycles = await tx.researchPersonSourceCycle.findMany({
       where: { campaignId }, orderBy: { cycleIndex: "asc" },
       take: MAX_SOURCE_CYCLES + 1,
