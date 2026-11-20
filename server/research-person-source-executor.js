@@ -118,17 +118,26 @@ const SOURCE_CATEGORY_SEARCH = Object.freeze({
   MARKETING_GROWTH: "marketing growth consultant",
   BUSINESS_STRATEGY: "business strategy consultant",
 });
-export function personSourceSearchQuery({ name, category }) {
+// The approved queue already distinguishes missing individual evidence
+// from shared sources. Reuse that trusted reason to select ONE bounded query,
+// not additional provider calls or a guessed company/website affiliation.
+const SOURCE_SEARCH_INTENT = Object.freeze({
+  ALTERNATE_EMAIL_SOURCE: "email contact",
+  PERSON_SOURCE_REQUIRED: "profile contact email",
+  SHARED_SOURCE: "team staff contact email",
+});
+export function personSourceSearchQuery({ name, category, reason = "ALTERNATE_EMAIL_SOURCE" }) {
   if (typeof name !== "string" || name.length < 5 || name.length > 160 ||
-      /[\r\n]/.test(name) || !SOURCE_CATEGORY_SEARCH[category]) {
+      /[\r\n]/.test(name) || !SOURCE_CATEGORY_SEARCH[category] ||
+      !Object.hasOwn(SOURCE_SEARCH_INTENT, reason)) {
     throw new TypeError("A valid named professional search is required");
   }
   const safeName = name.normalize("NFKC").replace(/"/g, " ").replace(/\s+/g, " ").trim();
   if (safeName.length < 5) throw new TypeError("A named professional is required");
-  // Put the exact person and publication intent first instead of broadly
-  // searching for a biography. Keep the professional context to disambiguate
-  // namesakes, but do not speculate about the person's organization/domain.
-  return '"' + safeName + '" email contact ' +
+  // Keep the exact identity and category in every query. In particular,
+  // shared-source work looks for the person's official team/contact record
+  // rather than guessing an employer, domain or personal email pattern.
+  return '"' + safeName + '" ' + SOURCE_SEARCH_INTENT[reason] + " " +
     SOURCE_CATEGORY_SEARCH[category] + " official";
 }
 
@@ -309,7 +318,7 @@ export async function claimPersonSourceJob(db, {
       category: observation.category, provider, model,
       leaseToken, leaseUntil, leaseId, reservationId,
       worstCaseCents: price.worstCaseCents,
-      query: personSourceSearchQuery(observation),
+      query: personSourceSearchQuery({ ...observation, reason: queued.reason }),
     };
   });
 }

@@ -235,6 +235,38 @@ test("source query focuses on exact-person public contact evidence, not category
   }), TypeError);
 });
 
+test("approved source reason selects one targeted official contact query", () => {
+  const target = { name: "Lorraine Burrell", category: "AI_AUTOMATION" };
+  assert.equal(personSourceSearchQuery({
+    ...target, reason: "ALTERNATE_EMAIL_SOURCE",
+  }), '"Lorraine Burrell" email contact AI automation consultant official');
+  assert.equal(personSourceSearchQuery({
+    ...target, reason: "PERSON_SOURCE_REQUIRED",
+  }), '"Lorraine Burrell" profile contact email AI automation consultant official');
+  assert.equal(personSourceSearchQuery({
+    ...target, reason: "SHARED_SOURCE",
+  }), '"Lorraine Burrell" team staff contact email AI automation consultant official');
+  for (const reason of ["SHARED_SOURCE", "PERSON_SOURCE_REQUIRED"]) {
+    const query = personSourceSearchQuery({ ...target, reason });
+    assert.ok(query.length < 350);
+    assert.doesNotMatch(query, /site:|@|AI_AUTOMATION|example\\.org/);
+  }
+  for (const reason of ["injected organization", "", null, 7]) {
+    assert.throws(() => personSourceSearchQuery({ ...target, reason }), TypeError);
+  }
+});
+
+test("source queue claim binds the frozen SHARED_SOURCE reason into its query", async () => {
+  const f = fixture();
+  const claim = await claimPersonSourceJob(f.db, scope, { now: clock });
+  assert.equal(claim.status, "CLAIMED");
+  assert.equal(claim.query,
+    '"Ada Lovelace" team staff contact email AI automation consultant official');
+  assert.equal(f.job.attempts, 1);
+  assert.equal(f.job.status, "RUNNING");
+  assert.equal(f.events.filter(x => x === "spend-reserved").length, 1);
+});
+
 test("invalid claim scope cannot trigger database access", async () => {
   await assert.rejects(() => claimPersonSourceJob({}, {
     ...scope, campaignId: "not-a-cuid",
