@@ -7,18 +7,27 @@ import { inspectNamedPublicContactEvidence } from "../server/research-linked-con
 const profileUrl = "https://example.com/ada";
 
 const measured = [];
-const unmeasured = ["F3", "F4", "F8", "F11"];
+const unmeasured = ["F3", "F4", "F11"];
 
 test("RD-02 declarative fixture evaluation", async () => {
   const fixtures = [
     { id: "F1", name: "Ada Lovelace", pageText: "Name: Ada Lovelace Email: ada@example.com", expectedStatus: "REVIEW_REQUIRED", expectedReason: "EXPLICIT_NAMED_EMAIL_ON_PROFILE" },
     { id: "F2", name: "Ada Lovelace", pageText: "Name: Ada Lovelace Email: info@example.com", expectedStatus: "UNVERIFIED", expectedReason: "ADDRESS_AMBIGUOUS_OR_NOT_PUBLISHED" },
+    { id: "F8", crossDomain: true, expectedStatus: "UNVERIFIED", expectedReason: "PROFILE_OR_ADDRESS_UNAVAILABLE" },
     { id: "F5", html: '<script type="application/ld+json">{"@context":"https://schema.org","@type":"Person","name":"Ada Lovelace","email":"ada@example.com"}</script>', expectedJson: { name: "Ada Lovelace", email: "ada@example.com" } },
     { id: "F6", html: '<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Person","name":"Ada Lovelace","email":"ada@example.com"},{"@type":"Person","name":"Grace Hopper","email":"grace@example.com"}]}</script>', expectedCount: 2 },
     { id: "F7", html: '<script type="application/ld+json">{bad}</script>', expectedJson: null },
   ];
 
   for (const f of fixtures) {
+    if (f.crossDomain) {
+      const r = classifyExplicitPersonEmailPage({ name: "Ada Lovelace", expertProfileUrl: profileUrl }, { url: "https://other.com/ada", text: "Name: Ada Lovelace Email: ada@example.com" });
+      const match = r.status === f.expectedStatus && r.reason === f.expectedReason;
+      measured.push({ id: f.id, expected: { status: f.expectedStatus, reason: f.expectedReason }, actual: { status: r.status, reason: r.reason }, match });
+      assert.equal(r.status, f.expectedStatus, `${f.id} status`);
+      assert.equal(r.reason, f.expectedReason, `${f.id} reason`);
+      continue;
+    }
     if (f.pageText) {
       const r = classifyExplicitPersonEmailPage({ name: f.name, expertProfileUrl: profileUrl }, { url: profileUrl, text: f.pageText });
       const match = r.status === f.expectedStatus && r.reason === f.expectedReason;
