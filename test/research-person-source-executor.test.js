@@ -445,9 +445,13 @@ test("source access signal requires settled, documented failures and minimum sam
   const uncertain = { ...failures[3], status: "PAUSED" };
   assert.equal(selectNextPersonSourceJob([...pending, ...failures.slice(0, 3), uncertain])
     .observationId, "z-alt", "potentially billed unsettled work is excluded");
-  const invalid = { ...failures[3], lastErrorCode: "BILLING_UNCERTAIN" };
-  assert.equal(selectNextPersonSourceJob([...pending, ...failures.slice(0, 3), invalid])
-    .observationId, "z-alt", "one non-access failure prevents 75 percent threshold");
+  const mixed = [
+    failures[0], failures[1],
+    { ...failures[2], lastErrorCode: "SOURCE_NO_NAMED_EMAIL_EVIDENCE" },
+    { ...failures[3], lastErrorCode: "BILLING_UNCERTAIN" },
+  ];
+  assert.equal(selectNextPersonSourceJob([...pending, ...mixed])
+    .observationId, "z-alt", "two of four inaccessible results do not reach threshold");
   assert.equal(selectNextPersonSourceJob([...pending, ...failures])
     .observationId, "a-shared", "four confirmed failures justify a limited demotion");
 });
