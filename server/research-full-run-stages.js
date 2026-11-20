@@ -8,7 +8,9 @@ import { enqueuePersonSourceJobs } from "./research-person-source-queue.js";
 import { approvePersonSourceResearch } from "./research-person-source-approval.js";
 import { summarizeQualifiedEmailEvidence } from "./research-qualified-evidence.js";
 import { requireResearchPriceEnvelope } from "./research-price-policy.js";
-import { createNextSourceCycle } from "./research-person-source-cycles.js";
+import { createNextSourceCycle, eligibleUnattemptedContinuationSource,
+  MAX_SOURCE_CYCLES } from "./research-person-source-cycles.js";
+import { personSourceFingerprint } from "./research-person-source-queue.js";
 
 const ACTIVE_STAGES = new Set([
   "DISCOVERY", "EMAIL_TRIAGE", "SOURCE_PREPARE", "SOURCE_RUNNING",
@@ -230,6 +232,10 @@ export async function stopFullRunSourceOnZeroYield(db, scope, {
         !["APPROVED", "RUNNING", "COMPLETED", "PARTIAL_BUDGET"].includes(source.status)) {
       return { status: "WAITING", code: "SOURCE_APPROVAL_NOT_READY" };
     }
+    if (!(full.expiresAt instanceof Date) || full.expiresAt <= now ||
+        !(source.expiresAt instanceof Date) || source.expiresAt <= now) {
+      return { status: "WAITING", code: "SOURCE_AUTHORIZATION_EXPIRED" };
+    }
     const jobs = await tx.researchPersonSourceJob.findMany({
       where: { campaignId: scope.campaignId },
       select: { status: true, attempts: true, proposedSourceUrl: true,
@@ -259,19 +265,75 @@ export async function stopFullRunSourceOnZeroYield(db, scope, {
     if (jobs.some(job => !["QUEUED", "COMPLETED"].includes(job.status))) {
       return { status: "WAITING", code: "SOURCE_REVIEW_OR_RECONCILIATION_PENDING" };
     }
-    // The ordinary source-cycle finalizer owns fully exhausted queues.
-    // Do not relabel an already completed 12-job campaign as cost-saving.
-    if (!jobs.some(job => job.status === "QUEUED" && job.attempts === 0)) {
-      return { status: "WAITING", code: "NO_UNATTEMPTED_SOURCE_JOBS" };
-    }
-    const activeCycle = await tx.researchPersonSourceCycle.count({
-      where: { campaignId: scope.campaignId,
-        status: { in: ["APPROVED", "RUNNING"] } },
+    // Evaluate the actual continuation contract, not merely QUEUED state.
+    // Snapshot drift, stale identity and already-linked contacts cannot
+    // justify claiming this stopped a future paid search.
+    const queued = jobs.filter(job => job.status === "QUEUED" &&
+      job.attempts === 0 && job.spendReservationId == null);
+    const cycles = await tx.researchPersonSourceCycle.findMany({
+      where: { campaignId: scope.campaignId },
+      orderBy: { cycleIndex: "asc" },
+      take: MAX_SOURCE_CYCLES + 1,
     });
-    // The same transaction fences every future cycle claim. No new work
-    // can start after source approval, cycle and full-run status change.
-    if (activeCycle > 1) {
+    if (cycles.length > MAX_SOURCE_CYCLES ||
+        cycles.some((cycle, index) => cycle.cycleIndex !== index + 1 ||
+          cycle.workspaceId !== scope.workspaceId ||
+          cycle.ownerId !== scope.ownerId)) {
+      return { status: "BLOCKED", code: "SOURCE_CYCLE_HISTORY_INVALID" };
+    }
+    const activeCycles = cycles.filter(cycle =>
+      ["APPROVED", "RUNNING"].includes(cycle.status));
+    if (activeCycles.length > 1) {
       return { status: "BLOCKED", code: "SOURCE_CYCLE_CONCURRENCY_INVALID" };
+    }
+    const activeCycle = activeCycles[0] ?? null;
+    const remainingCalls = full.maxSourceCalls -
+      source.startedCalls -
+      cycles.reduce((total, cycle) => total + cycle.startedCalls, 0);
+    const remainingCents = full.maxSourceWorstCaseCents -
+      source.committedWorstCaseCents -
+      cycles.reduce((total, cycle) =>
+        total + cycle.committedWorstCaseCents, 0);
+    if (remainingCalls < 1 ||
+        remainingCents < source.worstCasePerCallCents) {
+      return { status: "WAITING", code: "SOURCE_APPROVED_BUDGET_EXHAUSTED" };
+    }
+    const live = queued.length ? await tx.researchCampaignObservation.findMany({
+      where: { campaignId: scope.campaignId,
+        id: { in: queued.map(job => job.observationId) } },
+      select: { id: true, name: true, category: true, citationUrl: true,
+        groundingStatus: true, groundingResolvedUrl: true,
+        groundingProvenance: true, emailTriageStatus: true,
+        candidateId: true, personSourceUrl: true },
+      take: MAX_OBSERVATIONS + 1,
+    }) : [];
+    const byId = new Map(live.map(row => [row.id, row]));
+    const canClaim = queued.some(job => {
+      const row = byId.get(job.observationId);
+      if (!row) return false;
+      if (activeCycle && job.cycleIndex === activeCycle.cycleIndex) {
+        return activeCycle.startedCalls < activeCycle.maxCalls &&
+          activeCycle.committedWorstCaseCents +
+            activeCycle.worstCasePerCallCents <= activeCycle.maxWorstCaseCents &&
+          activeCycle.expiresAt > now &&
+          personSourceFingerprint(row) === job.evidenceFingerprint &&
+          row.candidateId == null && row.personSourceUrl == null &&
+          ["UNCHECKED", "BLOCKED", "NO_EMAIL"].includes(row.emailTriageStatus);
+      }
+      if (["APPROVED", "RUNNING"].includes(source.status) &&
+          job.cycleIndex === 0) {
+        return source.startedCalls < source.maxCalls &&
+          source.committedWorstCaseCents +
+            source.worstCasePerCallCents <= source.maxWorstCaseCents &&
+          eligibleUnattemptedContinuationSource(job, row);
+      }
+      return !activeCycle && ["COMPLETED", "PARTIAL_BUDGET"].includes(
+        source.status) && cycles.length < MAX_SOURCE_CYCLES &&
+        cycles.every(cycle => ["COMPLETED", "PARTIAL_BUDGET"].includes(
+          cycle.status)) && eligibleUnattemptedContinuationSource(job, row);
+    });
+    if (!canClaim) {
+      return { status: "WAITING", code: "NO_CURRENTLY_ELIGIBLE_SOURCE_JOBS" };
     }
     await tx.researchPersonSourceApproval.updateMany({
       where: { id: source.id, campaignId: scope.campaignId,
