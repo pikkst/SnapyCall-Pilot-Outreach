@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { loadResearchFunnelSnapshot } from "../server/research-funnel-snapshot-loader.js";
 
-const scope = { campaignId: "cmabcdefghijklmnopqrstu", workspaceId: "cmabcdefghijklmnopqrstv", ownerId: "cmabcdefghijklmnopqrstw" };
+const scope = { campaignId: "cmabcdefghijklmnopqrstu", workspaceId: "cmabcdefghijklmnopqrstv", ownerId: "cmabcdefghijklmnopqrstw", environment: "local-read-only", expectedDatabase: "audit", expectedRole: "audit_reader" };
 const observation = { id: "cmabcdefghijklmnopqrs1", campaignId: scope.campaignId,
   taskId: "cmabcdefghijklmnopqrs2", name: "Synthetic Person", category: "COACHING",
   citationUrl: "https://example.invalid/person", status: "UNVERIFIED",
@@ -14,7 +14,9 @@ const observation = { id: "cmabcdefghijklmnopqrs1", campaignId: scope.campaignId
 function mockDb({ revoked = false, total = 1, rows = [observation], audits = [] } = {}) {
   const tx = {
     $executeRaw: async () => 0,
-    $queryRaw: async () => revoked ? [{ revokedAt: new Date() }] : [{ revokedAt: null }],
+    $queryRaw: async query => String(query).includes("information_schema") ? [
+      ...[["PartnerMembership", ["partnerId", "userId", "revokedAt"]], ["ResearchCampaign", ["id", "workspaceId", "ownerId", "status"]], ["ResearchCampaignObservation", ["campaignId"]], ["ResearchPersonSourceJob", ["campaignId"]], ["ResearchSpendReservation", ["id", "workspaceId", "ownerId"]], ["AuditEvent", ["action", "metadata"]], ["ResearchCampaignTask", ["campaignId", "status"]], ["ResearchCampaignRun", ["campaignId", "startedTasks"]], ["ResearchFullRun", ["campaignId", "status"]], ["ResearchContactBatch", ["campaignId", "status"]], ["ResearchContactBatchItem", ["batchId", "status"]]].flatMap(([table, columns]) => columns.map(column_name => ({ table_name: table, column_name }))),
+    ] : String(query).includes("quote_ident") ? [] : [{ database: "audit", role: "audit_reader", transaction_read_only: "on", rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolreplication: false, rolbypassrls: false, schema_create: false, database_create: false }],
     partnerMembership: { findUnique: async ({ where }) => where.partnerId_userId.userId === scope.ownerId
       ? (revoked ? { revokedAt: new Date(), user: { id: scope.ownerId, googleSub: "synthetic" } } : { id: "membership", revokedAt: null, role: "PARTNER", user: { id: scope.ownerId, googleSub: "synthetic" } }) : null },
     researchCampaign: { findFirst: async ({ where }) => where.workspaceId === scope.workspaceId && where.ownerId === scope.ownerId ? {
@@ -40,7 +42,7 @@ test("loads one authorized campaign with a real completeness proof", async () =>
   const snapshot = await loadResearchFunnelSnapshot(mockDb(), scope);
   assert.equal(snapshot.readOnly, true);
   assert.deepEqual(snapshot.completeness, { complete: true, totalObservations: 1, returnedObservations: 1 });
-  assert.deepEqual(snapshot.scope, scope);
+  assert.deepEqual(snapshot.scope, { campaignId: scope.campaignId, workspaceId: scope.workspaceId, ownerId: scope.ownerId });
 });
 
 test("revoked membership and wrong owner/campaign fail closed", async () => {

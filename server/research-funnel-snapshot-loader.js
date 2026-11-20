@@ -1,6 +1,7 @@
 // Trusted, read-only RD-01 snapshot loader. Authorization and snapshot
 // consistency are established here before the pure funnel reducer runs.
 import { requireWorkspaceMembership } from "./workspace-access.js";
+import { checkAuditDatabase, validateAuditSelection } from "./research-funnel-audit-preflight.js";
 
 const ID = /^c[a-z0-9]{10,40}$/;
 const MAX_OBSERVATIONS = 250;
@@ -36,8 +37,9 @@ function relevantAudits(rows, scope) {
 }
 
 export async function loadResearchFunnelSnapshot(db, {
-  campaignId, workspaceId, ownerId,
+  campaignId, workspaceId, ownerId, environment, expectedDatabase, expectedRole,
 } = {}) {
+  validateAuditSelection({ environment, campaignId, workspaceId, ownerId });
   requireId(campaignId, "campaignId");
   requireId(workspaceId, "workspaceId");
   requireId(ownerId, "ownerId");
@@ -50,6 +52,8 @@ export async function loadResearchFunnelSnapshot(db, {
     // snapshot. No database write is permitted in this transaction.
     await tx.$executeRaw`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`;
     await tx.$executeRaw`SET TRANSACTION READ ONLY`;
+    const database = await checkAuditDatabase(tx, { environment, expectedDatabase, expectedRole });
+    if (!database.ok) return Object.freeze({ complete: false, code: database.code });
     // The read-only path deliberately uses the existing non-locking
     // membership contract. Write workflows retain FOR UPDATE fencing; a
     // repeatable-read diagnostic observes one consistent point-in-time view.
@@ -63,6 +67,7 @@ export async function loadResearchFunnelSnapshot(db, {
         targetCount: true, createdAt: true, updatedAt: true },
     });
     if (!campaign) return Object.freeze({ complete: false, code: "CAMPAIGN_NOT_FOUND" });
+    if (!["COMPLETED", "PARTIAL"].includes(campaign.status)) return Object.freeze({ complete: false, code: "CAMPAIGN_NOT_TERMINAL" });
 
     const observationsTotal = await tx.researchCampaignObservation.count({
       where: { campaignId, campaign: { workspaceId, ownerId } },
