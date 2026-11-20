@@ -402,7 +402,12 @@ export function rankCitedPersonSourceUrls(urls, personName) {
   const scored = urls.map((value, index) => {
     const url = new URL(value);
     if (url.protocol !== "https:") throw new TypeError("HTTPS source required");
-    const path = decodeURIComponent(url.pathname).toLocaleLowerCase("en-US")
+    // Invalid percent escapes are only weak hints, never a reason to turn
+    // an already billed provider call into an uncertain execution state.
+    let decodedPath;
+    try { decodedPath = decodeURIComponent(url.pathname); }
+    catch { decodedPath = url.pathname; }
+    const path = decodedPath.toLocaleLowerCase("en-US")
       .replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "");
     const exactPerson = slug.length >= 5 &&
       (path === slug || path.endsWith("-" + slug) ||
