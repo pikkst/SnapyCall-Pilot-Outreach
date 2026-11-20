@@ -259,6 +259,11 @@ export async function stopFullRunSourceOnZeroYield(db, scope, {
     if (jobs.some(job => !["QUEUED", "COMPLETED"].includes(job.status))) {
       return { status: "WAITING", code: "SOURCE_REVIEW_OR_RECONCILIATION_PENDING" };
     }
+    // The ordinary source-cycle finalizer owns fully exhausted queues.
+    // Do not relabel an already completed 12-job campaign as cost-saving.
+    if (!jobs.some(job => job.status === "QUEUED" && job.attempts === 0)) {
+      return { status: "WAITING", code: "NO_UNATTEMPTED_SOURCE_JOBS" };
+    }
     const activeCycle = await tx.researchPersonSourceCycle.count({
       where: { campaignId: scope.campaignId,
         status: { in: ["APPROVED", "RUNNING"] } },
