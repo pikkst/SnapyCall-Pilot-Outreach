@@ -15,6 +15,14 @@ source jobs with `status=COMPLETED`, `attempts=1`, no pending
 may stop **future** approved source claims if the independently recomputed
 qualified email evidence count is exactly zero.
 
+The presence of a `QUEUED` row is insufficient. The controller shares
+the continuation-cycle's immutable observation fingerprint, candidate
+linkage, live person-source and email-inspection eligibility predicate,
+and also checks an active first approval or cycle, approved time window,
+per-call amount and remaining full-run budget. Fully exhausted or stale
+queues follow their ordinary terminal/reconciliation path rather than
+being falsely reported as cost-saving early stops.
+
 The full-run stage worker executes the decision under the same
 owner membership -> campaign row lock ordering used by the source-job
 claim, after checking that neither RUNNING nor PAUSED jobs exist and
@@ -48,6 +56,10 @@ the objective is to avoid repeated zero-yield spending.
 ## Release and tests
 Exact-HEAD CI and CTO review are mandatory. Tests exercise the
 controller handoff, owner-scoped atomic commit, insufficient sample,
-reconciliation/leased work, pending proof and positive evidence.
+reconciliation/leased work, pending proof, changed observation evidence,
+budget exhaustion and positive evidence. An isolated GitHub Actions
+PostgreSQL service runs actual Prisma migrations and validates initial
+and continuation claim fences, idempotent concurrent stop calls and the
+stop-versus-paid-claim membership/row-lock race.
 Deploy only when no active paid leases exist, then verify explicit
 terminal status and cost with a separately approved bounded smoke run.
