@@ -399,3 +399,59 @@ test("reason feedback remains scoped to supplied jobs; stable tie break and no r
   assert.equal(selectNextPersonSourceJob(jobs.slice(0, 2)).observationId, "c800");
   assert.equal(selectNextPersonSourceJob(jobs.slice(2)), null);
 });
+
+test("campaign-local access failures deprioritize a source reason without stopping approved jobs", () => {
+  const queued = (id, reason) => ({ observationId: id, reason,
+    status: "QUEUED", attempts: 0 });
+  const settled = (id, code) => ({
+    observationId: id, reason: "ALTERNATE_EMAIL_SOURCE",
+    status: "COMPLETED", attempts: 1, lastErrorCode: code,
+  });
+  const base = [
+    queued("a-first", "ALTERNATE_EMAIL_SOURCE"),
+    queued("b-shared", "SHARED_SOURCE"),
+  ];
+  const readable = [...base, ...Array.from({ length: 4 }, (_, index) =>
+    settled("c-" + index, "SOURCE_NO_NAMED_EMAIL_EVIDENCE"))];
+  assert.equal(selectNextPersonSourceJob(readable).observationId, "a-first",
+    "readable without email must not be classified as an access denial");
+  const denied = [...base, ...Array.from({ length: 3 }, (_, index) =>
+    settled("c-" + index, "SOURCE_ALL_PAGES_UNAVAILABLE")),
+  settled("c-3", "SOURCE_NO_NAMED_EMAIL_EVIDENCE")];
+  assert.equal(selectNextPersonSourceJob(denied).observationId, "a-first",
+    "equal ranking preserves the existing deterministic observation-ID tie");
+  const reversedIds = denied.map(job => job.observationId === "a-first"
+    ? { ...job, observationId: "z-alternate" } : job);
+  assert.equal(selectNextPersonSourceJob(reversedIds).observationId, "b-shared",
+    "known inaccessible outcomes can move next eligible reason ahead");
+  assert.equal(reversedIds.filter(job => job.status === "QUEUED").length, 2,
+    "priority adjustments must not cancel or remove authorized work");
+});
+
+test("source access signal requires settled, documented failures and minimum sample", () => {
+  const pending = [
+    { observationId: "z-alt", reason: "ALTERNATE_EMAIL_SOURCE",
+      status: "QUEUED", attempts: 0 },
+    { observationId: "a-shared", reason: "SHARED_SOURCE",
+      status: "QUEUED", attempts: 0 },
+  ];
+  const failures = Array.from({ length: 4 }, (_, i) => ({
+    observationId: "failed-" + i, reason: "ALTERNATE_EMAIL_SOURCE",
+    status: "COMPLETED", attempts: 1,
+    lastErrorCode: "SOURCE_ALL_PAGES_UNAVAILABLE",
+  }));
+  assert.equal(selectNextPersonSourceJob([...pending, ...failures.slice(0, 3)])
+    .observationId, "z-alt", "three settled jobs are insufficient");
+  const uncertain = { ...failures[3], status: "PAUSED" };
+  assert.equal(selectNextPersonSourceJob([...pending, ...failures.slice(0, 3), uncertain])
+    .observationId, "z-alt", "potentially billed unsettled work is excluded");
+  const mixed = [
+    failures[0], failures[1],
+    { ...failures[2], lastErrorCode: "SOURCE_NO_NAMED_EMAIL_EVIDENCE" },
+    { ...failures[3], lastErrorCode: "BILLING_UNCERTAIN" },
+  ];
+  assert.equal(selectNextPersonSourceJob([...pending, ...mixed])
+    .observationId, "z-alt", "two of four inaccessible results do not reach threshold");
+  assert.equal(selectNextPersonSourceJob([...pending, ...failures])
+    .observationId, "a-shared", "four confirmed failures justify a limited demotion");
+});

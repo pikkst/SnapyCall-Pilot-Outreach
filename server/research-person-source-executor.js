@@ -31,7 +31,7 @@ const sourceFields = {
 const jobFields = {
   id: true, campaignId: true, observationId: true, status: true,
   evidenceFingerprint: true, reason: true, attempts: true,
-  leaseToken: true, leaseUntil: true,
+  lastErrorCode: true, leaseToken: true, leaseUntil: true,
 };
 export class PersonSourceExecutionBlocked extends Error {
   constructor(code) {
@@ -69,9 +69,17 @@ function sourcePriorityAdjustments(jobs) {
     if (!Object.hasOwn(PERSON_SOURCE_PRIORITY, job?.reason) ||
         !FINISHED_SOURCE_STATUSES.has(job.status) ||
         job.attempts < 1) continue;
-    const prior = groups.get(job.reason) ?? { total: 0, verified: 0 };
+    const prior = groups.get(job.reason) ??
+      { total: 0, verified: 0, inaccessible: 0 };
     prior.total++;
     if (job.status === "VERIFIED") prior.verified++;
+    // Persisted status is COMPLETED even for failed source inspection.
+    // An all-pages-unavailable outcome distinguishes access failures from
+    // reachable pages with no uniquely attributed published mailbox.
+    if (job.status === "COMPLETED" &&
+        job.lastErrorCode === "SOURCE_ALL_PAGES_UNAVAILABLE") {
+      prior.inaccessible++;
+    }
     groups.set(job.reason, prior);
   }
   const adjustments = new Map();
@@ -80,7 +88,15 @@ function sourcePriorityAdjustments(jobs) {
     // One positive observation can be noise. Require two verified outcomes
     // for promotion, while four zero-yield calls permit a mild demotion.
     if (outcome.verified >= 2) adjustments.set(reason, -5);
-    else if (outcome.verified === 0) adjustments.set(reason, 5);
+    else if (outcome.verified === 0) {
+      // Once at least four independently settled jobs are available,
+      // predominantly inaccessible source results are a stronger negative
+      // signal than accessible documents with no explicitly published email.
+      // Never stop approved work or infer per-domain access from these codes.
+      const mostlyInaccessible = outcome.inaccessible >= 3 &&
+        outcome.inaccessible * 4 >= outcome.total * 3;
+      adjustments.set(reason, mostlyInaccessible ? 8 : 5);
+    }
   }
   return adjustments;
 }
