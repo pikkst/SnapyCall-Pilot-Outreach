@@ -35,7 +35,7 @@ Selection should include completed or partial campaigns with known research exec
 
 1. Confirm CTO authorization for the exact database, role, workspace, owner, and campaign cohort.
 2. Confirm the database is disposable or explicitly approved read-only audit infrastructure; never use a production credential in local work.
-3. Set the environment and identifiers above without printing credentials or connection strings.
+3. Supply `DATABASE_URL` from the approved secret manager or process environment using the restricted `audit_reader` credential; never commit or print it. Use `DATABASE_URL=<secret-manager-injected-value>` rather than placing a literal credential in command history.
 4. Run one explicit campaign at a time:
 
 ```text
@@ -47,29 +47,24 @@ APP_ENVIRONMENT=local-read-only RD01_AUDIT_DATABASE=<database> RD01_AUDIT_ROLE=<
 
 ## Sanitized report template
 
-The eventual report must preserve each metric's value, unit, provenance, denominator, and reconstructability:
+The eventual report must preserve each metric's value, unit, provenance, denominator, and reconstructability. The actual CLI emits these fields per metric; this is a sanitized shape example:
 
 ```json
 {
   "campaign": "<approved opaque id>",
   "status": "COMPLETED|PARTIAL",
-  "discovery": {"callsStarted": null, "professionals": null},
-  "observations": {"total": null, "uniqueIdentityProxy": null},
-  "sources": {"jobsPlanned": null, "jobsAttempted": null, "jobsCompleted": null, "proposedUrls": null, "inspectionAttempts": null},
-  "accessibility": {"readable": null, "inaccessible": null, "missingMetadata": null},
-  "verification": {"reviewRequired": null, "namedEmailEvidence": null},
-  "qualification": {"qualifiedEvidence": null, "unknown": null},
-  "contacts": {"humanAccepted": null},
-  "cost": {"knownChargedCents": null, "unknownReservations": null},
+  "funnel": {"discoveryCalls": {"value": null, "unit": "provider calls started", "denominator": null, "source": "ResearchCampaignRun.startedTasks", "reconstructable": false}},
+  "qualification": {"qualifiedEvidence": {"value": null, "unit": "independently qualified person-email evidence", "denominator": null, "source": "summarizeQualifiedEmailEvidence", "reconstructable": false}},
+  "cost": {"totalChargedCents": null, "unit": "cents", "denominator": null, "source": "ResearchSpendReservation.chargedCents", "reconstructable": false},
   "limitations": []
 }
 ```
 
 ## Synthetic evidence matrix
 
-The existing reducer and loader tests cover empty and incomplete snapshots, distinct stage units, access-failure metadata, named-email evidence, qualified evidence, missing reservations, audit truncation, duplicate audit references, revoked membership, ownership scope, and observation truncation. The isolated PostgreSQL test covers a real restricted-role read, revocation, and denial of non-read-only privileges.
+The isolated PostgreSQL end-to-end test (`test/research-funnel-audit.e2e.integration.test.js`) runs in the disposable CI database through the existing loader and reducer output path. Its synthetic cohort covers discovery-only, source failures, inaccessible metadata, named-email review, qualified evidence, incomplete observations, missing audit metadata, missing reservations, and truncation. It asserts sanitized output and explicit unknown values. Existing reducer and loader tests additionally cover duplicate audit references, revoked membership, ownership scope, and restricted-role denial.
 
-For the first authorized disposable-database replay, the fixture cohort must explicitly include: empty completed campaign; discovery-only campaign; source failure reasons; inaccessible source metadata; named-email review without qualification; qualified evidence; incomplete observations; missing audit metadata; missing reservations; cross-workspace selection; and more than the observation cap. Expected results are zero only when the persisted denominator proves zero; otherwise the value remains unknown.
+The end-to-end cohort uses an existing isolated terminal campaign for the real loader transaction and synthetic snapshot fixtures for the reducer cases. Expected results are zero only when the persisted denominator proves zero; otherwise the value remains unknown. Cross-workspace and oversized-snapshot rejection remain covered by the existing loader tests.
 
 ## Abort and rollback criteria
 
