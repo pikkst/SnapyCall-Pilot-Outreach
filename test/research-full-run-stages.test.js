@@ -5,6 +5,8 @@ import { tickFullRunStages, transitionFullRunStage,
   from "../server/research-full-run-stages.js";
 import { requireResearchPriceEnvelope }
   from "../server/research-price-policy.js";
+import { personSourceFingerprint }
+  from "../server/research-person-source-queue.js";
 
 const price = requireResearchPriceEnvelope({
   provider: "gemini", model: "gemini-3-flash-preview",
@@ -346,14 +348,29 @@ test("zero-yield threshold transitions SOURCE_RUNNING to partial without another
 
 function zeroYieldTransaction({ completed = 12, uncertain = false,
   qualified = false, member = true, pendingProof = false,
-  noQueued = false } = {}) {
+  noQueued = false, stale = false, noBudget = false,
+  alreadyLinked = false } = {}) {
   const updates = [];
   const rows = Array.from({ length: completed }, () => ({
     status: "COMPLETED", attempts: 1, proposedSourceUrl: null,
     lastErrorCode: "SOURCE_ALL_PAGES_UNAVAILABLE",
   }));
-  if (!noQueued) rows.push({ status: "QUEUED", attempts: 0,
-    proposedSourceUrl: null });
+  const pendingObservation = {
+    id: "cmabcdefghijklmnopqrsqueued",
+    name: "Ada Lovelace", category: "AI_AUTOMATION",
+    citationUrl: "https://example.org/ada",
+    groundingStatus: "UNCHECKED", groundingResolvedUrl: null,
+    groundingProvenance: null, emailTriageStatus: "BLOCKED",
+    candidateId: alreadyLinked ? "cmabcdefghijklmnopqrscandidate" : null,
+    personSourceUrl: null,
+  };
+  if (!noQueued) rows.push({
+    observationId: pendingObservation.id,
+    evidenceFingerprint: stale ? "f".repeat(64) :
+      personSourceFingerprint(pendingObservation),
+    cycleIndex: 0, spendReservationId: null,
+    status: "QUEUED", attempts: 0, proposedSourceUrl: null,
+  });
   if (uncertain) rows.push({ status: "PAUSED", attempts: 1 });
   if (pendingProof) rows[0].proposedSourceUrl = "https://example.org/ada";
   const db = { $transaction: async fn => fn({
@@ -366,7 +383,9 @@ function zeroYieldTransaction({ completed = 12, uncertain = false,
     researchFullRun: {
       findUnique: async () => ({ ...scope, id: "full-run",
         status: "SOURCE_RUNNING", provider: "gemini",
-        model: "gemini-3-flash-preview", priceVersion: price.priceVersion }),
+        model: "gemini-3-flash-preview", priceVersion: price.priceVersion,
+        maxSourceCalls: 30, maxSourceWorstCaseCents: 30 * price.worstCaseCents,
+        expiresAt: new Date(now.getTime() + 600000) }),
       updateMany: async ({ data }) => {
         updates.push("full:" + data.status + ":" + data.lastCode);
         return { count: 1 };
@@ -375,13 +394,18 @@ function zeroYieldTransaction({ completed = 12, uncertain = false,
     researchPersonSourceApproval: {
       findUnique: async () => ({ ...scope, id: "source-id",
         status: "RUNNING", provider: "gemini",
-        model: "gemini-3-flash-preview", priceVersion: price.priceVersion }),
+        model: "gemini-3-flash-preview", priceVersion: price.priceVersion,
+        expiresAt: new Date(now.getTime() + 600000),
+        worstCasePerCallCents: price.worstCaseCents,
+        startedCalls: noBudget ? 30 : 12,
+        committedWorstCaseCents: (noBudget ? 30 : 12) * price.worstCaseCents,
+        maxCalls: 30, maxWorstCaseCents: 30 * price.worstCaseCents }),
       updateMany: async ({ data }) => {
         updates.push("approval:" + data.status); return { count: 1 };
       },
     },
     researchPersonSourceCycle: {
-      count: async () => 1,
+      findMany: async () => [],
       updateMany: async ({ data }) => {
         updates.push("cycle:" + data.status); return { count: 1 };
       },
@@ -389,17 +413,20 @@ function zeroYieldTransaction({ completed = 12, uncertain = false,
     researchPersonSourceJob: { findMany: async () => rows },
     researchCampaignObservation: {
       count: async () => qualified ? 1 : 0,
-      findMany: async () => qualified ? [{
-        name: "Ada Lovelace", category: "AI_AUTOMATION",
-        citationUrl: "https://example.org/ada", groundingStatus: "UNCHECKED",
-        groundingResolvedUrl: null, groundingProvenance: null,
-        emailTriageStatus: "REVIEW_REQUIRED",
-        emailTriageCode: "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED",
-        emailTriageEmail: "ada@example.org",
-        emailTriageDigest: "a".repeat(64),
-        emailTriageAt: new Date("2026-11-18T15:30:00Z"),
-      }] : [],
+      findMany: async ({ where }) => where?.id?.in
+        ? (noQueued ? [] : [pendingObservation])
+        : qualified ? [{
+          name: "Ada Lovelace", category: "AI_AUTOMATION",
+          citationUrl: "https://example.org/ada", groundingStatus: "UNCHECKED",
+          groundingResolvedUrl: null, groundingProvenance: null,
+          emailTriageStatus: "REVIEW_REQUIRED",
+          emailTriageCode: "NAMED_EMAIL_EVIDENCE_REVIEW_REQUIRED",
+          emailTriageEmail: "ada@example.org",
+          emailTriageDigest: "a".repeat(64),
+          emailTriageAt: new Date("2026-11-18T15:30:00Z"),
+        }] : [],
     },
+
     auditEvent: { create: async ({ data }) => {
       assert.equal(data.metadata.futurePaidClaimsStopped, true);
       assert.equal(data.metadata.remainingQueuedJobs, 1);
@@ -424,6 +451,7 @@ test("zero-yield stop cannot mask incomplete billing, pending proof or revoked r
   for (const options of [
     { completed: 11 }, { uncertain: true }, { pendingProof: true },
     { member: false }, { qualified: true }, { noQueued: true },
+    { stale: true }, { noBudget: true }, { alreadyLinked: true },
   ]) {
     const { db, updates } = zeroYieldTransaction(options);
     const result = await stopFullRunSourceOnZeroYield(db, scope, { now });
