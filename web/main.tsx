@@ -2666,7 +2666,7 @@ function App() {
                                   ? "Review the qualified email pairs before saving contacts."
                                   : campaignRunApproval?.fullRun?.status === "PARTIAL"
                                     ? campaignRunApproval.fullRun.lastCode === "SOURCE_ZERO_YIELD_EARLY_STOP"
-                                      ? "Further paid source searches were stopped after 12 independently settled searches produced no qualified email evidence. Remaining queued searches were not started. Review the findings or plan a new campaign."
+                                      ? "Further paid source searches were stopped after at least 12 independently settled source jobs produced no qualified email evidence. Remaining queued searches were not started. Review the findings or plan a new campaign."
                                       : "The approved stages ended below the qualified email goal."
                                     : campaignRunApproval?.run?.status === "RUNNING"
                                 ? "The search continues automatically. You can leave this page."
