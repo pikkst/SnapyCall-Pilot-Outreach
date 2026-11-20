@@ -32,7 +32,7 @@ npm test
 npm run build
 ```
 
-For local server startup copy the **names** from `.env.example` into a local `.env`, supply your own credentials, then:
+For local server startup, follow [the isolated development guide](docs/LOCAL_DEVELOPMENT.md). Copy `.env.example` into an ignored local `.env`, use **dedicated local/disposable DB credentials** and server-only secrets, then:
 
 ```bash
 npm run db:deploy
