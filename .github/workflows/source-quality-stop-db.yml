@@ -47,6 +47,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://test:test@localhost:5432/snapycall_ci?schema=public
       DIRECT_URL: postgresql://test:test@localhost:5432/snapycall_ci?schema=public
+      AUDIT_DATABASE_URL: postgresql://audit_reader:audit_reader@localhost:5432/snapycall_ci?schema=public
       AI98_TEST_POSTGRES: isolated-ci
     steps:
       - uses: actions/checkout@v4
@@ -57,4 +58,8 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
       - run: npx prisma migrate deploy
+      - name: Create restricted audit role
+        run: |
+          PGPASSWORD=test psql -h localhost -U test -d snapycall_ci -v ON_ERROR_STOP=1 -c "CREATE ROLE audit_reader LOGIN PASSWORD 'audit_reader' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+          PGPASSWORD=test psql -h localhost -U test -d snapycall_ci -v ON_ERROR_STOP=1 -c "GRANT CONNECT ON DATABASE snapycall_ci TO audit_reader; GRANT USAGE ON SCHEMA public TO audit_reader; GRANT SELECT ON ALL TABLES IN SCHEMA public TO audit_reader; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO audit_reader"
       - run: node --test test/ai98-zero-yield-postgres.integration.test.js test/research-funnel-snapshot-loader.postgres.integration.test.js

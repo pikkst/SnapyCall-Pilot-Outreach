@@ -9,6 +9,7 @@ const integration = process.env.AI98_TEST_POSTGRES === "isolated-ci";
 
 test("PostgreSQL read-only snapshot accepts active membership and rejects revoked membership", { skip: !integration }, async () => {
   const db = new PrismaClient();
+  const auditDb = new PrismaClient({ datasourceUrl: process.env.AUDIT_DATABASE_URL });
   const nonce = randomUUID().slice(0, 8);
   try {
     const user = await db.partnerUser.create({ data: {
@@ -24,19 +25,20 @@ test("PostgreSQL read-only snapshot accepts active membership and rejects revoke
       planVersion: "rd01b-test", status: "PARTIAL",
     } });
     const scope = { campaignId: campaign.id, workspaceId: workspace.id, ownerId: user.id };
-    const preflight = await preflightHistoricalFunnelAudit(db, { ...scope, environment: "local-read-only" });
+    const preflight = await preflightHistoricalFunnelAudit(auditDb, { ...scope, environment: "local-read-only", expectedDatabase: "snapycall_ci", expectedRole: "audit_reader" });
     assert.equal(preflight.ok, true);
     assert.equal(preflight.readOnly, true);
-    const loaded = await loadResearchFunnelSnapshot(db, scope);
+    const loaded = await loadResearchFunnelSnapshot(auditDb, { ...scope, environment: "local-read-only", expectedDatabase: "snapycall_ci", expectedRole: "audit_reader" });
     assert.equal(loaded.readOnly, true);
     assert.equal(loaded.completeness.complete, true);
     await db.partnerMembership.update({
       where: { partnerId_userId: { partnerId: workspace.id, userId: user.id } },
       data: { revokedAt: new Date() },
     });
-    const revoked = await loadResearchFunnelSnapshot(db, scope);
+    const revoked = await loadResearchFunnelSnapshot(auditDb, { ...scope, environment: "local-read-only", expectedDatabase: "snapycall_ci", expectedRole: "audit_reader" });
     assert.equal(revoked.code, "WORKSPACE_ACCESS_REVOKED");
   } finally {
     await db.$disconnect();
+    await auditDb.$disconnect();
   }
 });

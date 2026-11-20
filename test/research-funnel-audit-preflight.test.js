@@ -2,11 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { preflightHistoricalFunnelAudit, validateAuditSelection } from "../server/research-funnel-audit-preflight.js";
 
-const scope = { environment: "local-read-only", campaignId: "cmabcdefghijklmnopqrstu", workspaceId: "cmabcdefghijklmnopqrstv", ownerId: "cmabcdefghijklmnopqrstw" };
+const scope = { environment: "local-read-only", expectedDatabase: "audit", expectedRole: "audit_reader", campaignId: "cmabcdefghijklmnopqrstu", workspaceId: "cmabcdefghijklmnopqrstv", ownerId: "cmabcdefghijklmnopqrstw" };
 function db({ readOnly = "on", member = true, campaign = true } = {}) {
   const tx = {
     $executeRaw: async () => 0,
-    $queryRaw: async () => [{ database: "audit", role: "audit_reader", transaction_read_only: readOnly }],
+    $queryRaw: async query => String(query).includes("information_schema") ? [
+      ...[["PartnerMembership", ["partnerId", "userId", "revokedAt"]], ["ResearchCampaign", ["id", "workspaceId", "ownerId", "status"]], ["ResearchCampaignObservation", ["campaignId"]], ["ResearchPersonSourceJob", ["campaignId"]], ["ResearchSpendReservation", ["id", "workspaceId", "ownerId"]], ["AuditEvent", ["action", "metadata"]]].flatMap(([table, columns]) => columns.map(column_name => ({ table_name: table, column_name }))),
+    ] : [{ database: "audit", role: "audit_reader", transaction_read_only: readOnly, rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolreplication: false, rolbypassrls: false, campaign_write: false, audit_write: false }],
     partnerMembership: { findUnique: async () => member ? { id: "m", revokedAt: null, role: "PARTNER", user: { id: scope.ownerId, googleSub: "synthetic" } } : null },
     researchCampaign: { findFirst: async () => campaign ? { id: scope.campaignId, status: "COMPLETED" } : null },
   };
@@ -17,7 +19,7 @@ test("requires explicit environment and complete scope", () => {
   assert.throws(() => validateAuditSelection({ ...scope, ownerId: "bad" }));
 });
 test("fails closed for unsafe read-only, revoked membership, and wrong campaign", async () => {
-  assert.equal((await preflightHistoricalFunnelAudit(db({ readOnly: "off" }), scope)).code, "READ_ONLY_NOT_ENFORCED");
+  assert.equal((await preflightHistoricalFunnelAudit(db({ readOnly: "off" }), scope)).code, "AUDIT_ROLE_NOT_RESTRICTED");
   assert.equal((await preflightHistoricalFunnelAudit(db({ member: false }), scope)).code, "WORKSPACE_ACCESS_REVOKED");
   assert.equal((await preflightHistoricalFunnelAudit(db({ campaign: false }), scope)).code, "CAMPAIGN_NOT_FOUND");
 });
